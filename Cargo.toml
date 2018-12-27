@@ -1,0 +1,54 @@
+[package]
+name = "izanami"
+version = "0.1.0-preview.1"
+edition = "2018"
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://gitlab.com/ubnt-intrepid/izanami.git"
+readme = "README.md"
+description = "A lightweight implementation of HTTP server for Web frameworks"
+
+[dependencies]
+bytes = "0.4"
+cookie = { version = "0.11", features = ["percent-encode"] }
+failure = "0.1.3"
+futures = "0.1"
+http = "0.1"
+hyper = "0.12"
+log = "0.4"
+tokio = "0.1"
+tokio-threadpool = "0.1"
+
+native-tls = { version = "0.2", optional = true }
+tokio-tls = { version = "0.2", optional = true }
+
+rustls = { version = "0.14", optional = true }
+tokio-rustls = { version = "0.8", optional = true }
+
+openssl = { version = "0.10", optional = true }
+tokio-openssl = { version = "0.3", optional = true }
+
+[dependencies.izanami-service]
+version = "0.1.0-preview.1"
+path = "izanami-service"
+
+[dev-dependencies]
+version-sync = "0.6"
+
+[features]
+# Enables the support for TLS acceptors.
+use-native-tls = ["native-tls", "tokio-tls"]
+use-rustls = ["rustls", "tokio-rustls"]
+use-openssl = ["openssl", "tokio-openssl"]
+
+[workspace]
+members = [
+  "examples/echo-service",
+  "examples/native-tls-server",
+  "examples/rustls-server",
+  "examples/openssl-server",
+]
+
+[patch.crates-io]
+izanami = { version = "0.1.0-preview.1", path = "." }
+izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }

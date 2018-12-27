@@ -1,0 +1,26 @@
+image: rust:latest
+
+cache:
+  key: izanami-cache-key
+  paths:
+    - $HOME/.cargo/registry
+    - target/debug
+
+test:
+  script:
+    - cargo test --all
+
+pages:
+  stage: deploy
+  only:
+    - master
+  script:
+    - rm -rf target/doc
+    - cargo doc --no-deps -p izanami-service
+    - cargo doc --no-deps --all-features
+    - rm -rf public && mv target/doc/ public
+    - rm -f public/.lock
+    - echo '<meta http-equiv="refresh" content="0;URL=izanami/index.html">' > public/index.html
+  artifacts:
+    paths:
+      - public

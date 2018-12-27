@@ -1,0 +1,16 @@
+[package]
+name = "example-openssl"
+version = "0.0.0"
+edition = "2018"
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+publish = false
+
+[[bin]]
+name = "example_openssl"
+path = "src/main.rs"
+doc = false
+
+[dependencies]
+izanami = { version = "0.1.0-preview.1", features = ["use-openssl"] }
+echo-service = { path = "../echo-service" }
+openssl = "0.10"
