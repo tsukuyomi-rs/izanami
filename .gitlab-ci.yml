@@ -2,14 +2,35 @@ image: rust:latest
 
 variables:
   CARGO_HOME: $CI_PROJECT_DIR/.cargo
+  RUSTC_WRAPPER: $SCCACHE_BIN/sccache
+  SCCACHE_DIR: $CI_PROJECT_DIR/.cache
+  SCCACHE_BIN: $CI_PROJECT_DIR/.sccache
+  SCCACHE_URL: https://github.com/mozilla/sccache/releases/download/0.2.7/sccache-0.2.7-x86_64-unknown-linux-musl.tar.gz
 
 cache:
   key: izanami-cache-key
   paths:
-    - target/
     - $CARGO_HOME/registry/
+    - $SCCACHE_BIN
+    - $SCCACHE_DIR
+
+stages:
+  - check
+  - test
+  - deploy
+
+lint:
+  stage: check
+  before_script:
+    - mkdir -p $SCCACHE_BIN && curl -sL $SCCACHE_URL | tar xzf - -C $SCCACHE_BIN --strip-components=1
+    - rustup component add rustfmt clippy
+  script:
+    - cargo fmt -- --check
+    - cargo clippy --all --all-targets
+    - cargo clippy -p izanami --all-features --all-targets
 
 test:
+  stage: test
   script:
     - cargo test --all
 
