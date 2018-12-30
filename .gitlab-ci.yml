@@ -1,10 +1,13 @@
 image: rust:latest
 
+variables:
+  CARGO_HOME: $CI_PROJECT_DIR/.cargo
+
 cache:
   key: izanami-cache-key
   paths:
-    - $HOME/.cargo/registry
-    - target/debug
+    - target/
+    - $CARGO_HOME/registry/
 
 test:
   script:
