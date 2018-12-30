@@ -5,6 +5,7 @@
 use {
     bytes::Buf,
     futures::{Future, Poll},
+    tokio_io::{AsyncRead, AsyncWrite},
 };
 
 /// A trait which abstracts an asynchronous stream of bytes.
@@ -19,9 +20,9 @@ pub trait BufStream {
 }
 
 pub trait Upgradable {
-    type Upgraded;
+    type Upgraded: AsyncRead + AsyncWrite;
     type Error;
     type Future: Future<Item = Self::Upgraded, Error = Self::Error>;
 
-    fn upgrade(self) -> Self::Future;
+    fn on_upgrade(self) -> Self::Future;
 }

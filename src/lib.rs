@@ -52,7 +52,7 @@ impl Upgradable for RequestBody {
     type Error = hyper::error::Error;
     type Future = hyper::upgrade::OnUpgrade;
 
-    fn upgrade(self) -> Self::Future {
+    fn on_upgrade(self) -> Self::Future {
         self.0.on_upgrade()
     }
 }
