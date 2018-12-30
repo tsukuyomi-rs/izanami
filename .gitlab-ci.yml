@@ -17,6 +17,9 @@ stages:
 
 lint:
   stage: check
+  only:
+    - merge_requests
+    - master
   before_script:
     - rustup component add rustfmt clippy
   script:
@@ -26,6 +29,9 @@ lint:
 
 test:
   stage: test
+  only:
+    - merge_requests
+    - master
   script:
     - cargo test --all
 
