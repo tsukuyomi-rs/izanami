@@ -17,6 +17,8 @@ pub trait BufStream {
     type Error;
 
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error>;
+
+    fn is_end_stream(&self) -> bool;
 }
 
 pub trait Upgradable {

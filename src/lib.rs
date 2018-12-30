@@ -24,7 +24,10 @@ use {
     bytes::{Buf, Bytes},
     futures::{Future, Poll, Stream},
     http::{Request, Response},
-    hyper::{body::Body, server::conn::Http},
+    hyper::{
+        body::{Body, Payload as _Payload},
+        server::conn::Http,
+    },
     izanami_service::{
         http::{BufStream, Upgradable},
         MakeServiceRef, Service,
@@ -43,7 +46,11 @@ impl BufStream for RequestBody {
     type Error = hyper::Error;
 
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        futures::Stream::poll(&mut self.0)
+        self.0.poll_data()
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.is_end_stream()
     }
 }
 

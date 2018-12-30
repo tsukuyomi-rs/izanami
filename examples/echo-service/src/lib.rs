@@ -20,6 +20,10 @@ impl BufStream for ResponseBody {
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         Ok(Async::Ready(self.0.take().map(std::io::Cursor::new)))
     }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.is_none()
+    }
 }
 
 #[derive(Debug, Default)]
