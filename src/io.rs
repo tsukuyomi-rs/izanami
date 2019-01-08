@@ -94,7 +94,7 @@ mod tcp {
 
         #[inline]
         fn listen(self) -> io::Result<Self::Incoming> {
-            let listener = TcpListener::from_std(self, &Handle::current())?;
+            let listener = TcpListener::from_std(self, &Handle::default())?;
             Ok(listener.incoming())
         }
     }
@@ -176,7 +176,7 @@ mod uds {
 
         #[inline]
         fn listen(self) -> io::Result<Self::Incoming> {
-            Ok(UnixListener::from_std(self, &Handle::current())?.incoming())
+            Ok(UnixListener::from_std(self, &Handle::default())?.incoming())
         }
     }
 }

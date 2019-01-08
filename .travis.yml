@@ -1,6 +1,12 @@
+dist: xenial
 language: rust
 cache:
+  apt: true
   cargo: true
+addons:
+  apt:
+    packages:
+      - libssl-dev
 branches:
   only:
     - master
