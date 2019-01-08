@@ -29,7 +29,7 @@ use {
         server::conn::Http,
     },
     izanami_service::{
-        http::{BufStream, Upgradable},
+        http::{BufStream, IntoBufStream, Upgradable},
         MakeServiceRef, Service,
     },
     std::{marker::PhantomData, net::SocketAddr, rc::Rc, sync::Arc},
@@ -214,8 +214,8 @@ where
     S::Future: Send + 'static,
     S::Service: Send + 'static,
     <S::Service as Service<Request<RequestBody>>>::Future: Send + 'static,
-    Bd: BufStream + Send + 'static,
-    Bd::Error: Into<CritError>,
+    Bd: IntoBufStream,
+    Bd::Stream: Send + 'static,
     T: Listener,
     T::Incoming: Send + 'static,
     A: Acceptor<T::Conn> + Send + 'static,
@@ -254,8 +254,8 @@ where
     S::Future: 'static,
     S::Service: 'static,
     <S::Service as Service<Request<RequestBody>>>::Future: 'static,
-    Bd: BufStream + Send + 'static,
-    Bd::Error: Into<CritError>,
+    Bd: IntoBufStream,
+    Bd::Stream: Send + 'static,
     T: Listener,
     T::Incoming: 'static,
     A: Acceptor<T::Conn> + 'static,
@@ -295,8 +295,8 @@ impl<S, Bd> hyper::service::Service for LiftedHttpService<S>
 where
     S: Service<Request<RequestBody>, Response = Response<Bd>>,
     S::Error: Into<crate::CritError>,
-    Bd: BufStream + Send + 'static,
-    Bd::Error: Into<CritError>,
+    Bd: IntoBufStream,
+    Bd::Stream: Send + 'static,
 {
     type ReqBody = Body;
     type ResBody = Body;
@@ -319,8 +319,8 @@ struct LiftedHttpServiceFuture<Fut> {
 impl<Fut, Bd> Future for LiftedHttpServiceFuture<Fut>
 where
     Fut: Future<Item = Response<Bd>>,
-    Bd: BufStream + Send + 'static,
-    Bd::Error: Into<CritError>,
+    Bd: IntoBufStream,
+    Bd::Stream: Send + 'static,
 {
     type Item = Response<Body>;
     type Error = Fut::Error;
@@ -329,7 +329,8 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.inner.poll().map(|x| {
             x.map(|response| {
-                response.map(|mut body| {
+                response.map(|body| {
+                    let mut body = body.into_buf_stream();
                     Body::wrap_stream(futures::stream::poll_fn(move || {
                         body.poll_buf()
                             .map(|x| x.map(|data_opt| data_opt.map(|data| data.collect::<Bytes>())))

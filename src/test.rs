@@ -17,7 +17,10 @@ use {
         header::{COOKIE, SET_COOKIE},
         Request, Response,
     },
-    izanami_service::{http::BufStream, MakeService, Service},
+    izanami_service::{
+        http::{BufStream, IntoBufStream},
+        MakeService, Service,
+    },
     std::{collections::HashMap, mem},
 };
 
@@ -54,7 +57,8 @@ where
     <S::Service as Service<Request<RequestBody>>>::Future: Send + 'static,
     S::MakeError: Into<crate::CritError>,
     S::Future: Send + 'static,
-    Bd: BufStream + Send + 'static,
+    Bd: IntoBufStream,
+    Bd::Stream: Send + 'static,
 {
     let mut builder = tokio::runtime::Builder::new();
     builder.core_threads(1);
@@ -73,7 +77,7 @@ where
     S: MakeService<(), Request<RequestBody>, Response = Response<Bd>>,
     S::Error: Into<crate::CritError>,
     S::MakeError: Into<crate::CritError>,
-    Bd: BufStream,
+    Bd: IntoBufStream,
 {
     let runtime = tokio::runtime::current_thread::Runtime::new()?;
     Ok(Server::new(make_service, runtime))
@@ -199,8 +203,8 @@ mod threadpool {
         S::Future: Send + 'static,
         S::MakeError: Into<CritError> + Send + 'static,
         S::Service: Send + 'static,
-        Bd: BufStream + Send + 'static,
-        Bd::Error: Into<CritError>,
+        Bd: IntoBufStream,
+        Bd::Stream: Send + 'static,
     {
         /// Create a `Session` associated with this server.
         pub fn new_session(&mut self) -> crate::Result<Session<'_, S::Service, Runtime>> {
@@ -228,8 +232,8 @@ mod threadpool {
         S: Service<Request<RequestBody>, Response = Response<Bd>>,
         S::Error: Into<CritError>,
         S::Future: Send + 'static,
-        Bd: BufStream + Send + 'static,
-        Bd::Error: Into<CritError>,
+        Bd: IntoBufStream,
+        Bd::Stream: Send + 'static,
     {
         /// Applies an HTTP request to this client and await its response.
         pub fn perform<T>(&mut self, input: T) -> crate::Result<Response<Output>>
@@ -256,8 +260,7 @@ mod current_thread {
         S: MakeService<(), Request<RequestBody>, Response = Response<Bd>>,
         S::Error: Into<CritError>,
         S::MakeError: Into<CritError>,
-        Bd: BufStream,
-        Bd::Error: Into<CritError>,
+        Bd: IntoBufStream,
     {
         /// Create a `Session` associated with this server.
         pub fn new_session(&mut self) -> crate::Result<Session<'_, S::Service, Runtime>> {
@@ -281,8 +284,7 @@ mod current_thread {
     where
         S: Service<Request<RequestBody>, Response = Response<Bd>>,
         S::Error: Into<CritError>,
-        Bd: BufStream,
-        Bd::Error: Into<CritError>,
+        Bd: IntoBufStream,
     {
         /// Applies an HTTP request to this client and await its response.
         pub fn perform<T>(&mut self, input: T) -> crate::Result<Response<Output>>
@@ -310,12 +312,12 @@ enum TestResponseFuture<F, Bd> {
     Done,
 }
 
-impl<F, Bd> Future for TestResponseFuture<F, Bd>
+impl<F, Bd, T> Future for TestResponseFuture<F, Bd>
 where
-    F: Future<Item = Response<Bd>>,
+    F: Future<Item = Response<T>>,
     F::Error: Into<CritError>,
     Bd: BufStream,
-    Bd::Error: Into<CritError>,
+    T: IntoBufStream<Item = Bd::Item, Error = Bd::Error, Stream = Bd>,
 {
     type Item = Response<Output>;
     type Error = CritError;
@@ -339,7 +341,7 @@ where
                 TestResponseFuture::Initial(..) => {
                     let response = response.expect("unexpected condition");
                     let (parts, body) = response.into_parts();
-                    let receive = self::Receive::new(body);
+                    let receive = self::Receive::new(body.into_buf_stream());
                     *self = TestResponseFuture::Receive(parts, receive);
                 }
                 TestResponseFuture::Receive(parts, receive) => {
