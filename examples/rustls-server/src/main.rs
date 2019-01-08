@@ -15,13 +15,13 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    let tls_acceptor = build_tls_acceptor()?;
+    let tls_config = build_tls_config()?;
     izanami::Server::build() //
-        .acceptor(tls_acceptor)
+        .acceptor(tls_config)
         .serve(echo)
 }
 
-fn build_tls_acceptor() -> Fallible<tokio_rustls::TlsAcceptor> {
+fn build_tls_config() -> Fallible<Arc<ServerConfig>> {
     const CERTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/private/cert.pem");
     const PRIV_KEY_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/private/key.pem");
 
@@ -36,7 +36,7 @@ fn build_tls_acceptor() -> Fallible<tokio_rustls::TlsAcceptor> {
 
     config.set_protocols(&["h2".into(), "http/1.1".into()]);
 
-    Ok(Arc::new(config).into())
+    Ok(Arc::new(config))
 }
 
 fn load_certs(path: impl AsRef<Path>) -> Fallible<Vec<Certificate>> {
