@@ -1,6 +1,7 @@
 use {
     crate::CritError,
-    futures::{Future, IntoFuture, Stream},
+    futures::{Poll, Stream},
+    std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
@@ -18,26 +19,21 @@ pub trait Listener {
 ///
 /// Typically, the implementors of this trait establish a TLS session.
 pub trait Acceptor<T> {
-    type Conn: AsyncRead + AsyncWrite;
-    type Error;
-    type Accept: Future<Item = Self::Conn, Error = Self::Error>;
+    type Accepted: AsyncRead + AsyncWrite;
 
-    fn accept(&self, io: T) -> Self::Accept;
+    fn accept(&self, io: T) -> Self::Accepted;
 }
 
-impl<F, T, R> Acceptor<T> for F
+impl<F, T, U> Acceptor<T> for F
 where
-    F: Fn(T) -> R,
-    R: IntoFuture,
-    R::Item: AsyncRead + AsyncWrite,
+    F: Fn(T) -> U,
+    U: AsyncRead + AsyncWrite,
 {
-    type Conn = R::Item;
-    type Error = R::Error;
-    type Accept = R::Future;
+    type Accepted = U;
 
     #[inline]
-    fn accept(&self, io: T) -> Self::Accept {
-        (*self)(io).into_future()
+    fn accept(&self, io: T) -> Self::Accepted {
+        (*self)(io)
     }
 }
 
@@ -45,13 +41,11 @@ impl<T> Acceptor<T> for ()
 where
     T: AsyncRead + AsyncWrite,
 {
-    type Conn = T;
-    type Error = std::io::Error;
-    type Accept = futures::future::FutureResult<Self::Conn, Self::Error>;
+    type Accepted = T;
 
     #[inline]
-    fn accept(&self, io: T) -> Self::Accept {
-        futures::future::ok(io)
+    fn accept(&self, io: T) -> Self::Accepted {
+        io
     }
 }
 
@@ -182,72 +176,389 @@ mod uds {
 }
 
 #[cfg(feature = "use-native-tls")]
-mod navite_tls {
+mod use_navite_tls {
     use {
-        super::Acceptor,
-        tokio::io::{AsyncRead, AsyncWrite},
-        tokio_tls::{Accept, TlsAcceptor, TlsStream},
+        super::*,
+        native_tls::{HandshakeError, TlsAcceptor, TlsStream},
     };
 
     impl<T> Acceptor<T> for TlsAcceptor
     where
         T: AsyncRead + AsyncWrite,
     {
-        type Conn = TlsStream<T>;
-        type Error = native_tls::Error;
-        type Accept = Accept<T>;
+        type Accepted = TlsStreamWithHandshake<T>;
 
         #[inline]
-        fn accept(&self, io: T) -> Self::Accept {
-            self.accept(io)
+        fn accept(&self, io: T) -> Self::Accepted {
+            TlsStreamWithHandshake::MidHandshake(MidHandshake(Some(self.accept(io))))
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct MidHandshake<S>(Option<Result<TlsStream<S>, HandshakeError<S>>>);
+
+    impl<S> MidHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn try_handshake(&mut self) -> io::Result<TlsStream<S>> {
+            match self.0.take().expect("unexpected condition") {
+                Ok(io) => Ok(io),
+                Err(HandshakeError::Failure(err)) => Err(io::Error::new(io::ErrorKind::Other, err)),
+                Err(HandshakeError::WouldBlock(m)) => match m.handshake() {
+                    Ok(io) => Ok(io),
+                    Err(HandshakeError::Failure(err)) => {
+                        Err(io::Error::new(io::ErrorKind::Other, err))
+                    }
+                    Err(HandshakeError::WouldBlock(s)) => {
+                        self.0 = Some(Err(HandshakeError::WouldBlock(s)));
+                        Err(io::ErrorKind::WouldBlock.into())
+                    }
+                },
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub enum TlsStreamWithHandshake<S> {
+        MidHandshake(MidHandshake<S>),
+        Ready(TlsStream<S>),
+        Gone,
+    }
+
+    impl<S> TlsStreamWithHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn ready(io: TlsStream<S>) -> Self {
+            TlsStreamWithHandshake::Ready(io)
+        }
+    }
+
+    impl<S> io::Read for TlsStreamWithHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            loop {
+                *self = match self {
+                    TlsStreamWithHandshake::MidHandshake(m) => {
+                        m.try_handshake().map(Self::ready)?
+                    }
+                    TlsStreamWithHandshake::Ready(io) => return io.read(buf),
+                    TlsStreamWithHandshake::Gone => return Err(io::ErrorKind::Other.into()),
+                };
+            }
+        }
+    }
+
+    impl<S> io::Write for TlsStreamWithHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            loop {
+                *self = match self {
+                    TlsStreamWithHandshake::MidHandshake(m) => {
+                        m.try_handshake().map(Self::ready)?
+                    }
+                    TlsStreamWithHandshake::Ready(io) => return io.write(buf),
+                    TlsStreamWithHandshake::Gone => return Err(io::ErrorKind::Other.into()),
+                };
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            loop {
+                *self = match self {
+                    TlsStreamWithHandshake::MidHandshake(m) => {
+                        if m.0.is_none() {
+                            return Ok(());
+                        }
+                        m.try_handshake().map(Self::ready)?
+                    }
+                    TlsStreamWithHandshake::Ready(io) => return io.flush(),
+                    TlsStreamWithHandshake::Gone => return Err(io::ErrorKind::Other.into()),
+                }
+            }
+        }
+    }
+
+    impl<S> AsyncRead for TlsStreamWithHandshake<S> where S: AsyncRead + AsyncWrite {}
+
+    impl<S> AsyncWrite for TlsStreamWithHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn shutdown(&mut self) -> Poll<(), io::Error> {
+            match self {
+                TlsStreamWithHandshake::MidHandshake(..) => {
+                    *self = TlsStreamWithHandshake::Gone;
+                    Ok(().into())
+                }
+                TlsStreamWithHandshake::Ready(io) => {
+                    tokio_io::try_nb!(io.shutdown());
+                    io.get_mut().shutdown()
+                }
+                TlsStreamWithHandshake::Gone => Ok(().into()),
+            }
         }
     }
 }
 
 #[cfg(feature = "use-rustls")]
-mod rustls {
+mod use_rustls {
     use {
-        super::Acceptor,
-        rustls::ServerSession,
-        tokio::io::{AsyncRead, AsyncWrite},
-        tokio_rustls::{Accept, TlsAcceptor, TlsStream},
+        super::*,
+        rustls::{ServerConfig, ServerSession, Session, Stream},
+        std::sync::Arc,
     };
 
-    impl<T> Acceptor<T> for TlsAcceptor
+    impl<T> Acceptor<T> for Arc<ServerConfig>
     where
         T: AsyncRead + AsyncWrite,
     {
-        type Conn = TlsStream<T, ServerSession>;
-        type Error = std::io::Error;
-        type Accept = Accept<T>;
+        type Accepted = TlsStream<T>;
 
         #[inline]
-        fn accept(&self, io: T) -> Self::Accept {
-            self.accept(io)
+        fn accept(&self, io: T) -> Self::Accepted {
+            TlsStream {
+                io,
+                is_shutdown: false,
+                session: ServerSession::new(self),
+            }
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct TlsStream<S> {
+        io: S,
+        is_shutdown: bool,
+        session: ServerSession,
+    }
+
+    impl<S> TlsStream<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        #[inline]
+        fn stream(&mut self) -> Stream<'_, ServerSession, S> {
+            Stream::new(&mut self.session, &mut self.io)
+        }
+    }
+
+    impl<S> io::Read for TlsStream<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.stream().read(buf)
+        }
+    }
+
+    impl<S> io::Write for TlsStream<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.stream().write(buf)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.stream().flush()?;
+            self.io.flush()
+        }
+    }
+
+    impl<S> AsyncRead for TlsStream<S> where S: AsyncRead + AsyncWrite {}
+
+    impl<S> AsyncWrite for TlsStream<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn shutdown(&mut self) -> Poll<(), io::Error> {
+            if self.session.is_handshaking() {
+                return Ok(().into());
+            }
+
+            if !self.is_shutdown {
+                self.session.send_close_notify();
+                self.is_shutdown = true;
+            }
+
+            tokio_io::try_nb!(io::Write::flush(self));
+            self.io.shutdown()
         }
     }
 }
 
 #[cfg(feature = "use-openssl")]
-mod openssl {
+mod use_openssl {
     use {
-        super::Acceptor,
-        openssl::ssl::{HandshakeError, SslAcceptor},
-        tokio::io::{AsyncRead, AsyncWrite},
-        tokio_openssl::{AcceptAsync, SslAcceptorExt, SslStream},
+        super::*,
+        futures::Async,
+        openssl::ssl::{
+            ErrorCode, //
+            HandshakeError,
+            MidHandshakeSslStream,
+            ShutdownResult,
+            SslAcceptor,
+            SslStream,
+        },
     };
 
     impl<T> Acceptor<T> for SslAcceptor
     where
         T: AsyncRead + AsyncWrite,
     {
-        type Conn = SslStream<T>;
-        type Error = HandshakeError<T>;
-        type Accept = AcceptAsync<T>;
+        type Accepted = SslStreamWithHandshake<T>;
 
         #[inline]
-        fn accept(&self, io: T) -> Self::Accept {
-            self.accept_async(io)
+        fn accept(&self, io: T) -> Self::Accepted {
+            SslStreamWithHandshake::start(self.clone(), io)
+        }
+    }
+
+    #[allow(missing_debug_implementations)]
+    enum MidHandshake<T> {
+        Start { acceptor: SslAcceptor, io: T },
+        Handshake(MidHandshakeSslStream<T>),
+        Done,
+    }
+
+    impl<T> MidHandshake<T>
+    where
+        T: AsyncRead + AsyncWrite,
+    {
+        fn try_handshake(&mut self) -> io::Result<Option<SslStream<T>>> {
+            match std::mem::replace(self, MidHandshake::Done) {
+                MidHandshake::Start { acceptor, io } => match acceptor.accept(io) {
+                    Ok(io) => Ok(Some(io)),
+                    Err(HandshakeError::WouldBlock(s)) => {
+                        *self = MidHandshake::Handshake(s);
+                        Err(io::ErrorKind::WouldBlock.into())
+                    }
+                    Err(_e) => Err(io::Error::new(io::ErrorKind::Other, "handshake error")),
+                },
+                MidHandshake::Handshake(s) => match s.handshake() {
+                    Ok(io) => Ok(Some(io)),
+                    Err(HandshakeError::WouldBlock(s)) => {
+                        *self = MidHandshake::Handshake(s);
+                        Err(io::ErrorKind::WouldBlock.into())
+                    }
+                    Err(_e) => Err(io::Error::new(io::ErrorKind::Other, "handshake error")),
+                },
+                MidHandshake::Done => Ok(None),
+            }
+        }
+    }
+
+    #[allow(missing_debug_implementations)]
+    pub struct SslStreamWithHandshake<S> {
+        state: State<S>,
+    }
+
+    #[allow(missing_debug_implementations)]
+    enum State<S> {
+        MidHandshake(MidHandshake<S>),
+        Ready(SslStream<S>),
+        Gone,
+    }
+
+    impl<S> SslStreamWithHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn start(acceptor: SslAcceptor, io: S) -> Self {
+            SslStreamWithHandshake {
+                state: State::MidHandshake(MidHandshake::Start { acceptor, io }),
+            }
+        }
+    }
+
+    impl<S> io::Read for SslStreamWithHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            loop {
+                self.state = match &mut self.state {
+                    State::MidHandshake(m) => match m.try_handshake()? {
+                        Some(io) => State::Ready(io),
+                        None => panic!("cannot perform handshake twice"),
+                    },
+                    State::Ready(io) => return io.read(buf),
+                    State::Gone => return Err(io::ErrorKind::Other.into()),
+                };
+            }
+        }
+    }
+
+    impl<S> io::Write for SslStreamWithHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            loop {
+                self.state = match &mut self.state {
+                    State::MidHandshake(m) => match m.try_handshake()? {
+                        Some(io) => State::Ready(io),
+                        None => panic!("cannot perform handshake twice"),
+                    },
+                    State::Ready(io) => return io.write(buf),
+                    State::Gone => return Err(io::ErrorKind::Other.into()),
+                };
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            loop {
+                self.state = match &mut self.state {
+                    State::MidHandshake(m) => match m.try_handshake()? {
+                        Some(io) => State::Ready(io),
+                        None => return Ok(()),
+                    },
+                    State::Ready(io) => return io.flush(),
+                    State::Gone => return Err(io::ErrorKind::Other.into()),
+                };
+            }
+        }
+    }
+
+    impl<S> AsyncRead for SslStreamWithHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        unsafe fn prepare_uninitialized_buffer(&self, _: &mut [u8]) -> bool {
+            true
+        }
+    }
+
+    impl<S> AsyncWrite for SslStreamWithHandshake<S>
+    where
+        S: AsyncRead + AsyncWrite,
+    {
+        fn shutdown(&mut self) -> Poll<(), io::Error> {
+            match &mut self.state {
+                State::MidHandshake(..) => {
+                    self.state = State::Gone;
+                    Ok(Async::Ready(()))
+                }
+                State::Ready(io) => match io.shutdown() {
+                    Ok(ShutdownResult::Sent) | Ok(ShutdownResult::Received) => Ok(Async::Ready(())),
+                    Err(ref e) if e.code() == ErrorCode::ZERO_RETURN => Ok(Async::Ready(())),
+                    Err(ref e)
+                        if e.code() == ErrorCode::WANT_READ
+                            || e.code() == ErrorCode::WANT_WRITE =>
+                    {
+                        Ok(Async::NotReady)
+                    }
+                    Err(e) => Err(e
+                        .into_io_error()
+                        .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e))),
+                },
+                State::Gone => Ok(().into()),
+            }
         }
     }
 }

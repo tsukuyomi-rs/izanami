@@ -1,8 +1,7 @@
 use {
     echo_service::Echo,
     http::Response,
-    native_tls::{Identity, TlsAcceptor as NativeTlsAcceptor},
-    tokio_tls::TlsAcceptor,
+    native_tls::{Identity, TlsAcceptor},
 };
 
 fn main() -> izanami::Result<()> {
@@ -16,8 +15,7 @@ fn main() -> izanami::Result<()> {
 
     let der = std::fs::read("./private/identity.p12")?;
     let cert = Identity::from_pkcs12(&der, "mypass")?;
-    let acceptor = NativeTlsAcceptor::builder(cert).build()?;
-    let acceptor = TlsAcceptor::from(acceptor);
+    let acceptor = TlsAcceptor::builder(cert).build()?;
 
     izanami::Server::build() //
         .acceptor(acceptor)

@@ -160,13 +160,11 @@ macro_rules! serve {
         incoming
             .map_err(|e| log::error!("transport error: {}", e.into()))
             .for_each(move |io| {
-                let accept = acceptor
-                    .accept(io)
-                    .map_err(|e| log::error!("acceptor error: {}", e.into()));
+                let io = acceptor.accept(io);
 
                 let protocol = protocol.clone();
                 let make_service = make_service.clone();
-                let task = accept.and_then(move |io| {
+                let task = {
                     let service = make_service
                         .make_service_ref(&io)
                         .map_err(|e| log::error!("make_service error: {}", e.into()));
@@ -181,7 +179,7 @@ macro_rules! serve {
                                 .with_upgrades()
                                 .map_err(|e| log::error!("HTTP protocol error: {}", e))
                         })
-                });
+                };
                 spawn(task);
                 Ok(())
             })
@@ -193,13 +191,11 @@ where
     T: Listener,
     T::Incoming: Send + 'static,
     A: Acceptor<T::Conn> + Send + 'static,
-    A::Conn: Send + 'static,
-    A::Error: Into<crate::CritError>,
-    A::Accept: Send + 'static,
+    A::Accepted: Send + 'static,
 {
     pub fn serve<S, Bd>(self, make_service: S) -> crate::Result<()>
     where
-        S: MakeServiceRef<A::Conn, Request<RequestBody>, Response = Response<Bd>>
+        S: MakeServiceRef<A::Accepted, Request<RequestBody>, Response = Response<Bd>>
             + Send
             + Sync
             + 'static,
@@ -239,13 +235,11 @@ where
     T: Listener,
     T::Incoming: 'static,
     A: Acceptor<T::Conn> + 'static,
-    A::Conn: Send + 'static,
-    A::Error: Into<crate::CritError>,
-    A::Accept: 'static,
+    A::Accepted: Send + 'static,
 {
     pub fn serve<S, Bd>(self, make_service: S) -> crate::Result<()>
     where
-        S: MakeServiceRef<A::Conn, Request<RequestBody>, Response = Response<Bd>> + 'static,
+        S: MakeServiceRef<A::Accepted, Request<RequestBody>, Response = Response<Bd>> + 'static,
         S::Error: Into<crate::CritError>,
         S::MakeError: Into<crate::CritError>,
         S::Future: 'static,
