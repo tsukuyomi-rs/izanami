@@ -12,7 +12,7 @@ branches:
     - master
 
 script:
-  - cargo test -p izanami-service
+  - cargo test --all
   - cargo test -p izanami --all-features
 
 matrix:
@@ -31,12 +31,13 @@ matrix:
         - cargo fmt -- --check
         - cargo clippy --all --all-targets
         - cargo clippy -p izanami --all-features --all-targets
-        - cargo test -p izanami-service
+        - cargo test --all
         - cargo test -p izanami --all-features
       before_deploy: >-
         rm -rf target/doc &&
         cargo doc --no-deps -p izanami-service &&
         cargo doc --no-deps -p izanami --all-features &&
+        cargo doc --no-deps -p echo-service &&
         rm -f target/doc/.lock &&
         (echo '<meta http-equiv="refresh" content="0;URL=izanami/index.html">' > target/doc/index.html)
       deploy:

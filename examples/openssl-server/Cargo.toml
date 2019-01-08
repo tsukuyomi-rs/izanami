@@ -12,5 +12,8 @@ doc = false
 
 [dependencies]
 izanami = { version = "0.1.0-preview.1", features = ["use-openssl"] }
-echo-service = { path = "../echo-service" }
 openssl = "0.10"
+
+echo-service = { path = "../echo-service" }
+http = "0.1"
+regex = "1"

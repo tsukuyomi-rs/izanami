@@ -12,7 +12,10 @@ doc = false
 
 [dependencies]
 izanami = { version = "0.1.0-preview.1", features = ["use-rustls"] }
-echo-service = { path = "../echo-service" }
 failure = "0.1.3"
 rustls = "0.14"
 tokio-rustls = "0.8"
+
+echo-service = { path = "../echo-service" }
+http = "0.1"
+regex = "1"

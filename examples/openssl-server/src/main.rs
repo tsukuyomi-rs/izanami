@@ -1,6 +1,19 @@
-use openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod};
+use {
+    echo_service::Echo,
+    http::{Request, Response},
+    openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod},
+    regex::Regex,
+};
+
+fn index<Bd>(_: Request<Bd>, _: &Regex) -> Response<String> {
+    Response::builder().body("Hello".into()).unwrap()
+}
 
 fn main() -> izanami::Result<()> {
+    let echo = Echo::builder()
+        .add_route("/", index)? //
+        .build();
+
     let mut builder = SslAcceptor::mozilla_modern(SslMethod::tls())?;
     builder.set_certificate_file("./private/cert.pem", SslFiletype::PEM)?;
     builder.set_private_key_file("./private/key.pem", SslFiletype::PEM)?;
@@ -15,7 +28,7 @@ fn main() -> izanami::Result<()> {
     });
     let acceptor = builder.build();
 
-    izanami::Server::new(echo_service::Echo::default()) //
+    izanami::Server::new(echo) //
         .acceptor(acceptor)
         .run()
 }

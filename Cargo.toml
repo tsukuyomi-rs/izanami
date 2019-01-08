@@ -43,6 +43,8 @@ use-openssl = ["openssl", "tokio-openssl"]
 
 [workspace]
 members = [
+  "izanami-service",
+
   "examples/echo-service",
   "examples/native-tls-server",
   "examples/rustls-server",

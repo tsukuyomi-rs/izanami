@@ -1,6 +1,9 @@
 # `izanami`
 
-A lightweight implementation of HTTP server for Web frameworks.
+[![crates.io](https://img.shields.io/crates/v/izanami.svg)](https://crates.io/crates/izanami)
+[![Build Status](https://travis-ci.org/ubnt-intrepid/izanami.svg?branch=master)](https://travis-ci.org/ubnt-intrepid/izanami)
+
+A *meta* library for creating Web frameworks.
 
 ## License
 

@@ -1,10 +1,11 @@
 use {
     futures::{Async, Poll},
-    http::{Request, Response},
+    http::{Request, Response, StatusCode},
     izanami_service::{http::BufStream, MakeService, Service},
+    regex::{Regex, RegexSet},
+    std::sync::Arc,
 };
 
-#[derive(Debug)]
 pub struct ResponseBody(Option<String>);
 
 impl<T: Into<String>> From<T> for ResponseBody {
@@ -26,34 +27,133 @@ impl BufStream for ResponseBody {
     }
 }
 
-#[derive(Debug, Default)]
-pub struct Echo(());
+pub trait Handler<Bd> {
+    type Body: Into<ResponseBody>;
 
-impl<Ctx, Bd> MakeService<Ctx, Request<Bd>> for Echo {
-    type Response = Response<ResponseBody>;
-    type Error = std::io::Error;
-    type Service = EchoService;
-    type MakeError = std::io::Error;
-    type Future = futures::future::FutureResult<Self::Service, Self::MakeError>;
+    fn call(&self, request: Request<Bd>, regex: &Regex) -> Response<Self::Body>;
+}
 
-    fn make_service(&self, _: Ctx) -> Self::Future {
-        futures::future::ok(EchoService(()))
+impl<F, Bd, T> Handler<Bd> for F
+where
+    F: Fn(Request<Bd>, &Regex) -> Response<T>,
+    T: Into<ResponseBody>,
+{
+    type Body = T;
+
+    fn call(&self, request: Request<Bd>, regex: &Regex) -> Response<Self::Body> {
+        (*self)(request, regex)
     }
 }
 
-#[derive(Debug)]
-pub struct EchoService(());
+type HandlerFn<Bd> = dyn Fn(Request<Bd>, &Regex) -> Response<ResponseBody> + Send + Sync + 'static;
 
-impl<Bd> Service<Request<Bd>> for EchoService {
-    type Response = Response<ResponseBody>;
-    type Error = std::io::Error;
-    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+struct Inner<Bd> {
+    regex_set: RegexSet,
+    routes: Vec<(Regex, Box<HandlerFn<Bd>>)>,
+}
 
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        Ok(Async::Ready(()))
+pub struct Builder<Bd> {
+    routes: Vec<(Regex, Box<HandlerFn<Bd>>)>,
+}
+
+impl<Bd> Default for Builder<Bd> {
+    fn default() -> Self {
+        Self { routes: vec![] }
+    }
+}
+
+impl<Bd> Builder<Bd> {
+    pub fn add_route<H, T>(mut self, pattern: &str, handler: H) -> Result<Self, regex::Error>
+    where
+        H: Fn(Request<Bd>, &Regex) -> Response<T> + Send + Sync + 'static,
+        T: Into<ResponseBody>,
+    {
+        let pattern = Regex::new(pattern)?;
+        self.routes.push((
+            pattern,
+            Box::new(move |request, regex| {
+                (handler)(request, regex) //
+                    .map(Into::into)
+            }),
+        ));
+        Ok(self)
     }
 
-    fn call(&mut self, _: Request<Bd>) -> Self::Future {
-        futures::future::ok(Response::new("hello, izanami".into()))
+    pub fn build(self) -> Echo<Bd> {
+        let regex_set = RegexSet::new(
+            self.routes
+                .iter() //
+                .map(|route| route.0.as_str()),
+        )
+        .expect("Regex should be a valid regex pattern");
+
+        Echo {
+            inner: Arc::new(Inner {
+                regex_set,
+                routes: self.routes,
+            }),
+        }
+    }
+}
+
+pub struct Echo<Bd = ()> {
+    inner: Arc<Inner<Bd>>,
+}
+
+impl<Bd> Echo<Bd> {
+    pub fn builder() -> Builder<Bd> {
+        Builder::default()
+    }
+}
+
+mod imp {
+    use super::*;
+
+    impl<Ctx, Bd> MakeService<Ctx, Request<Bd>> for Echo<Bd> {
+        type Response = Response<ResponseBody>;
+        type Error = std::io::Error;
+        type Service = EchoService<Bd>;
+        type MakeError = std::io::Error;
+        type Future = futures::future::FutureResult<Self::Service, Self::MakeError>;
+
+        fn make_service(&self, _: Ctx) -> Self::Future {
+            futures::future::ok(EchoService {
+                inner: self.inner.clone(),
+            })
+        }
+    }
+
+    pub struct EchoService<Bd> {
+        inner: Arc<Inner<Bd>>,
+    }
+
+    impl<Bd> Service<Request<Bd>> for EchoService<Bd> {
+        type Response = Response<ResponseBody>;
+        type Error = std::io::Error;
+        type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+
+        fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+            Ok(Async::Ready(()))
+        }
+
+        fn call(&mut self, request: Request<Bd>) -> Self::Future {
+            if let Some((regex, handler)) = self
+                .inner
+                .regex_set
+                .matches(request.uri().path())
+                .iter()
+                .next()
+                .and_then(|i| self.inner.routes.get(i))
+            {
+                futures::future::ok((*handler)(request, regex))
+            } else {
+                futures::future::ok(
+                    Response::builder()
+                        .status(StatusCode::NOT_FOUND)
+                        .body("not found".into())
+                        .expect("should be a valid response"),
+                )
+            }
+        }
     }
 }
