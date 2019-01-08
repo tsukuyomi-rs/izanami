@@ -13,9 +13,6 @@
 )]
 #![forbid(clippy::unimplemented)]
 
-pub mod http;
-mod util;
-
 use futures::{Async, Future, IntoFuture, Poll};
 
 #[doc(no_inline)]

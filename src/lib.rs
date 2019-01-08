@@ -28,10 +28,9 @@ use {
         body::{Body, Payload as _Payload},
         server::conn::Http,
     },
-    izanami_service::{
-        http::{BufStream, IntoBufStream, Upgradable},
-        MakeServiceRef, Service,
-    },
+    izanami_buf_stream::{BufStream, IntoBufStream},
+    izanami_http::Upgradable,
+    izanami_service::{MakeServiceRef, Service},
     std::{marker::PhantomData, net::SocketAddr, rc::Rc, sync::Arc},
 };
 
@@ -57,9 +56,9 @@ impl BufStream for RequestBody {
 impl Upgradable for RequestBody {
     type Upgraded = hyper::upgrade::Upgraded;
     type Error = hyper::error::Error;
-    type Future = hyper::upgrade::OnUpgrade;
+    type OnUpgrade = hyper::upgrade::OnUpgrade;
 
-    fn on_upgrade(self) -> Self::Future {
+    fn on_upgrade(self) -> Self::OnUpgrade {
         self.0.on_upgrade()
     }
 }
@@ -216,6 +215,7 @@ where
     <S::Service as Service<Request<RequestBody>>>::Future: Send + 'static,
     Bd: IntoBufStream,
     Bd::Stream: Send + 'static,
+    Bd::Error: Into<CritError>,
     T: Listener,
     T::Incoming: Send + 'static,
     A: Acceptor<T::Conn> + Send + 'static,
@@ -256,6 +256,7 @@ where
     <S::Service as Service<Request<RequestBody>>>::Future: 'static,
     Bd: IntoBufStream,
     Bd::Stream: Send + 'static,
+    Bd::Error: Into<CritError>,
     T: Listener,
     T::Incoming: 'static,
     A: Acceptor<T::Conn> + 'static,
@@ -297,6 +298,7 @@ where
     S::Error: Into<crate::CritError>,
     Bd: IntoBufStream,
     Bd::Stream: Send + 'static,
+    Bd::Error: Into<CritError>,
 {
     type ReqBody = Body;
     type ResBody = Body;
@@ -321,6 +323,7 @@ where
     Fut: Future<Item = Response<Bd>>,
     Bd: IntoBufStream,
     Bd::Stream: Send + 'static,
+    Bd::Error: Into<CritError>,
 {
     type Item = Response<Body>;
     type Error = Fut::Error;

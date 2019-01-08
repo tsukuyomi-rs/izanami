@@ -1,0 +1,10 @@
+[package]
+name = "izanami-buf-stream"
+version = "0.1.0-preview.1"
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+bytes = "0.4"
+either = "1"
+futures = "0.1"

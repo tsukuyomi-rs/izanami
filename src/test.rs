@@ -17,10 +17,8 @@ use {
         header::{COOKIE, SET_COOKIE},
         Request, Response,
     },
-    izanami_service::{
-        http::{BufStream, IntoBufStream},
-        MakeService, Service,
-    },
+    izanami_buf_stream::{BufStream, IntoBufStream},
+    izanami_service::{MakeService, Service},
     std::{collections::HashMap, mem},
 };
 
@@ -59,6 +57,7 @@ where
     S::Future: Send + 'static,
     Bd: IntoBufStream,
     Bd::Stream: Send + 'static,
+    Bd::Error: Into<CritError>,
 {
     let mut builder = tokio::runtime::Builder::new();
     builder.core_threads(1);
@@ -78,6 +77,7 @@ where
     S::Error: Into<crate::CritError>,
     S::MakeError: Into<crate::CritError>,
     Bd: IntoBufStream,
+    Bd::Error: Into<CritError>,
 {
     let runtime = tokio::runtime::current_thread::Runtime::new()?;
     Ok(Server::new(make_service, runtime))
@@ -205,6 +205,7 @@ mod threadpool {
         S::Service: Send + 'static,
         Bd: IntoBufStream,
         Bd::Stream: Send + 'static,
+        Bd::Error: Into<CritError>,
     {
         /// Create a `Session` associated with this server.
         pub fn new_session(&mut self) -> crate::Result<Session<'_, S::Service, Runtime>> {
@@ -234,6 +235,7 @@ mod threadpool {
         S::Future: Send + 'static,
         Bd: IntoBufStream,
         Bd::Stream: Send + 'static,
+        Bd::Error: Into<CritError>,
     {
         /// Applies an HTTP request to this client and await its response.
         pub fn perform<T>(&mut self, input: T) -> crate::Result<Response<Output>>
@@ -261,6 +263,7 @@ mod current_thread {
         S::Error: Into<CritError>,
         S::MakeError: Into<CritError>,
         Bd: IntoBufStream,
+        Bd::Error: Into<CritError>,
     {
         /// Create a `Session` associated with this server.
         pub fn new_session(&mut self) -> crate::Result<Session<'_, S::Service, Runtime>> {
@@ -285,6 +288,7 @@ mod current_thread {
         S: Service<Request<RequestBody>, Response = Response<Bd>>,
         S::Error: Into<CritError>,
         Bd: IntoBufStream,
+        Bd::Error: Into<CritError>,
     {
         /// Applies an HTTP request to this client and await its response.
         pub fn perform<T>(&mut self, input: T) -> crate::Result<Response<Output>>
@@ -317,6 +321,7 @@ where
     F: Future<Item = Response<T>>,
     F::Error: Into<CritError>,
     Bd: BufStream,
+    Bd::Error: Into<CritError>,
     T: IntoBufStream<Item = Bd::Item, Error = Bd::Error, Stream = Bd>,
 {
     type Item = Response<Output>;

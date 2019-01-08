@@ -1,0 +1,11 @@
+[package]
+name = "izanami-http"
+version = "0.1.0-preview.1"
+edition = "2018"
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+description = "Basic abstractions around HTTP, for izanami"
+
+[dependencies]
+futures = "0.1"
+http = "0.1"
+tokio-io = "0.1"

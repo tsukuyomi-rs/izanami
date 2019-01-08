@@ -1,13 +1,12 @@
 //!
 
-#![allow(missing_docs)]
+mod util;
 
 use {
     bytes::{Buf, Bytes},
     either::Either,
-    futures::{Async, Future, Poll},
+    futures::{Async, Poll},
     std::error::Error,
-    tokio_io::{AsyncRead, AsyncWrite},
 };
 
 /// A trait which abstracts an asynchronous stream of bytes.
@@ -16,7 +15,7 @@ use {
 /// (unreleased) `tokio-buf`, and it will be replaced by it in the future.
 pub trait BufStream {
     type Item: Buf;
-    type Error: Into<Box<dyn Error + Send + Sync + 'static>>;
+    type Error;
 
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error>;
 
@@ -25,7 +24,7 @@ pub trait BufStream {
 
 pub trait IntoBufStream {
     type Item: Buf;
-    type Error: Into<Box<dyn Error + Send + Sync + 'static>>;
+    type Error;
     type Stream: BufStream<Item = Self::Item, Error = Self::Error>;
 
     fn into_buf_stream(self) -> Self::Stream;
@@ -130,6 +129,8 @@ mod impl_either {
     where
         L: IntoBufStream,
         R: IntoBufStream,
+        L::Error: Into<Box<dyn Error + Send + Sync + 'static>>,
+        R::Error: Into<Box<dyn Error + Send + Sync + 'static>>,
     {
         type Item = EitherBuf<L::Item, R::Item>;
         type Error = Box<dyn Error + Send + Sync + 'static>;
@@ -153,6 +154,8 @@ mod impl_either {
     where
         L: BufStream,
         R: BufStream,
+        L::Error: Into<Box<dyn Error + Send + Sync + 'static>>,
+        R::Error: Into<Box<dyn Error + Send + Sync + 'static>>,
     {
         type Item = EitherBuf<L::Item, R::Item>;
         type Error = Box<dyn Error + Send + Sync + 'static>;
@@ -210,12 +213,4 @@ mod impl_either {
             }
         }
     }
-}
-
-pub trait Upgradable {
-    type Upgraded: AsyncRead + AsyncWrite;
-    type Error;
-    type Future: Future<Item = Self::Upgraded, Error = Self::Error>;
-
-    fn on_upgrade(self) -> Self::Future;
 }
