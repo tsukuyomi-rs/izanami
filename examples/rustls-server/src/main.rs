@@ -16,9 +16,9 @@ fn main() -> izanami::Result<()> {
         .build();
 
     let tls_acceptor = build_tls_acceptor()?;
-    izanami::Server::new(echo) //
+    izanami::Server::build() //
         .acceptor(tls_acceptor)
-        .run()
+        .serve(echo)
 }
 
 fn build_tls_acceptor() -> Fallible<tokio_rustls::TlsAcceptor> {

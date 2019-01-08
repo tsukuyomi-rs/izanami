@@ -65,20 +65,25 @@ impl Upgradable for RequestBody {
 
 /// An HTTP server.
 #[derive(Debug)]
-pub struct Server<S, L = SocketAddr, A = (), R = tokio::runtime::Runtime> {
-    make_service: S,
+pub struct Server<L = SocketAddr, A = (), R = tokio::runtime::Runtime> {
     listener: L,
     acceptor: A,
     protocol: Http,
     runtime: Option<R>,
 }
 
-impl<S> Server<S> {
+impl Server {
+    /// Creates an HTTP server using a TCP transport with the address `"127.0.0.1:4000"`.
+    pub fn build() -> Self {
+        Server::bind(([127, 0, 0, 1], 4000).into())
+    }
+}
+
+impl<L> Server<L> {
     /// Create a new `Server` with the specified `NewService` and default configuration.
-    pub fn new(make_service: S) -> Self {
+    pub fn bind(listener: L) -> Self {
         Self {
-            make_service,
-            listener: ([127, 0, 0, 1], 4000).into(),
+            listener,
             acceptor: (),
             protocol: Http::new(),
             runtime: None,
@@ -86,34 +91,17 @@ impl<S> Server<S> {
     }
 }
 
-impl<S, L, A, R> Server<S, L, A, R> {
-    /// Sets the transport used by the server.
-    ///
-    /// By default, a TCP transport with the listener address `"127.0.0.1:4000"` is set.
-    pub fn bind<L2>(self, listener: L2) -> Server<S, L2, A, R>
-    where
-        L2: Listener,
-    {
-        Server {
-            make_service: self.make_service,
-            listener,
-            acceptor: self.acceptor,
-            protocol: self.protocol,
-            runtime: self.runtime,
-        }
-    }
-
+impl<L, A, R> Server<L, A, R> {
     /// Sets the instance of `Acceptor` to the server.
     ///
     /// By default, the raw acceptor is set, which returns the incoming
     /// I/Os directly.
-    pub fn acceptor<A2>(self, acceptor: A2) -> Server<S, L, A2, R>
+    pub fn acceptor<A2>(self, acceptor: A2) -> Server<L, A2, R>
     where
         L: Listener,
         A2: Acceptor<L::Conn>,
     {
         Server {
-            make_service: self.make_service,
             listener: self.listener,
             acceptor,
             protocol: self.protocol,
@@ -129,9 +117,8 @@ impl<S, L, A, R> Server<S, L, A, R> {
     }
 
     /// Sets the instance of runtime to the specified `runtime`.
-    pub fn runtime<R2>(self, runtime: R2) -> Server<S, L, A, R2> {
+    pub fn runtime<R2>(self, runtime: R2) -> Server<L, A, R2> {
         Server {
-            make_service: self.make_service,
             listener: self.listener,
             acceptor: self.acceptor,
             protocol: self.protocol,
@@ -142,9 +129,8 @@ impl<S, L, A, R> Server<S, L, A, R> {
     /// Switches the runtime to be used to [`current_thread::Runtime`].
     ///
     /// [`current_thread::Runtime`]: https://docs.rs/tokio/0.1/tokio/runtime/current_thread/struct.Runtime.html
-    pub fn current_thread(self) -> Server<S, L, A, tokio::runtime::current_thread::Runtime> {
+    pub fn current_thread(self) -> Server<L, A, tokio::runtime::current_thread::Runtime> {
         Server {
-            make_service: self.make_service,
             listener: self.listener,
             acceptor: self.acceptor,
             protocol: self.protocol,
@@ -202,20 +188,8 @@ macro_rules! serve {
     }};
 }
 
-impl<S, T, A, Bd> Server<S, T, A, tokio::runtime::Runtime>
+impl<T, A> Server<T, A, tokio::runtime::Runtime>
 where
-    S: MakeServiceRef<A::Conn, Request<RequestBody>, Response = Response<Bd>>
-        + Send
-        + Sync
-        + 'static,
-    S::Error: Into<crate::CritError>,
-    S::MakeError: Into<crate::CritError>,
-    S::Future: Send + 'static,
-    S::Service: Send + 'static,
-    <S::Service as Service<Request<RequestBody>>>::Future: Send + 'static,
-    Bd: IntoBufStream,
-    Bd::Stream: Send + 'static,
-    Bd::Error: Into<CritError>,
     T: Listener,
     T::Incoming: Send + 'static,
     A: Acceptor<T::Conn> + Send + 'static,
@@ -223,14 +197,28 @@ where
     A::Error: Into<crate::CritError>,
     A::Accept: Send + 'static,
 {
-    pub fn run(self) -> crate::Result<()> {
+    pub fn serve<S, Bd>(self, make_service: S) -> crate::Result<()>
+    where
+        S: MakeServiceRef<A::Conn, Request<RequestBody>, Response = Response<Bd>>
+            + Send
+            + Sync
+            + 'static,
+        S::Error: Into<crate::CritError>,
+        S::MakeError: Into<crate::CritError>,
+        S::Future: Send + 'static,
+        S::Service: Send + 'static,
+        <S::Service as Service<Request<RequestBody>>>::Future: Send + 'static,
+        Bd: IntoBufStream,
+        Bd::Stream: Send + 'static,
+        Bd::Error: Into<CritError>,
+    {
         let mut runtime = match self.runtime {
             Some(rt) => rt,
             None => tokio::runtime::Runtime::new()?,
         };
 
         let serve = serve! {
-            make_service: Arc::new(self.make_service),
+            make_service: Arc::new(make_service),
             listener: self.listener,
             acceptor: self.acceptor,
             protocol: Arc::new(
@@ -246,17 +234,8 @@ where
     }
 }
 
-impl<S, T, A, Bd> Server<S, T, A, tokio::runtime::current_thread::Runtime>
+impl<T, A> Server<T, A, tokio::runtime::current_thread::Runtime>
 where
-    S: MakeServiceRef<A::Conn, Request<RequestBody>, Response = Response<Bd>> + 'static,
-    S::Error: Into<crate::CritError>,
-    S::MakeError: Into<crate::CritError>,
-    S::Future: 'static,
-    S::Service: 'static,
-    <S::Service as Service<Request<RequestBody>>>::Future: 'static,
-    Bd: IntoBufStream,
-    Bd::Stream: Send + 'static,
-    Bd::Error: Into<CritError>,
     T: Listener,
     T::Incoming: 'static,
     A: Acceptor<T::Conn> + 'static,
@@ -264,14 +243,25 @@ where
     A::Error: Into<crate::CritError>,
     A::Accept: 'static,
 {
-    pub fn run(self) -> crate::Result<()> {
+    pub fn serve<S, Bd>(self, make_service: S) -> crate::Result<()>
+    where
+        S: MakeServiceRef<A::Conn, Request<RequestBody>, Response = Response<Bd>> + 'static,
+        S::Error: Into<crate::CritError>,
+        S::MakeError: Into<crate::CritError>,
+        S::Future: 'static,
+        S::Service: 'static,
+        <S::Service as Service<Request<RequestBody>>>::Future: 'static,
+        Bd: IntoBufStream,
+        Bd::Stream: Send + 'static,
+        Bd::Error: Into<CritError>,
+    {
         let mut runtime = match self.runtime {
             Some(rt) => rt,
             None => tokio::runtime::current_thread::Runtime::new()?,
         };
 
         let serve = serve! {
-            make_service: Rc::new(self.make_service),
+            make_service: Rc::new(make_service),
             listener: self.listener,
             acceptor: self.acceptor,
             protocol: Rc::new(

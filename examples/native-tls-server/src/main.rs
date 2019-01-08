@@ -19,7 +19,7 @@ fn main() -> izanami::Result<()> {
     let acceptor = NativeTlsAcceptor::builder(cert).build()?;
     let acceptor = TlsAcceptor::from(acceptor);
 
-    izanami::Server::new(echo) //
+    izanami::Server::build() //
         .acceptor(acceptor)
-        .run()
+        .serve(echo)
 }

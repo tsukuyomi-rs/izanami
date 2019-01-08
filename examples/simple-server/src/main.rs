@@ -9,6 +9,6 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    izanami::Server::new(echo) //
-        .run()
+    izanami::Server::build() //
+        .serve(echo)
 }

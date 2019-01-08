@@ -27,7 +27,7 @@ fn main() -> izanami::Result<()> {
     });
     let acceptor = builder.build();
 
-    izanami::Server::new(echo) //
+    izanami::Server::build() //
         .acceptor(acceptor)
-        .run()
+        .serve(echo)
 }
