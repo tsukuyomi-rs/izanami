@@ -49,8 +49,9 @@ members = [
 
   "examples/echo-service",
   "examples/native-tls-server",
-  "examples/rustls-server",
   "examples/openssl-server",
+  "examples/rustls-server",
+  "examples/simple-server",
 ]
 
 [patch.crates-io]

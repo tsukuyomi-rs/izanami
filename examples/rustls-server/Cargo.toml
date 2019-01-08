@@ -1,12 +1,12 @@
 [package]
-name = "example-rustls"
+name = "example-rustls-server"
 version = "0.0.0"
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 publish = false
 
 [[bin]]
-name = "example_rustls"
+name = "example_rustls_server"
 path = "src/main.rs"
 doc = false
 
@@ -18,4 +18,3 @@ tokio-rustls = "0.8"
 
 echo-service = { path = "../echo-service" }
 http = "0.1"
-regex = "1"

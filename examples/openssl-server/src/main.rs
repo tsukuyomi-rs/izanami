@@ -1,17 +1,16 @@
 use {
     echo_service::Echo,
-    http::{Request, Response},
+    http::Response,
     openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod},
-    regex::Regex,
 };
-
-fn index<Bd>(_: Request<Bd>, _: &Regex) -> Response<String> {
-    Response::builder().body("Hello".into()).unwrap()
-}
 
 fn main() -> izanami::Result<()> {
     let echo = Echo::builder()
-        .add_route("/", index)? //
+        .add_route("/", |_cx| {
+            Response::builder() //
+                .body("Hello")
+                .unwrap()
+        })? //
         .build();
 
     let mut builder = SslAcceptor::mozilla_modern(SslMethod::tls())?;

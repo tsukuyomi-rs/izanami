@@ -6,6 +6,7 @@ authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 publish = false
 
 [dependencies]
+izanami-buf-stream = "0.1.0-preview.1"
 izanami-service = "0.1.0-preview.1"
 failure = "0.1.3"
 futures = "0.1"

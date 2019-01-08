@@ -16,7 +16,7 @@ fn test_empty_routes() -> izanami::Result<()> {
 fn test_single_route() -> izanami::Result<()> {
     let mut server = izanami::test::server(
         Echo::builder() //
-            .add_route("/", |_, _| {
+            .add_route("/", |_| {
                 Response::builder() //
                     .body("hello")
                     .unwrap()
@@ -35,9 +35,9 @@ fn test_single_route() -> izanami::Result<()> {
 fn test_capture_param() -> izanami::Result<()> {
     let mut server = izanami::test::server(
         Echo::builder() //
-            .add_route("/([0-9]+)", |request, pattern| {
-                match pattern
-                    .captures(request.uri().path())
+            .add_route("/([0-9]+)", |cx| {
+                match cx
+                    .captures()
                     .and_then(|c| c.get(1))
                     .and_then(|m| m.as_str().parse::<u32>().ok())
                 {

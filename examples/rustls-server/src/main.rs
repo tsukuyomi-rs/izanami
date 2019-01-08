@@ -1,18 +1,19 @@
 use {
     echo_service::Echo,
     failure::{format_err, Fallible},
-    http::{Request, Response},
-    regex::Regex,
+    http::Response,
     rustls::{Certificate, KeyLogFile, NoClientAuth, PrivateKey, ServerConfig},
     std::{fs::File, io::BufReader, path::Path, sync::Arc},
 };
 
-fn index<Bd>(_: Request<Bd>, _: &Regex) -> Response<String> {
-    Response::builder().body("Hello".into()).unwrap()
-}
-
 fn main() -> izanami::Result<()> {
-    let echo = Echo::builder().add_route("/", index)?.build();
+    let echo = Echo::builder()
+        .add_route("/", |_cx| {
+            Response::builder() //
+                .body("Hello")
+                .unwrap()
+        })?
+        .build();
 
     let tls_acceptor = build_tls_acceptor()?;
     izanami::Server::new(echo) //

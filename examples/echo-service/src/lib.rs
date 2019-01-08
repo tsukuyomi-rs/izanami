@@ -1,8 +1,9 @@
 use {
     futures::{Async, Poll},
     http::{Request, Response, StatusCode},
-    izanami_service::{http::BufStream, MakeService, Service},
-    regex::{Regex, RegexSet},
+    izanami_buf_stream::BufStream,
+    izanami_service::{MakeService, Service},
+    regex::{Captures, Regex, RegexSet},
     std::sync::Arc,
 };
 
@@ -27,25 +28,36 @@ impl BufStream for ResponseBody {
     }
 }
 
-pub trait Handler<Bd> {
-    type Body: Into<ResponseBody>;
-
-    fn call(&self, request: Request<Bd>, regex: &Regex) -> Response<Self::Body>;
+pub struct Context<'a, Bd> {
+    request: Request<Bd>,
+    regex: &'a Regex,
 }
 
-impl<F, Bd, T> Handler<Bd> for F
-where
-    F: Fn(Request<Bd>, &Regex) -> Response<T>,
-    T: Into<ResponseBody>,
-{
-    type Body = T;
+impl<'a, Bd> Context<'a, Bd> {
+    pub fn into_request(self) -> Request<Bd> {
+        self.request
+    }
 
-    fn call(&self, request: Request<Bd>, regex: &Regex) -> Response<Self::Body> {
-        (*self)(request, regex)
+    pub fn captures(&self) -> Option<Captures<'_>> {
+        self.regex.captures(self.request.uri().path())
     }
 }
 
-type HandlerFn<Bd> = dyn Fn(Request<Bd>, &Regex) -> Response<ResponseBody> + Send + Sync + 'static;
+impl<'a, Bd> std::ops::Deref for Context<'a, Bd> {
+    type Target = Request<Bd>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.request
+    }
+}
+
+impl<'a, Bd> std::ops::DerefMut for Context<'a, Bd> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.request
+    }
+}
+
+type HandlerFn<Bd> = dyn Fn(Context<'_, Bd>) -> Response<ResponseBody> + Send + Sync + 'static;
 
 struct Inner<Bd> {
     regex_set: RegexSet,
@@ -65,17 +77,12 @@ impl<Bd> Default for Builder<Bd> {
 impl<Bd> Builder<Bd> {
     pub fn add_route<H, T>(mut self, pattern: &str, handler: H) -> Result<Self, regex::Error>
     where
-        H: Fn(Request<Bd>, &Regex) -> Response<T> + Send + Sync + 'static,
+        H: Fn(Context<'_, Bd>) -> Response<T> + Send + Sync + 'static,
         T: Into<ResponseBody>,
     {
         let pattern = Regex::new(pattern)?;
-        self.routes.push((
-            pattern,
-            Box::new(move |request, regex| {
-                (handler)(request, regex) //
-                    .map(Into::into)
-            }),
-        ));
+        self.routes
+            .push((pattern, Box::new(move |cx| (handler)(cx).map(Into::into))));
         Ok(self)
     }
 
@@ -145,7 +152,7 @@ mod imp {
                 .next()
                 .and_then(|i| self.inner.routes.get(i))
             {
-                futures::future::ok((*handler)(request, regex))
+                futures::future::ok((*handler)(Context { request, regex }))
             } else {
                 futures::future::ok(
                     Response::builder()

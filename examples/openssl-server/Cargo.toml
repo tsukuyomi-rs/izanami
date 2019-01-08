@@ -1,12 +1,12 @@
 [package]
-name = "example-openssl"
+name = "example-openssl-server"
 version = "0.0.0"
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 publish = false
 
 [[bin]]
-name = "example_openssl"
+name = "example_openssl_server"
 path = "src/main.rs"
 doc = false
 
@@ -16,4 +16,3 @@ openssl = "0.10"
 
 echo-service = { path = "../echo-service" }
 http = "0.1"
-regex = "1"
