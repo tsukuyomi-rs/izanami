@@ -1,14 +1,14 @@
 use {
     crate::{
-        io::{Acceptor, Listener},
+        io::{Acceptor, Incoming, Listener},
         CritError, RequestBody,
     },
-    futures::{Future, Poll, Stream},
+    futures::{Future, Poll},
     http::{Request, Response},
     hyper::server::conn::Http,
     izanami_http::{BufStream, IntoBufStream},
     izanami_service::{MakeServiceRef, Service},
-    std::{marker::PhantomData, net::SocketAddr},
+    std::{marker::PhantomData, net::SocketAddr, time::Duration},
 };
 
 /// A simple HTTP server that wraps the `hyper`'s server implementation.
@@ -20,6 +20,7 @@ pub struct Server<
 > {
     listener: L,
     acceptor: A,
+    sleep_on_errors: Option<Duration>,
     protocol: Http,
     _marker: PhantomData<R>,
 }
@@ -40,6 +41,7 @@ where
         Self {
             listener,
             acceptor: (),
+            sleep_on_errors: Some(Duration::from_secs(1)),
             protocol: Http::new(),
             _marker: PhantomData,
         }
@@ -62,14 +64,27 @@ where
         Server {
             listener: self.listener,
             acceptor,
+            sleep_on_errors: self.sleep_on_errors,
             protocol: self.protocol,
             _marker: PhantomData,
         }
     }
 
-    /// Sets the HTTP-level configuration to this server.
+    /// Sets the time interval for sleeping on errors.
     ///
-    /// Note that the executor will be overwritten by the launcher.
+    /// If this value is set, the incoming stream sleeps for
+    /// the specific period instead of terminating, and then
+    /// attemps to accept again after woken up.
+    ///
+    /// The default value is `Some(1sec)`.
+    pub fn sleep_on_errors(self, duration: Option<Duration>) -> Self {
+        Self {
+            sleep_on_errors: duration,
+            ..self
+        }
+    }
+
+    /// Returns a reference to the HTTP-level configuration.
     pub fn protocol(&mut self) -> &mut Http {
         &mut self.protocol
     }
@@ -81,6 +96,7 @@ where
         Server {
             listener: self.listener,
             acceptor: self.acceptor,
+            sleep_on_errors: self.sleep_on_errors,
             protocol: self.protocol,
             _marker: PhantomData,
         }
@@ -114,14 +130,18 @@ where
         let Self {
             listener,
             acceptor,
+            sleep_on_errors,
             protocol,
             ..
         } = self;
 
-        let incoming = listener
-            .listen()
-            .map_err(|err| failure::Error::from_boxed_compat(err.into()))?
-            .map(move |io| acceptor.accept(io));
+        let incoming = Incoming::new(
+            listener
+                .listen()
+                .map_err(|err| failure::Error::from_boxed_compat(err.into()))?,
+            acceptor,
+            sleep_on_errors,
+        );
 
         let protocol = protocol.with_executor(tokio::executor::DefaultExecutor::current());
 
@@ -158,14 +178,18 @@ where
         let Self {
             listener,
             acceptor,
+            sleep_on_errors,
             protocol,
             ..
         } = self;
 
-        let incoming = listener
-            .listen()
-            .map_err(|err| failure::Error::from_boxed_compat(err.into()))?
-            .map(move |io| acceptor.accept(io));
+        let incoming = Incoming::new(
+            listener
+                .listen()
+                .map_err(|err| failure::Error::from_boxed_compat(err.into()))?,
+            acceptor,
+            sleep_on_errors,
+        );
 
         let protocol =
             protocol.with_executor(tokio::runtime::current_thread::TaskExecutor::current());

@@ -1,17 +1,22 @@
 use {
-    crate::CritError,
-    futures::Stream,
-    tokio::io::{AsyncRead, AsyncWrite},
+    futures::{Async, Future, Poll, Stream},
+    std::{io, time::Duration},
+    tokio::{
+        io::{AsyncRead, AsyncWrite},
+        timer::Delay,
+    },
 };
 
-/// A trait that represents the low-level I/O.
+/// A trait that represents the listener.
 pub trait Listener {
+    /// The type of connection to the peer returned from `Incoming`.
     type Conn: AsyncRead + AsyncWrite;
-    type Error: Into<CritError>;
-    type Incoming: Stream<Item = Self::Conn, Error = Self::Error>;
 
-    /// Creates a `Stream` of asynchronous I/Os.
-    fn listen(self) -> Result<Self::Incoming, Self::Error>;
+    /// The type of incoming `Stream` that returns the connections with the peer.
+    type Incoming: Stream<Item = Self::Conn, Error = io::Error>;
+
+    /// Consume itself and creates an incoming `Stream` of asynchronous I/Os.
+    fn listen(self) -> io::Result<Self::Incoming>;
 }
 
 /// A trait that represents the conversion of asynchronous I/Os.
@@ -20,6 +25,10 @@ pub trait Listener {
 pub trait Acceptor<T> {
     type Accepted: AsyncRead + AsyncWrite;
 
+    /// Converts the supplied I/O object into an `Accepted`.
+    ///
+    /// The returned I/O from this method includes the handshake process,
+    /// and the process will be executed by reading/writing the I/O.
     fn accept(&self, io: T) -> Self::Accepted;
 }
 
@@ -48,6 +57,90 @@ where
     }
 }
 
+#[derive(Debug)]
+pub struct Incoming<S, A> {
+    stream: S,
+    acceptor: A,
+    sleep_on_errors: Option<Duration>,
+    timeout: Option<Delay>,
+}
+
+impl<S, A> Incoming<S, A>
+where
+    S: Stream<Error = io::Error>,
+    A: Acceptor<S::Item>,
+{
+    pub(crate) fn new(stream: S, acceptor: A, sleep_on_errors: Option<Duration>) -> Self {
+        Incoming {
+            stream,
+            acceptor,
+            sleep_on_errors,
+            timeout: None,
+        }
+    }
+}
+
+impl<S, A> Stream for Incoming<S, A>
+where
+    S: Stream<Error = io::Error>,
+    A: Acceptor<S::Item>,
+{
+    type Item = A::Accepted;
+    type Error = io::Error;
+
+    #[inline]
+    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        if let Some(timeout) = &mut self.timeout {
+            match timeout.poll() {
+                Ok(Async::Ready(())) => {}
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(err) => log::error!("sleep timer error: {}", err),
+            }
+        }
+        self.timeout = None;
+
+        loop {
+            match self.stream.poll() {
+                Ok(Async::Ready(io_opt)) => {
+                    return Ok(Async::Ready(io_opt.map(|io| self.acceptor.accept(io))))
+                }
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
+                Err(err) => {
+                    match err.kind() {
+                        io::ErrorKind::ConnectionRefused
+                        | io::ErrorKind::ConnectionAborted
+                        | io::ErrorKind::ConnectionReset => {
+                            log::debug!("connection error: {}", err);
+                            continue;
+                        }
+                        _ => {}
+                    }
+
+                    if let Some(duration) = self.sleep_on_errors {
+                        let delay = std::time::Instant::now() + duration;
+                        let mut timeout = Delay::new(delay);
+                        match timeout.poll() {
+                            Ok(Async::Ready(())) => {
+                                log::error!("accept error: {}", err);
+                                continue;
+                            }
+                            Ok(Async::NotReady) => {
+                                log::error!("accept error: {}", err);
+                                self.timeout = Some(timeout);
+                                return Ok(Async::NotReady);
+                            }
+                            Err(timer_err) => {
+                                log::error!("could not sleep on error: {}", timer_err);
+                                return Err(err);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
 mod tcp {
     use {
         super::Listener,
@@ -60,7 +153,6 @@ mod tcp {
 
     impl Listener for SocketAddr {
         type Conn = TcpStream;
-        type Error = io::Error;
         type Incoming = Incoming;
 
         #[inline]
@@ -71,7 +163,6 @@ mod tcp {
 
     impl<'a> Listener for &'a SocketAddr {
         type Conn = TcpStream;
-        type Error = io::Error;
         type Incoming = Incoming;
 
         #[inline]
@@ -82,7 +173,6 @@ mod tcp {
 
     impl Listener for std::net::TcpListener {
         type Conn = TcpStream;
-        type Error = io::Error;
         type Incoming = Incoming;
 
         #[inline]
@@ -94,12 +184,21 @@ mod tcp {
 
     impl Listener for TcpListener {
         type Conn = TcpStream;
-        type Error = io::Error;
         type Incoming = Incoming;
 
         #[inline]
         fn listen(self) -> io::Result<Self::Incoming> {
             Ok(self.incoming())
+        }
+    }
+
+    impl Listener for hyper::server::conn::AddrIncoming {
+        type Conn = hyper::server::conn::AddrStream;
+        type Incoming = Self;
+
+        #[inline]
+        fn listen(self) -> io::Result<Self::Incoming> {
+            Ok(self)
         }
     }
 }
@@ -120,7 +219,6 @@ mod uds {
 
     impl Listener for PathBuf {
         type Conn = UnixStream;
-        type Error = io::Error;
         type Incoming = Incoming;
 
         #[inline]
@@ -131,7 +229,6 @@ mod uds {
 
     impl<'a> Listener for &'a PathBuf {
         type Conn = UnixStream;
-        type Error = io::Error;
         type Incoming = Incoming;
 
         #[inline]
@@ -142,7 +239,6 @@ mod uds {
 
     impl<'a> Listener for &'a Path {
         type Conn = UnixStream;
-        type Error = io::Error;
         type Incoming = Incoming;
 
         #[inline]
@@ -153,7 +249,6 @@ mod uds {
 
     impl Listener for UnixListener {
         type Conn = UnixStream;
-        type Error = io::Error;
         type Incoming = Incoming;
 
         #[inline]
@@ -164,7 +259,6 @@ mod uds {
 
     impl Listener for std::os::unix::net::UnixListener {
         type Conn = UnixStream;
-        type Error = io::Error;
         type Incoming = Incoming;
 
         #[inline]
