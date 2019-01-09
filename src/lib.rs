@@ -27,8 +27,7 @@ use {
         body::{Body, Payload as _Payload},
         server::conn::Http,
     },
-    izanami_buf_stream::{BufStream, IntoBufStream},
-    izanami_http::Upgradable,
+    izanami_http::{BufStream, IntoBufStream, Upgradable},
     izanami_service::{MakeServiceRef, Service},
     std::net::SocketAddr,
 };

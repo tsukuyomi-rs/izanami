@@ -1,7 +1,7 @@
 use {
     futures::{Async, Poll},
     http::{Request, Response, StatusCode},
-    izanami_buf_stream::BufStream,
+    izanami_http::BufStream,
     izanami_service::{MakeService, Service},
     regex::{Captures, Regex, RegexSet},
     std::sync::Arc,

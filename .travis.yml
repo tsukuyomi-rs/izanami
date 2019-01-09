@@ -35,7 +35,6 @@ matrix:
         - cargo test -p izanami --all-features
       before_deploy: >-
         rm -rf target/doc &&
-        cargo doc --no-deps -p izanami-buf-stream &&
         cargo doc --no-deps -p izanami-http &&
         cargo doc --no-deps -p izanami-service &&
         cargo doc --no-deps -p izanami --all-features &&

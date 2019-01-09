@@ -1,7 +1,6 @@
 use {
     crate::CritError,
-    futures::{Poll, Stream},
-    std::io,
+    futures::Stream,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
@@ -179,7 +178,9 @@ mod uds {
 mod use_navite_tls {
     use {
         super::*,
+        futures::Poll,
         native_tls::{HandshakeError, TlsAcceptor, TlsStream},
+        std::io,
     };
 
     impl<T> Acceptor<T> for TlsAcceptor
@@ -310,8 +311,9 @@ mod use_navite_tls {
 mod use_rustls {
     use {
         super::*,
+        futures::Poll,
         rustls::{ServerConfig, ServerSession, Session, Stream},
-        std::sync::Arc,
+        std::{io, sync::Arc},
     };
 
     impl<T> Acceptor<T> for Arc<ServerConfig>
@@ -396,7 +398,7 @@ mod use_rustls {
 mod use_openssl {
     use {
         super::*,
-        futures::Async,
+        futures::{Async, Poll},
         openssl::ssl::{
             ErrorCode, //
             HandshakeError,
@@ -405,6 +407,7 @@ mod use_openssl {
             SslAcceptor,
             SslStream,
         },
+        std::io,
     };
 
     impl<T> Acceptor<T> for SslAcceptor

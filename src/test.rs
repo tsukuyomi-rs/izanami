@@ -17,7 +17,7 @@ use {
         header::{COOKIE, SET_COOKIE},
         Request, Response,
     },
-    izanami_buf_stream::{BufStream, IntoBufStream},
+    izanami_http::{BufStream, IntoBufStream},
     izanami_service::{MakeService, Service},
     std::{collections::HashMap, mem},
 };
