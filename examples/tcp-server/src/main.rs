@@ -1,4 +1,4 @@
-use {echo_service::Echo, http::Response};
+use {echo_service::Echo, http::Response, std::net::SocketAddr};
 
 fn main() -> izanami::Result<()> {
     let echo = Echo::builder()
@@ -9,6 +9,6 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    izanami::Server::build() //
-        .serve(echo)
+    let addr = SocketAddr::from(([127, 0, 0, 1], 5000));
+    izanami::Server::bind(addr).start(echo)
 }

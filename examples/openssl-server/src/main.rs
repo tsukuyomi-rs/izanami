@@ -29,5 +29,5 @@ fn main() -> izanami::Result<()> {
 
     izanami::Server::build() //
         .acceptor(acceptor)
-        .serve(echo)
+        .start(echo)
 }

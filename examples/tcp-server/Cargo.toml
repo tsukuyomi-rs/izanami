@@ -1,12 +1,12 @@
 [package]
-name = "example-simple_server"
+name = "example-tcp-server"
 version = "0.0.0"
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 publish = false
 
 [[bin]]
-name = "example_simple_server"
+name = "example_tcp_server"
 path = "src/main.rs"
 doc = false
 

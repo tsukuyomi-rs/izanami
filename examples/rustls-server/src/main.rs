@@ -18,7 +18,7 @@ fn main() -> izanami::Result<()> {
     let tls_config = build_tls_config()?;
     izanami::Server::build() //
         .acceptor(tls_config)
-        .serve(echo)
+        .start(echo)
 }
 
 fn build_tls_config() -> Fallible<Arc<ServerConfig>> {

@@ -50,7 +50,8 @@ members = [
   "examples/native-tls-server",
   "examples/openssl-server",
   "examples/rustls-server",
-  "examples/simple-server",
+  "examples/tcp-server",
+  "examples/uds-server",
 ]
 
 [patch.crates-io]
