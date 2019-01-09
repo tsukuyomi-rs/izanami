@@ -220,41 +220,6 @@ where
     }
 }
 
-mod oneshot {
-    use super::*;
-    use std::io;
-
-    impl IntoBufStream for () {
-        type Item = io::Cursor<[u8; 0]>;
-        type Error = io::Error;
-        type Stream = Unit;
-
-        fn into_buf_stream(self) -> Self::Stream {
-            Unit {
-                is_end_stream: false,
-            }
-        }
-    }
-
-    #[allow(missing_debug_implementations)]
-    pub struct Unit {
-        is_end_stream: bool,
-    }
-
-    impl BufStream for Unit {
-        type Item = io::Cursor<[u8; 0]>;
-        type Error = io::Error;
-
-        fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            if !self.is_end_stream {
-                self.is_end_stream = true;
-                return Ok(Async::Ready(Some(io::Cursor::new([]))));
-            }
-            Ok(Async::Ready(None))
-        }
-    }
-}
-
 #[allow(missing_docs)]
 #[derive(Debug)]
 pub enum Either<L, R> {

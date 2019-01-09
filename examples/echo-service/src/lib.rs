@@ -1,28 +1,11 @@
 use {
+    bytes::Bytes,
     futures::{Async, Poll},
     http::{Request, Response, StatusCode},
-    izanami_http::BufStream,
     izanami_service::{MakeService, Service},
     regex::{Captures, Regex, RegexSet},
     std::sync::Arc,
 };
-
-pub struct ResponseBody(Option<String>);
-
-impl<T: Into<String>> From<T> for ResponseBody {
-    fn from(data: T) -> Self {
-        ResponseBody(Some(data.into()))
-    }
-}
-
-impl BufStream for ResponseBody {
-    type Item = std::io::Cursor<String>;
-    type Error = std::io::Error;
-
-    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        Ok(Async::Ready(self.0.take().map(std::io::Cursor::new)))
-    }
-}
 
 pub struct Context<'a, Bd> {
     request: Request<Bd>,
@@ -53,7 +36,7 @@ impl<'a, Bd> std::ops::DerefMut for Context<'a, Bd> {
     }
 }
 
-type HandlerFn<Bd> = dyn Fn(Context<'_, Bd>) -> Response<ResponseBody> + Send + Sync + 'static;
+type HandlerFn<Bd> = dyn Fn(Context<'_, Bd>) -> Response<Bytes> + Send + Sync + 'static;
 
 struct Inner<Bd> {
     regex_set: RegexSet,
@@ -74,7 +57,7 @@ impl<Bd> Builder<Bd> {
     pub fn add_route<H, T>(mut self, pattern: &str, handler: H) -> Result<Self, regex::Error>
     where
         H: Fn(Context<'_, Bd>) -> Response<T> + Send + Sync + 'static,
-        T: Into<ResponseBody>,
+        T: Into<Bytes>,
     {
         let pattern = Regex::new(pattern)?;
         self.routes
@@ -113,7 +96,7 @@ mod imp {
     use super::*;
 
     impl<Ctx, Bd> MakeService<Ctx, Request<Bd>> for Echo<Bd> {
-        type Response = Response<ResponseBody>;
+        type Response = Response<Bytes>;
         type Error = std::io::Error;
         type Service = EchoService<Bd>;
         type MakeError = std::io::Error;
@@ -131,7 +114,7 @@ mod imp {
     }
 
     impl<Bd> Service<Request<Bd>> for EchoService<Bd> {
-        type Response = Response<ResponseBody>;
+        type Response = Response<Bytes>;
         type Error = std::io::Error;
         type Future = futures::future::FutureResult<Self::Response, Self::Error>;
 
