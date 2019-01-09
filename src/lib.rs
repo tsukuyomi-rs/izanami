@@ -21,7 +21,6 @@ pub use crate::{
 };
 
 use {
-    bytes::{Buf, Bytes},
     futures::{Future, Poll, Stream},
     http::{Request, Response},
     hyper::{
@@ -31,7 +30,7 @@ use {
     izanami_buf_stream::{BufStream, IntoBufStream},
     izanami_http::Upgradable,
     izanami_service::{MakeServiceRef, Service},
-    std::{marker::PhantomData, net::SocketAddr, rc::Rc, sync::Arc},
+    std::net::SocketAddr,
 };
 
 type CritError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -139,53 +138,6 @@ impl<L, A, R> Server<L, A, R> {
     }
 }
 
-/// A macro for creating a server task from the specified components.
-macro_rules! serve {
-    (
-        make_service: $make_service:expr,
-        listener: $listener:expr,
-        acceptor: $acceptor:expr,
-        protocol: $protocol:expr,
-        spawn: $spawn:expr,
-    ) => {{
-        let make_service = $make_service;
-        let listener = $listener;
-        let acceptor = $acceptor;
-        let protocol = $protocol;
-        let spawn = $spawn;
-
-        let incoming = listener
-            .listen()
-            .map_err(|err| failure::Error::from_boxed_compat(err.into()))?;
-        incoming
-            .map_err(|e| log::error!("transport error: {}", e.into()))
-            .for_each(move |io| {
-                let io = acceptor.accept(io);
-
-                let protocol = protocol.clone();
-                let make_service = make_service.clone();
-                let task = {
-                    let service = make_service
-                        .make_service_ref(&io)
-                        .map_err(|e| log::error!("make_service error: {}", e.into()));
-                    service
-                        .and_then(|service| {
-                            ReadyService(Some(service), PhantomData)
-                                .map_err(|e| log::error!("service error: {}", e.into()))
-                        })
-                        .and_then(move |service| {
-                            protocol
-                                .serve_connection(io, LiftedHttpService { service })
-                                .with_upgrades()
-                                .map_err(|e| log::error!("HTTP protocol error: {}", e))
-                        })
-                };
-                spawn(task);
-                Ok(())
-            })
-    }};
-}
-
 impl<T, A> Server<T, A, tokio::runtime::Runtime>
 where
     T: Listener,
@@ -205,23 +157,32 @@ where
         S::Service: Send + 'static,
         <S::Service as Service<Request<RequestBody>>>::Future: Send + 'static,
         Bd: IntoBufStream,
+        Bd::Item: Send,
         Bd::Stream: Send + 'static,
         Bd::Error: Into<CritError>,
     {
-        let mut runtime = match self.runtime {
+        let Self {
+            listener,
+            acceptor,
+            runtime,
+            protocol,
+        } = self;
+
+        let mut runtime = match runtime {
             Some(rt) => rt,
             None => tokio::runtime::Runtime::new()?,
         };
 
-        let serve = serve! {
-            make_service: Arc::new(make_service),
-            listener: self.listener,
-            acceptor: self.acceptor,
-            protocol: Arc::new(
-                self.protocol.with_executor(tokio::executor::DefaultExecutor::current())
-            ),
-            spawn: |future| crate::rt::spawn(future),
-        };
+        let incoming = listener
+            .listen()
+            .map_err(|err| failure::Error::from_boxed_compat(err.into()))?
+            .map(move |io| acceptor.accept(io));
+
+        let protocol = protocol.with_executor(tokio::executor::DefaultExecutor::current());
+
+        let serve = hyper::server::Builder::new(incoming, protocol) //
+            .serve(LiftedMakeHttpService { make_service })
+            .map_err(|e| log::error!("server error: {}", e));
 
         runtime.spawn(serve);
         runtime.shutdown_on_idle().wait().unwrap();
@@ -246,28 +207,68 @@ where
         S::Service: 'static,
         <S::Service as Service<Request<RequestBody>>>::Future: 'static,
         Bd: IntoBufStream,
+        Bd::Item: Send,
         Bd::Stream: Send + 'static,
         Bd::Error: Into<CritError>,
     {
-        let mut runtime = match self.runtime {
+        let Self {
+            listener,
+            acceptor,
+            runtime,
+            protocol,
+        } = self;
+
+        let mut runtime = match runtime {
             Some(rt) => rt,
             None => tokio::runtime::current_thread::Runtime::new()?,
         };
 
-        let serve = serve! {
-            make_service: Rc::new(make_service),
-            listener: self.listener,
-            acceptor: self.acceptor,
-            protocol: Rc::new(
-                self.protocol.with_executor(tokio::runtime::current_thread::TaskExecutor::current())
-            ),
-            spawn: |future| tokio::runtime::current_thread::spawn(future),
-        };
+        let incoming = listener
+            .listen()
+            .map_err(|err| failure::Error::from_boxed_compat(err.into()))?
+            .map(move |io| acceptor.accept(io));
 
-        let _ = runtime.block_on(serve);
+        let protocol =
+            protocol.with_executor(tokio::runtime::current_thread::TaskExecutor::current());
+
+        let serve = hyper::server::Builder::new(incoming, protocol) //
+            .serve(LiftedMakeHttpService { make_service })
+            .map_err(|e| log::error!("server error: {}", e));
+
+        runtime.spawn(serve);
         runtime.run()?;
 
         Ok(())
+    }
+}
+
+#[allow(missing_debug_implementations)]
+struct LiftedMakeHttpService<S> {
+    make_service: S,
+}
+
+#[allow(clippy::type_complexity)]
+impl<'a, S, Ctx, Bd> hyper::service::MakeService<&'a Ctx> for LiftedMakeHttpService<S>
+where
+    S: MakeServiceRef<Ctx, Request<RequestBody>, Response = Response<Bd>>,
+    S::Error: Into<CritError>,
+    S::MakeError: Into<CritError>,
+    Bd: IntoBufStream,
+    Bd::Stream: Send + 'static,
+    Bd::Item: Send,
+    Bd::Error: Into<CritError>,
+{
+    type ReqBody = Body;
+    type ResBody = WrappedBodyStream<Bd::Stream>;
+    type Error = S::Error;
+    type Service = LiftedHttpService<S::Service>;
+    type MakeError = S::MakeError;
+    type Future = futures::future::Map<S::Future, fn(S::Service) -> Self::Service>;
+
+    fn make_service(&mut self, ctx: &'a Ctx) -> Self::Future {
+        self.make_service
+            .make_service_ref(ctx)
+            .map(|service| LiftedHttpService { service })
     }
 }
 
@@ -282,10 +283,11 @@ where
     S::Error: Into<crate::CritError>,
     Bd: IntoBufStream,
     Bd::Stream: Send + 'static,
+    Bd::Item: Send,
     Bd::Error: Into<CritError>,
 {
     type ReqBody = Body;
-    type ResBody = Body;
+    type ResBody = WrappedBodyStream<Bd::Stream>;
     type Error = S::Error;
     type Future = LiftedHttpServiceFuture<S::Future>;
 
@@ -307,43 +309,37 @@ where
     Fut: Future<Item = Response<Bd>>,
     Bd: IntoBufStream,
     Bd::Stream: Send + 'static,
+    Bd::Item: Send,
     Bd::Error: Into<CritError>,
 {
-    type Item = Response<Body>;
+    type Item = Response<WrappedBodyStream<Bd::Stream>>;
     type Error = Fut::Error;
 
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.inner.poll().map(|x| {
-            x.map(|response| {
-                response.map(|body| {
-                    let mut body = body.into_buf_stream();
-                    Body::wrap_stream(futures::stream::poll_fn(move || {
-                        body.poll_buf()
-                            .map(|x| x.map(|data_opt| data_opt.map(|data| data.collect::<Bytes>())))
-                    }))
-                })
-            })
+            x.map(|response| response.map(|body| WrappedBodyStream(body.into_buf_stream())))
         })
     }
 }
 
 #[allow(missing_debug_implementations)]
-struct ReadyService<S, Req>(Option<S>, PhantomData<fn(Req)>);
+pub struct WrappedBodyStream<Bd>(Bd);
 
-impl<S, Req> Future for ReadyService<S, Req>
+impl<Bd> hyper::body::Payload for WrappedBodyStream<Bd>
 where
-    S: Service<Req>,
+    Bd: BufStream + Send + 'static,
+    Bd::Item: Send,
+    Bd::Error: Into<CritError>,
 {
-    type Item = S;
-    type Error = S::Error;
+    type Data = Bd::Item;
+    type Error = Bd::Error;
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        futures::try_ready!(self
-            .0
-            .as_mut()
-            .expect("the future has already been polled")
-            .poll_ready());
-        Ok(futures::Async::Ready(self.0.take().unwrap()))
+    fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
+        self.0.poll_buf()
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.is_end_stream()
     }
 }
