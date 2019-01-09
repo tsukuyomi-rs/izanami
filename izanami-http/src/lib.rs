@@ -15,7 +15,6 @@ mod util;
 
 use {
     bytes::Buf,
-    either::Either,
     futures::{Async, Future, Poll},
     http::Request,
     std::error::Error,
@@ -25,7 +24,8 @@ use {
 /// A trait which abstracts an asynchronous stream of bytes.
 ///
 /// The purpose of this trait is to imitate the trait defined in
-/// (unreleased) `tokio-buf`, and it will be replaced by it in the future.
+/// (unreleased) `tokio-buf`, and it will be replaced to its crate
+/// *completely* in the future version.
 #[allow(missing_docs)]
 pub trait BufStream {
     type Item: Buf;
@@ -33,7 +33,46 @@ pub trait BufStream {
 
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error>;
 
-    fn is_end_stream(&self) -> bool;
+    fn size_hint(&self) -> SizeHint {
+        SizeHint::default()
+    }
+
+    #[allow(clippy::drop_copy)]
+    fn consume_hint(&mut self, amount: usize) {
+        drop(amount);
+    }
+}
+
+#[allow(missing_docs)]
+#[derive(Debug, Default)]
+pub struct SizeHint {
+    lower: u64,
+    upper: Option<u64>,
+}
+
+#[allow(missing_docs)]
+impl SizeHint {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn lower(&self) -> u64 {
+        self.lower
+    }
+
+    pub fn upper(&self) -> Option<u64> {
+        self.upper
+    }
+
+    pub fn set_lower(&mut self, value: u64) {
+        assert!(value <= self.upper.unwrap_or(std::u64::MAX));
+        self.lower = value;
+    }
+
+    pub fn set_upper(&mut self, value: u64) {
+        assert!(value >= self.lower);
+        self.upper = Some(value);
+    }
 }
 
 mod buf_stream {
@@ -47,16 +86,12 @@ mod buf_stream {
         type Error = io::Error;
 
         fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            if self.is_end_stream() {
+            if self.is_empty() {
                 return Ok(Async::Ready(None));
             }
 
             let bytes = std::mem::replace(self, String::new()).into_bytes();
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
-        }
-
-        fn is_end_stream(&self) -> bool {
-            self.is_empty()
         }
     }
 
@@ -65,16 +100,12 @@ mod buf_stream {
         type Error = io::Error;
 
         fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            if self.is_end_stream() {
+            if self.is_empty() {
                 return Ok(Async::Ready(None));
             }
 
             let bytes = std::mem::replace(self, Vec::new());
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
-        }
-
-        fn is_end_stream(&self) -> bool {
-            self.is_empty()
         }
     }
 
@@ -83,16 +114,12 @@ mod buf_stream {
         type Error = io::Error;
 
         fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            if self.is_end_stream() {
+            if self.is_empty() {
                 return Ok(Async::Ready(None));
             }
 
             let bytes = std::mem::replace(self, "").as_bytes();
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
-        }
-
-        fn is_end_stream(&self) -> bool {
-            self.is_empty()
         }
     }
 
@@ -101,16 +128,12 @@ mod buf_stream {
         type Error = io::Error;
 
         fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            if self.is_end_stream() {
+            if self.is_empty() {
                 return Ok(Async::Ready(None));
             }
 
             let bytes = std::mem::replace(self, &[]);
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
-        }
-
-        fn is_end_stream(&self) -> bool {
-            self.is_empty()
         }
     }
 
@@ -119,7 +142,7 @@ mod buf_stream {
         type Error = io::Error;
 
         fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            if self.is_end_stream() {
+            if self.is_empty() {
                 return Ok(Async::Ready(None));
             }
 
@@ -129,10 +152,6 @@ mod buf_stream {
             };
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
         }
-
-        fn is_end_stream(&self) -> bool {
-            self.is_empty()
-        }
     }
 
     impl<'a> BufStream for Cow<'a, [u8]> {
@@ -140,16 +159,12 @@ mod buf_stream {
         type Error = io::Error;
 
         fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            if self.is_end_stream() {
+            if self.is_empty() {
                 return Ok(Async::Ready(None));
             }
 
             let bytes = std::mem::replace(self, Cow::Borrowed(&[]));
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
-        }
-
-        fn is_end_stream(&self) -> bool {
-            self.is_empty()
         }
     }
 
@@ -158,16 +173,12 @@ mod buf_stream {
         type Error = io::Error;
 
         fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            if self.is_end_stream() {
+            if self.is_empty() {
                 return Ok(Async::Ready(None));
             }
 
             let bytes = std::mem::replace(self, Default::default());
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
-        }
-
-        fn is_end_stream(&self) -> bool {
-            self.is_empty()
         }
     }
 
@@ -176,16 +187,12 @@ mod buf_stream {
         type Error = io::Error;
 
         fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            if self.is_end_stream() {
+            if self.is_empty() {
                 return Ok(Async::Ready(None));
             }
 
             let bytes = std::mem::replace(self, Default::default());
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
-        }
-
-        fn is_end_stream(&self) -> bool {
-            self.is_empty()
         }
     }
 }
@@ -245,11 +252,14 @@ mod oneshot {
             }
             Ok(Async::Ready(None))
         }
-
-        fn is_end_stream(&self) -> bool {
-            self.is_end_stream
-        }
     }
+}
+
+#[allow(missing_docs)]
+#[derive(Debug)]
+pub enum Either<L, R> {
+    Left(L),
+    Right(R),
 }
 
 mod impl_either {
@@ -304,10 +314,10 @@ mod impl_either {
             }
         }
 
-        fn is_end_stream(&self) -> bool {
+        fn size_hint(&self) -> SizeHint {
             match self {
-                EitherStream::Left(l) => l.is_end_stream(),
-                EitherStream::Right(r) => r.is_end_stream(),
+                EitherStream::Left(l) => l.size_hint(),
+                EitherStream::Right(r) => r.size_hint(),
             }
         }
     }
@@ -344,6 +354,11 @@ mod impl_either {
             }
         }
     }
+}
+
+#[allow(missing_docs)]
+pub trait HasTrailers: BufStream {
+    fn poll_trailers(&mut self) -> Poll<Option<http::HeaderMap>, Self::Error>;
 }
 
 #[allow(missing_docs)]

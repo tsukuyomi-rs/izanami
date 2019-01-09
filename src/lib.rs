@@ -22,12 +22,12 @@ pub use crate::{
 
 use {
     futures::{Future, Poll, Stream},
-    http::{Request, Response},
+    http::{HeaderMap, Request, Response},
     hyper::{
         body::{Body, Payload as _Payload},
         server::conn::Http,
     },
-    izanami_http::{BufStream, IntoBufStream, Upgradable},
+    izanami_http::{BufStream, HasTrailers, IntoBufStream, Upgradable},
     izanami_service::{MakeServiceRef, Service},
     std::net::SocketAddr,
 };
@@ -46,8 +46,18 @@ impl BufStream for RequestBody {
         self.0.poll_data()
     }
 
-    fn is_end_stream(&self) -> bool {
-        self.0.is_end_stream()
+    fn size_hint(&self) -> izanami_http::SizeHint {
+        let mut hint = izanami_http::SizeHint::new();
+        if let Some(len) = self.0.content_length() {
+            hint.set_upper(len);
+        }
+        hint
+    }
+}
+
+impl HasTrailers for RequestBody {
+    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::Error> {
+        self.0.poll_trailers()
     }
 }
 
@@ -323,7 +333,7 @@ where
 }
 
 #[allow(missing_debug_implementations)]
-pub struct WrappedBodyStream<Bd>(Bd);
+struct WrappedBodyStream<Bd>(Bd);
 
 impl<Bd> hyper::body::Payload for WrappedBodyStream<Bd>
 where
@@ -338,7 +348,7 @@ where
         self.0.poll_buf()
     }
 
-    fn is_end_stream(&self) -> bool {
-        self.0.is_end_stream()
+    fn content_length(&self) -> Option<u64> {
+        self.0.size_hint().upper()
     }
 }

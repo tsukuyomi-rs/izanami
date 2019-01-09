@@ -7,7 +7,6 @@ description = "Basic abstractions around HTTP used within izanami."
 
 [dependencies]
 bytes = "0.4"
-either = "1"
 futures = "0.1"
 http = "0.1"
 tokio-io = "0.1"

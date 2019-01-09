@@ -393,12 +393,9 @@ where
                     ref mut body,
                     ref mut chunks,
                 } => {
-                    if !body.is_end_stream() {
-                        while let Some(chunk) = futures::try_ready!(body.poll_buf()) {
-                            chunks.push(chunk.collect());
-                        }
+                    while let Some(chunk) = futures::try_ready!(body.poll_buf()) {
+                        chunks.push(chunk.collect());
                     }
-                    debug_assert!(body.is_end_stream());
                     self.state = ReceiveState::Ready(Output {
                         chunks: mem::replace(chunks, vec![]),
                     });
