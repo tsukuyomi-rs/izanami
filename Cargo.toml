@@ -24,22 +24,11 @@ tokio-io = "0.1"
 tokio-threadpool = "0.1"
 
 native-tls = { version = "0.2", optional = true }
-tokio-tls = { version = "0.2", optional = true }
-
 rustls = { version = "0.14", optional = true }
-tokio-rustls = { version = "0.8", optional = true }
-
 openssl = { version = "0.10", optional = true }
-tokio-openssl = { version = "0.3", optional = true }
 
 [dev-dependencies]
 version-sync = "0.6"
-
-[features]
-# Enables the support for TLS acceptors.
-use-native-tls = ["native-tls", "tokio-tls"]
-use-rustls = ["rustls", "tokio-rustls"]
-use-openssl = ["openssl", "tokio-openssl"]
 
 [workspace]
 members = [
