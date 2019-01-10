@@ -10,3 +10,8 @@ bytes = "0.4"
 futures = "0.1"
 http = "0.1"
 tokio-io = "0.1"
+
+[dependencies.hyper]
+version = "0.12.20"
+default-features = false
+optional = true

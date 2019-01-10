@@ -25,8 +25,11 @@ pub use crate::{
 use {
     futures::Poll,
     http::HeaderMap,
-    hyper::body::Payload as _Payload,
-    izanami_http::{BufStream, HasTrailers, Upgradable},
+    izanami_http::{
+        buf_stream::{BufStream, SizeHint}, //
+        upgrade::OnUpgrade,
+        HasTrailers,
+    },
 };
 
 type CritError = Box<dyn std::error::Error + Send + Sync + 'static>;
@@ -36,19 +39,15 @@ type CritError = Box<dyn std::error::Error + Send + Sync + 'static>;
 pub struct RequestBody(hyper::Body);
 
 impl BufStream for RequestBody {
-    type Item = hyper::Chunk;
-    type Error = hyper::Error;
+    type Item = <hyper::Body as BufStream>::Item;
+    type Error = <hyper::Body as BufStream>::Error;
 
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.0.poll_data()
+        self.0.poll_buf()
     }
 
-    fn size_hint(&self) -> izanami_http::SizeHint {
-        let mut hint = izanami_http::SizeHint::new();
-        if let Some(len) = self.0.content_length() {
-            hint.set_upper(len);
-        }
-        hint
+    fn size_hint(&self) -> SizeHint {
+        self.0.size_hint()
     }
 }
 
@@ -58,12 +57,12 @@ impl HasTrailers for RequestBody {
     }
 }
 
-impl Upgradable for RequestBody {
-    type Upgraded = hyper::upgrade::Upgraded;
-    type Error = hyper::error::Error;
-    type OnUpgrade = hyper::upgrade::OnUpgrade;
+impl OnUpgrade for RequestBody {
+    type Upgraded = <hyper::Body as OnUpgrade>::Upgraded;
+    type Error = <hyper::Body as OnUpgrade>::Error;
+    type Future = <hyper::Body as OnUpgrade>::Future;
 
-    fn on_upgrade(self) -> Self::OnUpgrade {
+    fn on_upgrade(self) -> Self::Future {
         self.0.on_upgrade()
     }
 }

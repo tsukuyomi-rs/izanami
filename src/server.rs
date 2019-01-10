@@ -6,7 +6,7 @@ use {
     futures::{Future, Poll},
     http::{Request, Response},
     hyper::server::conn::Http,
-    izanami_http::{BufStream, IntoBufStream},
+    izanami_http::buf_stream::BufStream,
     izanami_service::{MakeServiceRef, Service},
     std::{marker::PhantomData, net::SocketAddr, time::Duration},
 };
@@ -122,9 +122,8 @@ where
         S::Future: Send + 'static,
         S::Service: Send + 'static,
         <S::Service as Service<Request<RequestBody>>>::Future: Send + 'static,
-        Bd: IntoBufStream,
+        Bd: BufStream + Send + 'static,
         Bd::Item: Send,
-        Bd::Stream: Send + 'static,
         Bd::Error: Into<CritError>,
     {
         let Self {
@@ -170,9 +169,8 @@ where
         S::Future: 'static,
         S::Service: 'static,
         <S::Service as Service<Request<RequestBody>>>::Future: 'static,
-        Bd: IntoBufStream,
+        Bd: BufStream + Send + 'static,
         Bd::Item: Send,
-        Bd::Stream: Send + 'static,
         Bd::Error: Into<CritError>,
     {
         let Self {
@@ -214,13 +212,12 @@ where
     S: MakeServiceRef<Ctx, Request<RequestBody>, Response = Response<Bd>>,
     S::Error: Into<CritError>,
     S::MakeError: Into<CritError>,
-    Bd: IntoBufStream,
-    Bd::Stream: Send + 'static,
+    Bd: BufStream + Send + 'static,
     Bd::Item: Send,
     Bd::Error: Into<CritError>,
 {
     type ReqBody = hyper::Body;
-    type ResBody = WrappedBodyStream<Bd::Stream>;
+    type ResBody = WrappedBodyStream<Bd>;
     type Error = S::Error;
     type Service = LiftedHttpService<S::Service>;
     type MakeError = S::MakeError;
@@ -242,13 +239,12 @@ impl<S, Bd> hyper::service::Service for LiftedHttpService<S>
 where
     S: Service<Request<RequestBody>, Response = Response<Bd>>,
     S::Error: Into<crate::CritError>,
-    Bd: IntoBufStream,
-    Bd::Stream: Send + 'static,
+    Bd: BufStream + Send + 'static,
     Bd::Item: Send,
     Bd::Error: Into<CritError>,
 {
     type ReqBody = hyper::Body;
-    type ResBody = WrappedBodyStream<Bd::Stream>;
+    type ResBody = WrappedBodyStream<Bd>;
     type Error = S::Error;
     type Future = LiftedHttpServiceFuture<S::Future>;
 
@@ -268,19 +264,18 @@ struct LiftedHttpServiceFuture<Fut> {
 impl<Fut, Bd> Future for LiftedHttpServiceFuture<Fut>
 where
     Fut: Future<Item = Response<Bd>>,
-    Bd: IntoBufStream,
-    Bd::Stream: Send + 'static,
+    Bd: BufStream + Send + 'static,
     Bd::Item: Send,
     Bd::Error: Into<CritError>,
 {
-    type Item = Response<WrappedBodyStream<Bd::Stream>>;
+    type Item = Response<WrappedBodyStream<Bd>>;
     type Error = Fut::Error;
 
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.inner.poll().map(|x| {
-            x.map(|response| response.map(|body| WrappedBodyStream(body.into_buf_stream())))
-        })
+        self.inner
+            .poll()
+            .map(|x| x.map(|response| response.map(WrappedBodyStream)))
     }
 }
 
