@@ -47,3 +47,5 @@ members = [
 izanami = { version = "0.1.0-preview.1", path = "." }
 izanami-http = { version = "0.1.0-preview.1", path = "izanami-http" }
 izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
+
+version-sync = { git = "https://github.com/ubnt-intrepid/version-sync.git", branch = "bump-version" }
