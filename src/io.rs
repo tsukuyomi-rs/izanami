@@ -268,7 +268,7 @@ mod uds {
     }
 }
 
-#[cfg(feature = "use-native-tls")]
+#[cfg(feature = "native-tls")]
 mod use_navite_tls {
     use {
         super::*,
@@ -401,7 +401,7 @@ mod use_navite_tls {
     }
 }
 
-#[cfg(feature = "use-rustls")]
+#[cfg(feature = "rustls")]
 mod use_rustls {
     use {
         super::*,
@@ -488,7 +488,7 @@ mod use_rustls {
     }
 }
 
-#[cfg(feature = "use-openssl")]
+#[cfg(feature = "openssl")]
 mod use_openssl {
     use {
         super::*,
