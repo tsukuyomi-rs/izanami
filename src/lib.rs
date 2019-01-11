@@ -28,8 +28,8 @@ pub use {
     izanami_service as service,
 };
 
+use ::http::HeaderMap; // workaround to prevent parse errors in `syn`.
 use {
-    ::http::HeaderMap,
     futures::{Future, Poll},
     hyper::body::Payload,
     izanami_http::{
