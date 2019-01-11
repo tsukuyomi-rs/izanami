@@ -8,7 +8,7 @@ use {
 };
 
 /// A trait that represents an upgraded I/O.
-pub trait Io: AsyncRead + AsyncWrite {
+pub trait Upgraded: AsyncRead + AsyncWrite {
     // not a public API.
     #[doc(hidden)]
     fn __private_type_id__(&self) -> TypeId
@@ -19,13 +19,13 @@ pub trait Io: AsyncRead + AsyncWrite {
     }
 }
 
-impl<T> Io for T where T: AsyncRead + AsyncWrite {}
+impl<T> Upgraded for T where T: AsyncRead + AsyncWrite {}
 
-impl dyn Io + 'static {
+impl dyn Upgraded + 'static {
     /// Returns whether the boxed type is the same as `T` or not.
     pub fn is<T>(&self) -> bool
     where
-        T: AsyncRead + AsyncWrite + 'static,
+        T: Upgraded + 'static,
     {
         self.__private_type_id__() == TypeId::of::<T>()
     }
@@ -33,7 +33,7 @@ impl dyn Io + 'static {
     /// Attempts to downcast the object to a concrete type as a reference.
     pub fn downcast_ref<T>(&self) -> Option<&T>
     where
-        T: AsyncRead + AsyncWrite + 'static,
+        T: Upgraded + 'static,
     {
         if self.is::<T>() {
             Some(unsafe { &*(self as *const Self as *const T) })
@@ -45,7 +45,7 @@ impl dyn Io + 'static {
     /// Attempts to downcast the object to a concrete type as a mutable reference.
     pub fn downcast_mut<T>(&mut self) -> Option<&mut T>
     where
-        T: AsyncRead + AsyncWrite + 'static,
+        T: Upgraded + 'static,
     {
         if self.is::<T>() {
             Some(unsafe { &mut *(self as *mut Self as *mut T) })
@@ -57,7 +57,7 @@ impl dyn Io + 'static {
     /// Attempts to downcast the object to a concrete type.
     pub fn downcast<T>(self: Box<Self>) -> Result<Box<T>, Box<Self>>
     where
-        T: AsyncRead + AsyncWrite + 'static,
+        T: Upgraded + 'static,
     {
         if self.is::<T>() {
             Ok(unsafe { Box::from_raw(Box::into_raw(self) as *mut T) })
@@ -67,11 +67,11 @@ impl dyn Io + 'static {
     }
 }
 
-impl dyn Io + Send + 'static {
+impl dyn Upgraded + Send + 'static {
     /// Returns whether the boxed type is the same as `T` or not.
     pub fn is<T>(&self) -> bool
     where
-        T: AsyncRead + AsyncWrite + Send + 'static,
+        T: Upgraded + Send + 'static,
     {
         self.__private_type_id__() == TypeId::of::<T>()
     }
@@ -79,7 +79,7 @@ impl dyn Io + Send + 'static {
     /// Attempts to downcast the object to a concrete type as a reference.
     pub fn downcast_ref<T>(&self) -> Option<&T>
     where
-        T: AsyncRead + AsyncWrite + Send + 'static,
+        T: Upgraded + Send + 'static,
     {
         if self.is::<T>() {
             Some(unsafe { &*(self as *const Self as *const T) })
@@ -91,7 +91,7 @@ impl dyn Io + Send + 'static {
     /// Attempts to downcast the object to a concrete type as a mutable reference.
     pub fn downcast_mut<T>(&mut self) -> Option<&mut T>
     where
-        T: AsyncRead + AsyncWrite + Send + 'static,
+        T: Upgraded + Send + 'static,
     {
         if self.is::<T>() {
             Some(unsafe { &mut *(self as *mut Self as *mut T) })
@@ -103,7 +103,7 @@ impl dyn Io + Send + 'static {
     /// Attempts to downcast the object to a concrete type.
     pub fn downcast<T>(self: Box<Self>) -> Result<Box<T>, Box<Self>>
     where
-        T: AsyncRead + AsyncWrite + Send + 'static,
+        T: Upgraded + Send + 'static,
     {
         if self.is::<T>() {
             Ok(unsafe { Box::from_raw(Box::into_raw(self) as *mut T) })
@@ -119,7 +119,7 @@ impl dyn Io + Send + 'static {
 /// the request body.
 pub trait Upgrade {
     /// The type of upgraded I/O.
-    type Upgraded: Io;
+    type Upgraded: Upgraded;
 
     /// The type of error that will be returned from `Future`.
     type Error;
