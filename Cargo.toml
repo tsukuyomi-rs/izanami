@@ -9,7 +9,7 @@ readme = "README.md"
 description = "A lightweight implementation of HTTP server for Web frameworks"
 
 [dependencies]
-izanami-http = { version = "0.1.0-preview.1", features = ["hyper"] }
+izanami-http = "0.1.0-preview.1"
 izanami-service = "0.1.0-preview.1"
 
 bytes = "0.4"

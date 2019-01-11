@@ -29,15 +29,3 @@ pub trait HasTrailers: BufStream {
         Ok(Async::Ready(None))
     }
 }
-
-#[cfg(feature = "hyper")]
-mod impl_hyper {
-    use super::*;
-    use hyper::body::Payload;
-
-    impl HasTrailers for hyper::Body {
-        fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::Error> {
-            Payload::poll_trailers(self)
-        }
-    }
-}
