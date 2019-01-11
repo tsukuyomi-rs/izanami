@@ -251,7 +251,7 @@ where
     #[inline]
     fn call(&mut self, request: Request<hyper::Body>) -> Self::Future {
         LiftedHttpServiceFuture {
-            inner: self.service.call(request.map(RequestBody)),
+            inner: self.service.call(request.map(RequestBody::from_hyp)),
         }
     }
 }

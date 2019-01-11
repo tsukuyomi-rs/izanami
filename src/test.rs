@@ -241,7 +241,8 @@ mod threadpool {
         {
             let request = self.build_request(input)?;
 
-            let future = TestResponseFuture::Initial(self.service.call(request.map(RequestBody)));
+            let future =
+                TestResponseFuture::Initial(self.service.call(request.map(RequestBody::from_hyp)));
             let response =
                 block_on(&mut self.runtime, future).map_err(failure::Error::from_boxed_compat)?;
             self.handle_set_cookies(&response)?;
@@ -294,7 +295,8 @@ mod current_thread {
         {
             let request = self.build_request(input)?;
 
-            let future = TestResponseFuture::Initial(self.service.call(request.map(RequestBody)));
+            let future =
+                TestResponseFuture::Initial(self.service.call(request.map(RequestBody::from_hyp)));
             let response = self
                 .runtime
                 .block_on(future)

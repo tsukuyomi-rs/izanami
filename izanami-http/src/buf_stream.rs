@@ -264,27 +264,3 @@ mod impl_either {
         }
     }
 }
-
-#[cfg(feature = "hyper")]
-mod impl_hyper {
-    use super::*;
-    use hyper::body::{Body, Payload};
-
-    impl BufStream for Body {
-        type Item = hyper::Chunk;
-        type Error = hyper::Error;
-
-        fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            self.poll_data()
-        }
-
-        fn size_hint(&self) -> SizeHint {
-            let mut hint = SizeHint::new();
-            if let Some(len) = self.content_length() {
-                hint.set_upper(len);
-                hint.set_lower(len);
-            }
-            hint
-        }
-    }
-}
