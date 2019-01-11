@@ -10,6 +10,7 @@ description = "A lightweight implementation of HTTP server for Web frameworks"
 
 [dependencies]
 izanami-http = "0.1.0-preview.1"
+izanami-rt = "0.1.0-preview.1"
 izanami-service = "0.1.0-preview.1"
 
 bytes = "0.4"
@@ -21,7 +22,6 @@ hyper = "0.12"
 log = "0.4"
 tokio = "0.1"
 tokio-io = "0.1"
-tokio-threadpool = "0.1"
 
 native-tls = { version = "0.2", optional = true }
 rustls = { version = "0.14", optional = true }
@@ -33,6 +33,7 @@ version-sync = "0.6"
 [workspace]
 members = [
   "izanami-http",
+  "izanami-rt",
   "izanami-service",
 
   "examples/echo-service",
@@ -44,8 +45,9 @@ members = [
 ]
 
 [patch.crates-io]
-izanami = { version = "0.1.0-preview.1", path = "." }
-izanami-http = { version = "0.1.0-preview.1", path = "izanami-http" }
-izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
+izanami = { path = "." }
+izanami-http = { path = "izanami-http" }
+izanami-rt = { path = "izanami-rt" }
+izanami-service = { path = "izanami-service" }
 
 version-sync = { git = "https://github.com/ubnt-intrepid/version-sync.git", branch = "bump-version" }

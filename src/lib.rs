@@ -12,7 +12,6 @@
 
 mod error;
 mod io;
-pub mod rt;
 mod server;
 pub mod test;
 
@@ -22,9 +21,16 @@ pub use crate::{
     server::Server,
 };
 
+#[doc(no_inline)]
+pub use {
+    izanami_http as http, //
+    izanami_rt as rt,
+    izanami_service as service,
+};
+
 use {
+    ::http::HeaderMap,
     futures::{Future, Poll},
-    http::HeaderMap,
     hyper::body::Payload,
     izanami_http::{
         buf_stream::{BufStream, SizeHint}, //
