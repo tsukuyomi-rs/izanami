@@ -1,117 +1,274 @@
 use {
-    http::{header::HeaderValue, Request},
-    hyper::body::Body,
+    bytes::Bytes,
+    futures::{Async, Poll},
+    http::{
+        header::{HeaderMap, HeaderValue},
+        Request,
+    },
+    izanami_http::{
+        buf_stream::{BufStream, SizeHint},
+        upgrade::Upgrade,
+        HasTrailers,
+    },
+    std::{cell::UnsafeCell, io, marker::PhantomData},
+    tokio::io::{AsyncRead, AsyncWrite},
 };
 
-// ==== traits ====
+// FIXME: replace with mock_io::Mock
+
+/// A type that emulates an asynchronous I/O upgraded from HTTP.
+///
+/// Currently, this type is equivalent to a pair of `io::Empty` and `io::Sink`.
+#[derive(Debug)]
+pub struct MockUpgraded {
+    reader: io::Empty,
+    writer: io::Sink,
+    _anchor: PhantomData<UnsafeCell<()>>,
+}
+
+impl io::Read for MockUpgraded {
+    #[inline]
+    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+        self.reader.read(buf)
+    }
+}
+
+impl io::Write for MockUpgraded {
+    #[inline]
+    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+        self.writer.write(buf)
+    }
+
+    #[inline]
+    fn flush(&mut self) -> io::Result<()> {
+        self.writer.flush()
+    }
+}
+
+impl AsyncRead for MockUpgraded {}
+
+impl AsyncWrite for MockUpgraded {
+    #[inline]
+    fn shutdown(&mut self) -> Poll<(), io::Error> {
+        self.writer.shutdown()
+    }
+}
+
+/// A struct that represents the stream of chunks from client.
+#[derive(Debug)]
+pub struct MockRequestBody {
+    inner: Inner,
+    _anchor: PhantomData<UnsafeCell<()>>,
+}
+
+#[derive(Debug)]
+enum Inner {
+    Sized(Option<Bytes>),
+    OnUpgrade { upgraded: bool },
+}
+
+impl BufStream for MockRequestBody {
+    type Item = io::Cursor<Bytes>;
+    type Error = io::Error;
+
+    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        match &mut self.inner {
+            Inner::Sized(chunk) => Ok(Async::Ready(chunk.take().map(io::Cursor::new))),
+            Inner::OnUpgrade { .. } => panic!("the request body has already been upgraded"),
+        }
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        match &self.inner {
+            Inner::Sized(chunk) => {
+                let mut hint = SizeHint::new();
+                if let Some(chunk) = chunk {
+                    let len = chunk.len() as u64;
+                    hint.set_upper(len);
+                    hint.set_lower(len);
+                }
+                hint
+            }
+            Inner::OnUpgrade { .. } => panic!("the request body has already been upgraded"),
+        }
+    }
+}
+
+impl HasTrailers for MockRequestBody {
+    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::Error> {
+        match &mut self.inner {
+            Inner::Sized(chunk) => {
+                if chunk.is_some() {
+                    panic!("The content of request body has yet polled yet.");
+                }
+                Ok(Async::Ready(None))
+            }
+            Inner::OnUpgrade { .. } => panic!("the request body has already been upgraded"),
+        }
+    }
+}
+
+impl Upgrade for MockRequestBody {
+    type Upgraded = MockUpgraded;
+    type Error = io::Error;
+
+    fn poll_upgrade(&mut self) -> Poll<Self::Upgraded, Self::Error> {
+        loop {
+            self.inner = match &mut self.inner {
+                Inner::Sized(..) => Inner::OnUpgrade { upgraded: false },
+                Inner::OnUpgrade { upgraded } => {
+                    if *upgraded {
+                        panic!("the body has already been upgraded");
+                    }
+                    *upgraded = true;
+                    return Ok(Async::Ready(MockUpgraded {
+                        reader: io::empty(),
+                        writer: io::sink(),
+                        _anchor: PhantomData,
+                    }));
+                }
+            };
+        }
+    }
+}
 
 /// A trait representing the input to the test server.
-pub trait Input: InputImpl {}
+pub trait Input: imp::InputImpl {}
 
-pub trait InputImpl {
-    fn build_request(self) -> http::Result<Request<Body>>;
-}
+mod imp {
+    use super::*;
 
-///
-pub trait IntoRequestBody: IntoRequestBodyImpl {}
-
-pub trait IntoRequestBodyImpl {
-    fn content_type(&self) -> Option<HeaderValue> {
-        None
+    pub trait InputImpl {
+        fn build_request(self) -> http::Result<Request<MockRequestBody>>;
     }
 
-    fn into_request_body(self) -> Body;
-}
-
-// === implementors ===
-
-impl<'a> Input for &'a str {}
-impl<'a> InputImpl for &'a str {
-    fn build_request(self) -> http::Result<Request<Body>> {
-        Request::get(self).body(Body::default())
+    impl<T, E> Input for Result<T, E>
+    where
+        T: Input,
+        E: Into<http::Error>,
+    {
     }
-}
 
-impl Input for String {}
-impl InputImpl for String {
-    fn build_request(self) -> http::Result<Request<Body>> {
-        self.as_str().build_request()
-    }
-}
-
-impl<T> Input for Request<T> where T: IntoRequestBody {}
-impl<T: IntoRequestBody> InputImpl for Request<T> {
-    fn build_request(mut self) -> http::Result<Request<Body>> {
-        if let Some(content_type) = self.body().content_type() {
-            self.headers_mut().append("content-type", content_type);
+    impl<T, E> InputImpl for Result<T, E>
+    where
+        T: Input,
+        E: Into<http::Error>,
+    {
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
+            self.map_err(Into::into)?.build_request()
         }
-        Ok(self.map(IntoRequestBodyImpl::into_request_body))
     }
-}
 
-impl<T, E> Input for Result<Request<T>, E>
-where
-    T: IntoRequestBody,
-    E: Into<http::Error>,
-{
-}
-impl<T: IntoRequestBody, E: Into<http::Error>> InputImpl for Result<Request<T>, E> {
-    fn build_request(self) -> http::Result<Request<Body>> {
-        self.map_err(Into::into)?.build_request()
-    }
-}
+    impl Input for http::request::Builder {}
 
-impl Input for http::request::Builder {}
-impl InputImpl for http::request::Builder {
-    fn build_request(mut self) -> http::Result<Request<Body>> {
-        (&mut self).build_request()
+    impl InputImpl for http::request::Builder {
+        fn build_request(mut self) -> http::Result<Request<MockRequestBody>> {
+            (&mut self).build_request()
+        }
     }
-}
 
-impl<'a> Input for &'a mut http::request::Builder {}
-impl<'a> InputImpl for &'a mut http::request::Builder {
-    fn build_request(self) -> http::Result<Request<Body>> {
-        self.body(Body::default())
-    }
-}
+    impl<'a> Input for &'a mut http::request::Builder {}
 
-impl IntoRequestBody for () {}
-impl IntoRequestBodyImpl for () {
-    fn into_request_body(self) -> Body {
-        Body::default()
+    impl<'a> InputImpl for &'a mut http::request::Builder {
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
+            self.body(MockRequestBody {
+                inner: Inner::Sized(Some(Bytes::new())),
+                _anchor: PhantomData,
+            })
+        }
     }
-}
 
-impl<'a> IntoRequestBody for &'a str {}
-impl<'a> IntoRequestBodyImpl for &'a str {
-    fn content_type(&self) -> Option<HeaderValue> {
-        Some(HeaderValue::from_static("text/plain; charset=utf-8"))
-    }
-    fn into_request_body(self) -> Body {
-        self.to_owned().into()
-    }
-}
+    impl Input for Request<()> {}
 
-impl IntoRequestBody for String {}
-impl IntoRequestBodyImpl for String {
-    fn content_type(&self) -> Option<HeaderValue> {
-        Some(HeaderValue::from_static("text/plain; charset=utf-8"))
+    impl InputImpl for Request<()> {
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
+            Ok(self.map(|_| MockRequestBody {
+                inner: Inner::Sized(Some(Bytes::new())),
+                _anchor: PhantomData,
+            }))
+        }
     }
-    fn into_request_body(self) -> Body {
-        self.into()
-    }
-}
 
-impl<'a> IntoRequestBody for &'a [u8] {}
-impl<'a> IntoRequestBodyImpl for &'a [u8] {
-    fn into_request_body(self) -> Body {
-        self.to_owned().into()
-    }
-}
+    impl<'a> Input for Request<&'a str> {}
 
-impl IntoRequestBody for Vec<u8> {}
-impl IntoRequestBodyImpl for Vec<u8> {
-    fn into_request_body(self) -> Body {
-        self.into()
+    impl<'a> InputImpl for Request<&'a str> {
+        fn build_request(mut self) -> http::Result<Request<MockRequestBody>> {
+            self.headers_mut().insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            Ok(self.map(|body| MockRequestBody {
+                inner: Inner::Sized(Some(body.into())),
+                _anchor: PhantomData,
+            }))
+        }
+    }
+
+    impl Input for Request<String> {}
+
+    impl InputImpl for Request<String> {
+        fn build_request(mut self) -> http::Result<Request<MockRequestBody>> {
+            self.headers_mut().insert(
+                http::header::CONTENT_TYPE,
+                HeaderValue::from_static("text/plain; charset=utf-8"),
+            );
+            Ok(self.map(|body| MockRequestBody {
+                inner: Inner::Sized(Some(body.into())),
+                _anchor: PhantomData,
+            }))
+        }
+    }
+
+    impl<'a> Input for Request<&'a [u8]> {}
+
+    impl<'a> InputImpl for Request<&'a [u8]> {
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
+            Ok(self.map(|body| MockRequestBody {
+                inner: Inner::Sized(Some(body.into())),
+                _anchor: PhantomData,
+            }))
+        }
+    }
+
+    impl Input for Request<Vec<u8>> {}
+
+    impl InputImpl for Request<Vec<u8>> {
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
+            Ok(self.map(|body| MockRequestBody {
+                inner: Inner::Sized(Some(body.into())),
+                _anchor: PhantomData,
+            }))
+        }
+    }
+
+    impl Input for Request<Bytes> {}
+
+    impl InputImpl for Request<Bytes> {
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
+            Ok(self.map(|body| MockRequestBody {
+                inner: Inner::Sized(Some(body)),
+                _anchor: PhantomData,
+            }))
+        }
+    }
+
+    impl<'a> Input for &'a str {}
+
+    impl<'a> InputImpl for &'a str {
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
+            Request::get(self) //
+                .body(MockRequestBody {
+                    inner: Inner::Sized(Some(self.into())),
+                    _anchor: PhantomData,
+                })
+        }
+    }
+
+    impl Input for String {}
+
+    impl InputImpl for String {
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
+            self.as_str().build_request()
+        }
     }
 }
