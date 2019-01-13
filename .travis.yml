@@ -11,36 +11,19 @@ branches:
   only:
     - master
 
-script:
-  - cargo test --all
-  - cargo test -p izanami --all-features
+script: .ci/run-test.sh
 
 matrix:
   allow_failures:
     - rust: nightly
   fast_finish: true
   include:      
-    - rust: 1.31.1
-    - rust: beta
-    - rust: nightly
-    
     - rust: stable
       before_script:
         - rustup component add rustfmt clippy
-      script:
-        - cargo fmt -- --check
-        - cargo clippy --all --all-targets
-        - cargo clippy -p izanami --all-features --all-targets
-        - cargo test --all
-        - cargo test -p izanami --all-features
       before_deploy: >-
         rm -rf target/doc &&
-        cargo doc --no-deps -p izanami-http &&
-        cargo doc --no-deps -p izanami-service &&
-        cargo doc --no-deps -p izanami --all-features &&
-        cargo doc --no-deps -p echo-service &&
-        rm -f target/doc/.lock &&
-        (echo '<meta http-equiv="refresh" content="0;URL=izanami/index.html">' > target/doc/index.html)
+        .ci/build-doc.sh
       deploy:
         provider: pages
         skip_cleanup: true
@@ -50,3 +33,6 @@ matrix:
         local_dir: target/doc
         on:
           branch: master
+    - rust: 1.31.1
+    - rust: beta
+    - rust: nightly

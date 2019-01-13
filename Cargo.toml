@@ -30,6 +30,11 @@ openssl = { version = "0.10", optional = true }
 [dev-dependencies]
 version-sync = "0.6"
 
+[dev-dependencies.cargo-husky]
+version = "1"
+default-features = false
+features = ["user-hooks"]
+
 [workspace]
 members = [
   "izanami-http",
