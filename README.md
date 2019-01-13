@@ -2,6 +2,7 @@
 
 [![crates.io](https://img.shields.io/crates/v/izanami.svg)](https://crates.io/crates/izanami)
 [![Build Status](https://travis-ci.org/ubnt-intrepid/izanami.svg?branch=master)](https://travis-ci.org/ubnt-intrepid/izanami)
+[![codecov](https://codecov.io/gh/ubnt-intrepid/izanami/branch/master/graph/badge.svg)](https://codecov.io/gh/ubnt-intrepid/izanami)
 
 > This library is in the experimental stage, and it cannot be used for production use.
 
