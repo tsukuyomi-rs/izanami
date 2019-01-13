@@ -10,3 +10,6 @@ bytes = "0.4"
 futures = "0.1"
 http = "0.1"
 tokio-io = "0.1"
+
+[dev-dependencies]
+version-sync = "0.6"
