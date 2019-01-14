@@ -28,7 +28,7 @@ rustls = { version = "0.14", optional = true }
 openssl = { version = "0.10", optional = true }
 
 [dev-dependencies]
-version-sync = "0.6"
+version-sync = "0.7"
 
 [dev-dependencies.cargo-husky]
 version = "1"
@@ -54,5 +54,3 @@ izanami = { path = "." }
 izanami-http = { path = "izanami-http" }
 izanami-rt = { path = "izanami-rt" }
 izanami-service = { path = "izanami-service" }
-
-version-sync = { git = "https://github.com/ubnt-intrepid/version-sync.git", branch = "bump-version" }

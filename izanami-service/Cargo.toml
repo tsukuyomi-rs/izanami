@@ -14,4 +14,4 @@ futures = "0.1"
 tower-service = "0.2"
 
 [dev-dependencies]
-version-sync = "0.6"
+version-sync = "0.7"
