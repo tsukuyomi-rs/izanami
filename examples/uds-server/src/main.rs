@@ -11,7 +11,8 @@ fn main() -> izanami::Result<()> {
         .build();
 
     let path = std::path::Path::new("/tmp/echo-service.sock");
-    izanami::Server::bind(path).start(echo)
+    izanami::Server::bind_uds(path)? //
+        .start(echo)
 }
 
 #[cfg(not(unix))]

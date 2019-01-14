@@ -10,5 +10,6 @@ fn main() -> izanami::Result<()> {
         .build();
 
     let addr = SocketAddr::from(([127, 0, 0, 1], 5000));
-    izanami::Server::bind(addr).start(echo)
+    izanami::Server::bind_tcp(&addr)? //
+        .start(echo)
 }
