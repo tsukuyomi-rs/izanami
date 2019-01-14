@@ -1,5 +1,7 @@
+//! Abstraction around low-level I/O.
+
 use {
-    futures::{Async, Future, Poll, Stream},
+    futures::{Async, Poll, Stream},
     std::{io, time::Duration},
     tokio::{
         io::{AsyncRead, AsyncWrite},
@@ -8,7 +10,7 @@ use {
 };
 
 /// A trait that represents the listener.
-pub trait Listener {
+pub trait Transport {
     /// The type of connection to the peer returned from `Incoming`.
     type Conn: AsyncRead + AsyncWrite;
 
@@ -16,7 +18,17 @@ pub trait Listener {
     type Incoming: Stream<Item = Self::Conn, Error = io::Error>;
 
     /// Consume itself and creates an incoming `Stream` of asynchronous I/Os.
-    fn listen(self) -> io::Result<Self::Incoming>;
+    fn incoming(self) -> Self::Incoming;
+}
+
+impl Transport for hyper::server::conn::AddrIncoming {
+    type Conn = hyper::server::conn::AddrStream;
+    type Incoming = Self;
+
+    #[inline]
+    fn incoming(self) -> Self::Incoming {
+        self
+    }
 }
 
 /// A trait that represents the conversion of asynchronous I/Os.
@@ -57,81 +69,136 @@ where
     }
 }
 
+/// An instance of `Transport` used in `Server` by default.
 #[derive(Debug)]
-pub struct Incoming<S, A> {
-    stream: S,
+pub struct DefaultTransport<T, A = ()> {
+    transport: T,
     acceptor: A,
     sleep_on_errors: Option<Duration>,
-    timeout: Option<Delay>,
 }
 
-impl<S, A> Incoming<S, A>
+impl<T, A> DefaultTransport<T, A>
 where
-    S: Stream<Error = io::Error>,
-    A: Acceptor<S::Item>,
+    T: Transport,
+    A: Acceptor<T::Conn>,
 {
-    pub(crate) fn new(stream: S, acceptor: A, sleep_on_errors: Option<Duration>) -> Self {
-        Incoming {
-            stream,
+    pub(crate) fn new(transport: T, acceptor: A) -> Self {
+        Self {
+            transport,
             acceptor,
-            sleep_on_errors,
-            timeout: None,
+            sleep_on_errors: Some(Duration::from_secs(1)),
+        }
+    }
+
+    pub fn get_ref(&self) -> (&T, &A) {
+        (&self.transport, &self.acceptor)
+    }
+
+    pub fn get_mut(&mut self) -> (&mut T, &mut A) {
+        (&mut self.transport, &mut self.acceptor)
+    }
+
+    pub fn accept<A2>(self, acceptor: A2) -> DefaultTransport<T, A2>
+    where
+        A2: Acceptor<T::Conn>,
+    {
+        DefaultTransport {
+            transport: self.transport,
+            acceptor,
+            sleep_on_errors: self.sleep_on_errors,
+        }
+    }
+
+    pub fn sleep_on_errors(self, duration: Option<Duration>) -> Self {
+        Self {
+            sleep_on_errors: duration,
+            ..self
         }
     }
 }
 
-impl<S, A> Stream for Incoming<S, A>
-where
-    S: Stream<Error = io::Error>,
-    A: Acceptor<S::Item>,
-{
-    type Item = A::Accepted;
-    type Error = io::Error;
+mod default {
+    use {super::*, futures::Future};
 
-    #[inline]
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        if let Some(timeout) = &mut self.timeout {
-            match timeout.poll() {
-                Ok(Async::Ready(())) => {}
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Err(err) => log::error!("sleep timer error: {}", err),
+    impl<T, A> Transport for DefaultTransport<T, A>
+    where
+        T: Transport,
+        A: Acceptor<T::Conn>,
+    {
+        type Conn = A::Accepted;
+        type Incoming = Incoming<T::Incoming, A>;
+
+        fn incoming(self) -> Self::Incoming {
+            Incoming {
+                stream: self.transport.incoming(),
+                acceptor: self.acceptor,
+                sleep_on_errors: self.sleep_on_errors,
+                timeout: None,
             }
         }
-        self.timeout = None;
+    }
 
-        loop {
-            match self.stream.poll() {
-                Ok(Async::Ready(io_opt)) => {
-                    return Ok(Async::Ready(io_opt.map(|io| self.acceptor.accept(io))))
+    #[derive(Debug)]
+    pub struct Incoming<S, A> {
+        stream: S,
+        acceptor: A,
+        sleep_on_errors: Option<Duration>,
+        timeout: Option<Delay>,
+    }
+
+    impl<S, A> Stream for Incoming<S, A>
+    where
+        S: Stream<Error = io::Error>,
+        A: Acceptor<S::Item>,
+    {
+        type Item = A::Accepted;
+        type Error = io::Error;
+
+        #[inline]
+        fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+            if let Some(timeout) = &mut self.timeout {
+                match timeout.poll() {
+                    Ok(Async::Ready(())) => {}
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Err(err) => log::error!("sleep timer error: {}", err),
                 }
-                Ok(Async::NotReady) => return Ok(Async::NotReady),
-                Err(err) => {
-                    match err.kind() {
-                        io::ErrorKind::ConnectionRefused
-                        | io::ErrorKind::ConnectionAborted
-                        | io::ErrorKind::ConnectionReset => {
-                            log::debug!("connection error: {}", err);
-                            continue;
-                        }
-                        _ => {}
-                    }
+            }
+            self.timeout = None;
 
-                    if let Some(duration) = self.sleep_on_errors {
-                        let delay = std::time::Instant::now() + duration;
-                        let mut timeout = Delay::new(delay);
-                        match timeout.poll() {
-                            Ok(Async::Ready(())) => {
-                                log::error!("accept error: {}", err);
+            loop {
+                match self.stream.poll() {
+                    Ok(Async::Ready(io_opt)) => {
+                        return Ok(Async::Ready(io_opt.map(|io| self.acceptor.accept(io))))
+                    }
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Err(err) => {
+                        match err.kind() {
+                            io::ErrorKind::ConnectionRefused
+                            | io::ErrorKind::ConnectionAborted
+                            | io::ErrorKind::ConnectionReset => {
+                                log::debug!("connection error: {}", err);
                                 continue;
                             }
-                            Ok(Async::NotReady) => {
-                                log::error!("accept error: {}", err);
-                                self.timeout = Some(timeout);
-                                return Ok(Async::NotReady);
-                            }
-                            Err(timer_err) => {
-                                log::error!("could not sleep on error: {}", timer_err);
-                                return Err(err);
+                            _ => {}
+                        }
+
+                        if let Some(duration) = self.sleep_on_errors {
+                            let delay = std::time::Instant::now() + duration;
+                            let mut timeout = Delay::new(delay);
+                            match timeout.poll() {
+                                Ok(Async::Ready(())) => {
+                                    log::error!("accept error: {}", err);
+                                    continue;
+                                }
+                                Ok(Async::NotReady) => {
+                                    log::error!("accept error: {}", err);
+                                    self.timeout = Some(timeout);
+                                    return Ok(Async::NotReady);
+                                }
+                                Err(timer_err) => {
+                                    log::error!("could not sleep on error: {}", timer_err);
+                                    return Err(err);
+                                }
                             }
                         }
                     }
@@ -143,62 +210,17 @@ where
 
 mod tcp {
     use {
-        super::Listener,
-        std::{io, net::SocketAddr},
-        tokio::{
-            net::{tcp::Incoming, TcpListener, TcpStream},
-            reactor::Handle,
-        },
+        super::Transport,
+        tokio::net::{tcp::Incoming, TcpListener, TcpStream},
     };
 
-    impl Listener for SocketAddr {
+    impl Transport for TcpListener {
         type Conn = TcpStream;
         type Incoming = Incoming;
 
         #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            (&self).listen()
-        }
-    }
-
-    impl<'a> Listener for &'a SocketAddr {
-        type Conn = TcpStream;
-        type Incoming = Incoming;
-
-        #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            Ok(TcpListener::bind(self)?.incoming())
-        }
-    }
-
-    impl Listener for std::net::TcpListener {
-        type Conn = TcpStream;
-        type Incoming = Incoming;
-
-        #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            let listener = TcpListener::from_std(self, &Handle::default())?;
-            Ok(listener.incoming())
-        }
-    }
-
-    impl Listener for TcpListener {
-        type Conn = TcpStream;
-        type Incoming = Incoming;
-
-        #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            Ok(self.incoming())
-        }
-    }
-
-    impl Listener for hyper::server::conn::AddrIncoming {
-        type Conn = hyper::server::conn::AddrStream;
-        type Incoming = Self;
-
-        #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            Ok(self)
+        fn incoming(self) -> Self::Incoming {
+            self.incoming()
         }
     }
 }
@@ -206,64 +228,17 @@ mod tcp {
 #[cfg(unix)]
 mod uds {
     use {
-        super::Listener,
-        std::{
-            io,
-            path::{Path, PathBuf},
-        },
-        tokio::{
-            net::{unix::Incoming, UnixListener, UnixStream},
-            reactor::Handle,
-        },
+        super::Transport,
+        tokio::net::{unix::Incoming, UnixListener, UnixStream},
     };
 
-    impl Listener for PathBuf {
+    impl Transport for UnixListener {
         type Conn = UnixStream;
         type Incoming = Incoming;
 
         #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            (&self).listen()
-        }
-    }
-
-    impl<'a> Listener for &'a PathBuf {
-        type Conn = UnixStream;
-        type Incoming = Incoming;
-
-        #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            <&'a std::path::Path>::listen(&*self)
-        }
-    }
-
-    impl<'a> Listener for &'a Path {
-        type Conn = UnixStream;
-        type Incoming = Incoming;
-
-        #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            Ok(UnixListener::bind(self)?.incoming())
-        }
-    }
-
-    impl Listener for UnixListener {
-        type Conn = UnixStream;
-        type Incoming = Incoming;
-
-        #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            Ok(self.incoming())
-        }
-    }
-
-    impl Listener for std::os::unix::net::UnixListener {
-        type Conn = UnixStream;
-        type Incoming = Incoming;
-
-        #[inline]
-        fn listen(self) -> io::Result<Self::Incoming> {
-            Ok(UnixListener::from_std(self, &Handle::default())?.incoming())
+        fn incoming(self) -> Self::Incoming {
+            self.incoming()
         }
     }
 }
