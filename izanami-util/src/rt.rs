@@ -1,15 +1,4 @@
-//! Miscellaneous primitives and re-exports for building asynchronous tasks.
-
-#![doc(html_root_url = "https://docs.rs/izanami-rt/0.1.0-preview.1")]
-#![deny(
-    missing_docs,
-    missing_debug_implementations,
-    nonstandard_style,
-    rust_2018_idioms,
-    rust_2018_compatibility,
-    unused
-)]
-#![forbid(clippy::unimplemented)]
+//! Primitives for building asynchronous tasks.
 
 #[doc(no_inline)]
 pub use {

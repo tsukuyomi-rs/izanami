@@ -22,9 +22,8 @@ pub use crate::{
 
 #[doc(no_inline)]
 pub use {
-    izanami_http as http, //
-    izanami_rt as rt,
-    izanami_service as service,
+    izanami_service as service, //
+    izanami_util as util,
 };
 
 #[allow(dead_code)] // ?

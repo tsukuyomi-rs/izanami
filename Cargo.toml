@@ -6,12 +6,11 @@ authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ubnt-intrepid/izanami.git"
 readme = "README.md"
-description = "A lightweight implementation of HTTP server for Web frameworks"
+description = "A meta library for creating Web frameworks."
 
 [dependencies]
-izanami-http = "0.1.0-preview.1"
-izanami-rt = "0.1.0-preview.1"
-izanami-service = "0.1.0-preview.1"
+izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
+izanami-util = { version = "0.1.0-preview.1", path = "izanami-util" }
 
 bytes = "0.4"
 cookie = { version = "0.11", features = ["percent-encode"] }
@@ -37,9 +36,8 @@ features = ["user-hooks"]
 
 [workspace]
 members = [
-  "izanami-http",
-  "izanami-rt",
   "izanami-service",
+  "izanami-util",
 
   "examples/echo-service",
   "examples/native-tls-server",
@@ -48,9 +46,3 @@ members = [
   "examples/tcp-server",
   "examples/uds-server",
 ]
-
-[patch.crates-io]
-izanami = { path = "." }
-izanami-http = { path = "izanami-http" }
-izanami-rt = { path = "izanami-rt" }
-izanami-service = { path = "izanami-service" }

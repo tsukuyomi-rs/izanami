@@ -1,15 +1,21 @@
 [package]
-name = "izanami-http"
+name = "izanami-util"
+description = """
+Miscellaneous primitives used within izanami.
+"""
 version = "0.1.0-preview.1"
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
-description = "Basic abstractions around HTTP used within izanami."
+license = "MIT OR Apache-2.0"
+repository = "https://gitlab.com/ubnt-intrepid/izanami.git"
 
 [dependencies]
 bytes = "0.4"
 futures = "0.1"
 http = "0.1"
+tokio = "0.1"
 tokio-io = "0.1"
+tokio-threadpool = "0.1"
 
 [dev-dependencies]
 version-sync = "0.7"

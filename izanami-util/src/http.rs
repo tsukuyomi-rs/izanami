@@ -1,11 +1,46 @@
-//! Components that abstracts HTTP upgrades.
+//! Supplemental abstractions around HTTP message bodies.
 
 use {
-    futures::{Future, Poll},
-    http::Request,
+    futures::{Async, Future, Poll},
+    http::{HeaderMap, Request},
     std::any::TypeId,
     tokio_io::{AsyncRead, AsyncWrite},
 };
+
+/// A trait representing that it is possible that the stream
+/// will return a `HeaderMap` after completing the output of bytes.
+pub trait HasTrailers {
+    /// The type of errors that will be returned from `poll_trailers`.
+    type TrailersError;
+
+    /// Polls if this stream is ready to return a `HeaderMap`.
+    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
+        Ok(Async::Ready(None))
+    }
+}
+
+/// A trait that abstracts the HTTP upgrade.
+///
+/// Typically, this trait is implemented by the types that represents
+/// the request body.
+pub trait Upgrade {
+    /// The type of upgraded I/O.
+    type Upgraded: Upgraded;
+
+    /// The type of error that will be returned from `Future`.
+    type Error;
+
+    /// Checks if the upgraded I/O is ready, and returns its value if possible.
+    fn poll_upgrade(&mut self) -> Poll<Self::Upgraded, Self::Error>;
+
+    /// Converts itself into a `Future` that will return an upgraded I/O.
+    fn on_upgrade(self) -> OnUpgrade<Self>
+    where
+        Self: Sized,
+    {
+        OnUpgrade(self)
+    }
+}
 
 /// A trait that represents an upgraded I/O.
 pub trait Upgraded: AsyncRead + AsyncWrite {
@@ -110,29 +145,6 @@ impl dyn Upgraded + Send + 'static {
         } else {
             Err(self)
         }
-    }
-}
-
-/// A trait that abstracts the HTTP upgrade.
-///
-/// Typically, this trait is implemented by the types that represents
-/// the request body.
-pub trait Upgrade {
-    /// The type of upgraded I/O.
-    type Upgraded: Upgraded;
-
-    /// The type of error that will be returned from `Future`.
-    type Error;
-
-    /// Checks if the upgraded I/O is ready, and returns its value if possible.
-    fn poll_upgrade(&mut self) -> Poll<Self::Upgraded, Self::Error>;
-
-    /// Converts itself into a `Future` that will return an upgraded I/O.
-    fn on_upgrade(self) -> OnUpgrade<Self>
-    where
-        Self: Sized,
-    {
-        OnUpgrade(self)
     }
 }
 

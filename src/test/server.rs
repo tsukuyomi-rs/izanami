@@ -26,7 +26,7 @@ mod imp {
         super::*,
         bytes::{Buf, Bytes},
         futures::{Async, Future, Poll},
-        izanami_http::buf_stream::BufStream,
+        izanami_util::buf_stream::BufStream,
         std::{
             mem,
             panic::{resume_unwind, AssertUnwindSafe},

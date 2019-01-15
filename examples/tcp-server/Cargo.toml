@@ -11,6 +11,6 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-izanami = "0.1.0-preview.1"
+izanami = { path = "../.." }
 echo-service = { path = "../echo-service" }
 http = "0.1"

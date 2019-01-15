@@ -5,10 +5,9 @@ use {
         header::{HeaderMap, HeaderValue},
         Request,
     },
-    izanami_http::{
+    izanami_util::{
         buf_stream::{BufStream, SizeHint},
-        upgrade::Upgrade,
-        HasTrailers,
+        http::{HasTrailers, Upgrade},
     },
     std::{cell::UnsafeCell, io, marker::PhantomData},
     tokio::io::{AsyncRead, AsyncWrite},
@@ -95,7 +94,9 @@ impl BufStream for MockRequestBody {
 }
 
 impl HasTrailers for MockRequestBody {
-    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::Error> {
+    type TrailersError = io::Error;
+
+    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
         match &mut self.inner {
             Inner::Sized(chunk) => {
                 if chunk.is_some() {

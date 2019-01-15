@@ -8,12 +8,11 @@ use {
     futures::{Future, Poll, Stream},
     http::{HeaderMap, Request, Response},
     hyper::{body::Payload as _Payload, server::conn::Http},
-    izanami_http::{
-        buf_stream::{BufStream, SizeHint},
-        upgrade::Upgrade,
-        HasTrailers,
-    },
     izanami_service::{MakeServiceRef, Service},
+    izanami_util::{
+        buf_stream::{BufStream, SizeHint},
+        http::{HasTrailers, Upgrade},
+    },
     std::{
         fmt, //
         io,
@@ -73,7 +72,9 @@ impl BufStream for RequestBody {
 }
 
 impl HasTrailers for RequestBody {
-    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::Error> {
+    type TrailersError = hyper::Error;
+
+    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
         match &mut self.0 {
             Inner::Raw(body) => body.poll_trailers(),
             Inner::OnUpgrade(..) => panic!("the request body has already been upgraded"),
