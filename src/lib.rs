@@ -1,6 +1,6 @@
 //! A *meta* library for creating Web frameworks.
 
-#![doc(html_root_url = "https://docs.rs/izanami/0.1.0-preview.1")]
+#![doc(html_root_url = "https://docs.rs/izanami/0.1.0-preview.2")]
 #![deny(
     missing_debug_implementations,
     nonstandard_style,
