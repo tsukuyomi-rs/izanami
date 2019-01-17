@@ -26,12 +26,12 @@ matrix:
   fast_finish: true
   include:      
     - rust: stable
-      install:
+      before_script:
+        - rustup component add rustfmt clippy
+      after_success:
         - rm -f ./install_kcov.sh
         - wget https://raw.githubusercontent.com/kennytm/cargo-kcov/master/src/install_kcov.sh
         - sh ./install_kcov.sh
-        - rustup component add rustfmt clippy
-      after_success:
         - export RUSTFLAGS="-C link-dead-code"
         - .ci/run-coverage-test.sh
       before_deploy: >-
