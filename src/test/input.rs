@@ -193,15 +193,8 @@ mod imp {
     impl<'a> Input for Request<&'a str> {}
 
     impl<'a> InputImpl for Request<&'a str> {
-        fn build_request(mut self) -> http::Result<Request<MockRequestBody>> {
-            self.headers_mut().insert(
-                http::header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; charset=utf-8"),
-            );
-            Ok(self.map(|body| MockRequestBody {
-                inner: Inner::Sized(Some(body.into())),
-                _anchor: PhantomData,
-            }))
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
+            self.map(|body| body.to_owned()).build_request()
         }
     }
 
@@ -209,10 +202,9 @@ mod imp {
 
     impl InputImpl for Request<String> {
         fn build_request(mut self) -> http::Result<Request<MockRequestBody>> {
-            self.headers_mut().insert(
-                http::header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; charset=utf-8"),
-            );
+            self.headers_mut()
+                .entry(http::header::CONTENT_TYPE)?
+                .or_insert_with(|| HeaderValue::from_static("text/plain; charset=utf-8"));
             Ok(self.map(|body| MockRequestBody {
                 inner: Inner::Sized(Some(body.into())),
                 _anchor: PhantomData,
@@ -224,10 +216,7 @@ mod imp {
 
     impl<'a> InputImpl for Request<&'a [u8]> {
         fn build_request(self) -> http::Result<Request<MockRequestBody>> {
-            Ok(self.map(|body| MockRequestBody {
-                inner: Inner::Sized(Some(body.into())),
-                _anchor: PhantomData,
-            }))
+            self.map(|body| body.to_owned()).build_request()
         }
     }
 
@@ -271,5 +260,71 @@ mod imp {
         fn build_request(self) -> http::Result<Request<MockRequestBody>> {
             self.as_str().build_request()
         }
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use {
+        super::{imp::InputImpl, *},
+        http::Method,
+    };
+
+    #[test]
+    fn input_string() -> http::Result<()> {
+        let request = "/foo".build_request()?;
+        assert_eq!(request.method(), Method::GET);
+        assert_eq!(request.uri().path(), "/foo");
+        assert!(request.headers().is_empty());
+        Ok(())
+    }
+
+    #[test]
+    fn input_request_bytes() -> http::Result<()> {
+        let request = Request::get("/") //
+            .body(Bytes::new())
+            .build_request()?;
+        assert_eq!(request.method(), Method::GET);
+        assert_eq!(request.uri().path(), "/");
+        assert!(!request.headers().contains_key("content-type"));
+        Ok(())
+    }
+
+    #[test]
+    fn input_request_str() -> http::Result<()> {
+        let request = Request::get("/") //
+            .body("hello, izanami")
+            .build_request()?;
+        assert_eq!(request.method(), Method::GET);
+        assert_eq!(request.uri().path(), "/");
+        assert_eq!(
+            request.headers().get("content-type").map(|h| h.as_bytes()),
+            Some(&b"text/plain; charset=utf-8"[..])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn input_request_str_with_explicit_content_type() -> http::Result<()> {
+        let request = Request::get("/")
+            .header("content-type", "application/json")
+            .body(r#"{"id":0}"#)
+            .build_request()?;
+        assert_eq!(request.method(), Method::GET);
+        assert_eq!(request.uri().path(), "/");
+        assert_eq!(
+            request.headers().get("content-type").map(|h| h.as_bytes()),
+            Some(&b"application/json"[..])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn input_request_slice() -> http::Result<()> {
+        let request = Request::new(&b""[..]).build_request()?;
+        assert_eq!(request.method(), Method::GET);
+        assert_eq!(request.uri().path(), "/");
+        assert!(!request.headers().contains_key("content-type"));
+        Ok(())
     }
 }
