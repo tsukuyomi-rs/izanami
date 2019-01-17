@@ -168,7 +168,7 @@ mod default {
             loop {
                 match self.stream.poll() {
                     Ok(Async::Ready(io_opt)) => {
-                        return Ok(Async::Ready(io_opt.map(|io| self.acceptor.accept(io))))
+                        return Ok(Async::Ready(io_opt.map(|io| self.acceptor.accept(io))));
                     }
                     Ok(Async::NotReady) => return Ok(Async::NotReady),
                     Err(err) => {
