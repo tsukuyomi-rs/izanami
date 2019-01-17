@@ -66,6 +66,15 @@ enum Inner {
     OnUpgrade { upgraded: bool },
 }
 
+impl MockRequestBody {
+    fn new(data: impl Into<Bytes>) -> Self {
+        Self {
+            inner: Inner::Sized(Some(data.into())),
+            _anchor: PhantomData,
+        }
+    }
+}
+
 impl BufStream for MockRequestBody {
     type Item = io::Cursor<Bytes>;
     type Error = io::Error;
@@ -172,10 +181,7 @@ mod imp {
 
     impl<'a> InputImpl for &'a mut http::request::Builder {
         fn build_request(self) -> http::Result<Request<MockRequestBody>> {
-            self.body(MockRequestBody {
-                inner: Inner::Sized(Some(Bytes::new())),
-                _anchor: PhantomData,
-            })
+            self.body(MockRequestBody::new(Bytes::new()))
         }
     }
 
@@ -183,10 +189,7 @@ mod imp {
 
     impl InputImpl for Request<()> {
         fn build_request(self) -> http::Result<Request<MockRequestBody>> {
-            Ok(self.map(|_| MockRequestBody {
-                inner: Inner::Sized(Some(Bytes::new())),
-                _anchor: PhantomData,
-            }))
+            Ok(self.map(|_| MockRequestBody::new(Bytes::new())))
         }
     }
 
@@ -205,10 +208,7 @@ mod imp {
             self.headers_mut()
                 .entry(http::header::CONTENT_TYPE)?
                 .or_insert_with(|| HeaderValue::from_static("text/plain; charset=utf-8"));
-            Ok(self.map(|body| MockRequestBody {
-                inner: Inner::Sized(Some(body.into())),
-                _anchor: PhantomData,
-            }))
+            Ok(self.map(MockRequestBody::new))
         }
     }
 
@@ -224,10 +224,7 @@ mod imp {
 
     impl InputImpl for Request<Vec<u8>> {
         fn build_request(self) -> http::Result<Request<MockRequestBody>> {
-            Ok(self.map(|body| MockRequestBody {
-                inner: Inner::Sized(Some(body.into())),
-                _anchor: PhantomData,
-            }))
+            Ok(self.map(MockRequestBody::new))
         }
     }
 
@@ -235,10 +232,7 @@ mod imp {
 
     impl InputImpl for Request<Bytes> {
         fn build_request(self) -> http::Result<Request<MockRequestBody>> {
-            Ok(self.map(|body| MockRequestBody {
-                inner: Inner::Sized(Some(body)),
-                _anchor: PhantomData,
-            }))
+            Ok(self.map(MockRequestBody::new))
         }
     }
 
@@ -247,10 +241,7 @@ mod imp {
     impl<'a> InputImpl for &'a str {
         fn build_request(self) -> http::Result<Request<MockRequestBody>> {
             Request::get(self) //
-                .body(MockRequestBody {
-                    inner: Inner::Sized(Some(self.into())),
-                    _anchor: PhantomData,
-                })
+                .body(MockRequestBody::new(Bytes::new()))
         }
     }
 
