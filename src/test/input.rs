@@ -194,10 +194,9 @@ mod imp {
 
     impl<'a> InputImpl for Request<&'a str> {
         fn build_request(mut self) -> http::Result<Request<MockRequestBody>> {
-            self.headers_mut().insert(
-                http::header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; charset=utf-8"),
-            );
+            self.headers_mut()
+                .entry(http::header::CONTENT_TYPE)?
+                .or_insert_with(|| HeaderValue::from_static("text/plain; charset=utf-8"));
             Ok(self.map(|body| MockRequestBody {
                 inner: Inner::Sized(Some(body.into())),
                 _anchor: PhantomData,
@@ -209,10 +208,9 @@ mod imp {
 
     impl InputImpl for Request<String> {
         fn build_request(mut self) -> http::Result<Request<MockRequestBody>> {
-            self.headers_mut().insert(
-                http::header::CONTENT_TYPE,
-                HeaderValue::from_static("text/plain; charset=utf-8"),
-            );
+            self.headers_mut()
+                .entry(http::header::CONTENT_TYPE)?
+                .or_insert_with(|| HeaderValue::from_static("text/plain; charset=utf-8"));
             Ok(self.map(|body| MockRequestBody {
                 inner: Inner::Sized(Some(body.into())),
                 _anchor: PhantomData,
