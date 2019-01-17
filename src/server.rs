@@ -5,10 +5,10 @@ pub mod conn;
 use {
     self::conn::{Acceptor, DefaultTransport, Transport},
     crate::CritError,
-    futures::{Future, Poll, Stream},
+    futures::{Future, Poll},
     http::{HeaderMap, Request, Response},
     hyper::{body::Payload as _Payload, server::conn::Http},
-    izanami_service::{MakeServiceRef, Service},
+    izanami_service::{MakeService, Service},
     izanami_util::{
         buf_stream::{BufStream, SizeHint},
         http::{HasTrailers, Upgrade},
@@ -20,10 +20,7 @@ use {
         net::SocketAddr,
         time::Duration,
     },
-    tokio::{
-        io::{AsyncRead, AsyncWrite},
-        net::TcpListener,
-    },
+    tokio::net::TcpListener,
 };
 
 #[cfg(unix)]
@@ -96,6 +93,37 @@ impl Upgrade for RequestBody {
                 Inner::OnUpgrade(on_upgrade) => return on_upgrade.poll(),
             };
         }
+    }
+}
+
+// ==== MakeServiceContext ====
+
+/// A type representing the context information that can be used from the inside
+/// of `MakeService::make_service`.
+#[derive(Debug)]
+pub struct MakeServiceContext<'a, T: Transport> {
+    conn: &'a T::Conn,
+    _anchor: PhantomData<std::rc::Rc<()>>,
+}
+
+impl<'a, T> MakeServiceContext<'a, T>
+where
+    T: Transport,
+{
+    /// Returns a reference to the instance of a connection to a peer.
+    pub fn conn(&self) -> &T::Conn {
+        &*self.conn
+    }
+}
+
+impl<'a, T> std::ops::Deref for MakeServiceContext<'a, T>
+where
+    T: Transport,
+{
+    type Target = T::Conn;
+
+    fn deref(&self) -> &Self::Target {
+        self.conn()
     }
 }
 
@@ -173,8 +201,8 @@ where
     /// Starts an HTTP server using the specific `MakeService`.
     pub fn start<S>(self, make_service: S) -> crate::Result<()>
     where
-        S: MakeServiceRef<T::Conn, Request<RequestBody>>,
-        B: Backend<T::Incoming, S>,
+        S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
+        B: Backend<T, S>,
     {
         B::start(self.protocol, self.transport.incoming(), make_service)
     }
@@ -229,114 +257,167 @@ pub struct Threadpool(Never);
 pub struct CurrentThread(Never);
 
 /// A trait for abstracting the process around executing the HTTP server.
-pub trait Backend<I, S>: self::imp::BackendImpl<I, S> {}
+pub trait Backend<T, S>: self::imp::BackendImpl<T, S>
+where
+    T: Transport,
+    S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
+{
+}
 
 mod imp {
     use super::*;
 
-    pub trait BackendImpl<I, S> {
-        fn start(protocol: Http, incoming: I, make_service: S) -> crate::Result<()>;
+    pub trait BackendImpl<T, S>
+    where
+        T: Transport,
+        S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
+    {
+        fn start(
+            protocol: Http, //
+            incoming: T::Incoming,
+            make_service: S,
+        ) -> crate::Result<()>;
     }
 
-    impl<I, S, Bd> Backend<I, S> for Threadpool
+    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> Backend<T, S> for Threadpool
     where
-        I: Stream + Send + 'static,
-        I::Item: AsyncRead + AsyncWrite + Send + 'static,
-        I::Error: Into<CritError>,
-        S: MakeServiceRef<
-                I::Item, //
+        T: Transport + 'static,
+        T::Conn: Send + 'static,
+        T::Incoming: Send + 'static,
+        S: for<'a> MakeService<
+                MakeServiceContext<'a, T>, //
                 Request<RequestBody>,
                 Response = Response<Bd>,
+                Error = SvcErr,
+                Service = Svc,
+                MakeError = MkErr,
+                Future = Fut,
             > + Send
             + Sync
             + 'static,
-        S::Error: Into<CritError>,
-        S::MakeError: Into<CritError>,
-        S::Future: Send + 'static,
-        S::Service: Send + 'static,
-        <S::Service as Service<Request<RequestBody>>>::Future: Send + 'static,
+        SvcErr: Into<CritError>,
+        MkErr: Into<CritError>,
+        Fut: Future<Item = Svc, Error = MkErr> + Send + 'static,
+        Svc: Service<
+                Request<RequestBody>, //
+                Response = Response<Bd>,
+                Error = SvcErr,
+            > + Send
+            + 'static,
+        Svc::Future: Send + 'static,
         Bd: BufStream + Send + 'static,
         Bd::Item: Send,
         Bd::Error: Into<CritError>,
     {
     }
 
-    impl<I, S, Bd> BackendImpl<I, S> for Threadpool
+    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> BackendImpl<T, S> for Threadpool
     where
-        I: Stream + Send + 'static,
-        I::Item: AsyncRead + AsyncWrite + Send + 'static,
-        I::Error: Into<CritError>,
-        S: MakeServiceRef<
-                I::Item, //
+        T: Transport + 'static,
+        T::Conn: Send + 'static,
+        T::Incoming: Send + 'static,
+        S: for<'a> MakeService<
+                MakeServiceContext<'a, T>, //
                 Request<RequestBody>,
                 Response = Response<Bd>,
+                Error = SvcErr,
+                Service = Svc,
+                MakeError = MkErr,
+                Future = Fut,
             > + Send
             + Sync
             + 'static,
-        S::Error: Into<CritError>,
-        S::MakeError: Into<CritError>,
-        S::Future: Send + 'static,
-        S::Service: Send + 'static,
-        <S::Service as Service<Request<RequestBody>>>::Future: Send + 'static,
+        SvcErr: Into<CritError>,
+        MkErr: Into<CritError>,
+        Fut: Future<Item = Svc, Error = MkErr> + Send + 'static,
+        Svc: Service<
+                Request<RequestBody>, //
+                Response = Response<Bd>,
+                Error = SvcErr,
+            > + Send
+            + 'static,
+        Svc::Future: Send + 'static,
         Bd: BufStream + Send + 'static,
         Bd::Item: Send,
         Bd::Error: Into<CritError>,
     {
-        fn start(protocol: Http, incoming: I, make_service: S) -> crate::Result<()> {
+        fn start(protocol: Http, incoming: T::Incoming, make_service: S) -> crate::Result<()> {
             let protocol = protocol.with_executor(tokio::executor::DefaultExecutor::current());
             let serve = hyper::server::Builder::new(incoming, protocol) //
-                .serve(LiftedMakeHttpService { make_service })
+                .serve(LiftedMakeHttpService {
+                    make_service,
+                    _marker: PhantomData,
+                })
                 .map_err(|e| log::error!("server error: {}", e));
             tokio::run(serve);
             Ok(())
         }
     }
 
-    impl<I, S, Bd> Backend<I, S> for CurrentThread
+    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> Backend<T, S> for CurrentThread
     where
-        I: Stream + 'static,
-        I::Item: AsyncRead + AsyncWrite + Send + 'static,
-        I::Error: Into<CritError>,
-        S: MakeServiceRef<
-                I::Item, //
+        T: Transport + 'static,
+        T::Conn: Send + 'static,
+        T::Incoming: 'static,
+        S: for<'a> MakeService<
+                MakeServiceContext<'a, T>, //
                 Request<RequestBody>,
                 Response = Response<Bd>,
+                Error = SvcErr,
+                Service = Svc,
+                MakeError = MkErr,
+                Future = Fut,
             > + 'static,
-        S::Error: Into<CritError>,
-        S::MakeError: Into<CritError>,
-        S::Future: 'static,
-        S::Service: 'static,
-        <S::Service as Service<Request<RequestBody>>>::Future: 'static,
+        SvcErr: Into<CritError>,
+        MkErr: Into<CritError>,
+        Svc: Service<
+                Request<RequestBody>, //
+                Response = Response<Bd>,
+                Error = SvcErr,
+            > + 'static,
+        Svc::Future: 'static,
+        Fut: Future<Item = Svc, Error = MkErr> + 'static,
         Bd: BufStream + Send + 'static,
         Bd::Item: Send,
         Bd::Error: Into<CritError>,
     {
     }
 
-    impl<I, S, Bd> BackendImpl<I, S> for CurrentThread
+    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> BackendImpl<T, S> for CurrentThread
     where
-        I: Stream + 'static,
-        I::Item: AsyncRead + AsyncWrite + Send + 'static,
-        I::Error: Into<CritError>,
-        S: MakeServiceRef<
-                I::Item, //
+        T: Transport + 'static,
+        T::Conn: Send + 'static,
+        T::Incoming: 'static,
+        S: for<'a> MakeService<
+                MakeServiceContext<'a, T>, //
                 Request<RequestBody>,
                 Response = Response<Bd>,
+                Error = SvcErr,
+                Service = Svc,
+                MakeError = MkErr,
+                Future = Fut,
             > + 'static,
-        S::Error: Into<CritError>,
-        S::MakeError: Into<CritError>,
-        S::Future: 'static,
-        S::Service: 'static,
-        <S::Service as Service<Request<RequestBody>>>::Future: 'static,
+        SvcErr: Into<CritError>,
+        MkErr: Into<CritError>,
+        Svc: Service<
+                Request<RequestBody>, //
+                Response = Response<Bd>,
+                Error = SvcErr,
+            > + 'static,
+        Svc::Future: 'static,
+        Fut: Future<Item = Svc, Error = MkErr> + 'static,
         Bd: BufStream + Send + 'static,
         Bd::Item: Send,
         Bd::Error: Into<CritError>,
     {
-        fn start(protocol: Http, incoming: I, make_service: S) -> crate::Result<()> {
+        fn start(protocol: Http, incoming: T::Incoming, make_service: S) -> crate::Result<()> {
             let protocol =
                 protocol.with_executor(tokio::runtime::current_thread::TaskExecutor::current());
             let serve = hyper::server::Builder::new(incoming, protocol) //
-                .serve(LiftedMakeHttpService { make_service })
+                .serve(LiftedMakeHttpService {
+                    make_service,
+                    _marker: PhantomData,
+                })
                 .map_err(|e| log::error!("server error: {}", e));
 
             tokio::runtime::current_thread::run(serve);
@@ -345,14 +426,20 @@ mod imp {
     }
 
     #[allow(missing_debug_implementations)]
-    struct LiftedMakeHttpService<S> {
+    struct LiftedMakeHttpService<T, S> {
         make_service: S,
+        _marker: PhantomData<fn(&T)>,
     }
 
     #[allow(clippy::type_complexity)]
-    impl<'a, S, Ctx, Bd> hyper::service::MakeService<&'a Ctx> for LiftedMakeHttpService<S>
+    impl<'a, T, S, Bd> hyper::service::MakeService<&'a T::Conn> for LiftedMakeHttpService<T, S>
     where
-        S: MakeServiceRef<Ctx, Request<RequestBody>, Response = Response<Bd>>,
+        T: Transport,
+        S: MakeService<
+            MakeServiceContext<'a, T>, //
+            Request<RequestBody>,
+            Response = Response<Bd>,
+        >,
         S::Error: Into<CritError>,
         S::MakeError: Into<CritError>,
         Bd: BufStream + Send + 'static,
@@ -366,9 +453,12 @@ mod imp {
         type MakeError = S::MakeError;
         type Future = futures::future::Map<S::Future, fn(S::Service) -> Self::Service>;
 
-        fn make_service(&mut self, ctx: &'a Ctx) -> Self::Future {
+        fn make_service(&mut self, conn: &'a T::Conn) -> Self::Future {
             self.make_service
-                .make_service_ref(ctx)
+                .make_service(MakeServiceContext {
+                    conn,
+                    _anchor: PhantomData,
+                })
                 .map(|service| LiftedHttpService { service })
         }
     }
