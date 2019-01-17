@@ -1,10 +1,7 @@
 use {
     bytes::Bytes,
     futures::{Async, Poll},
-    http::{
-        header::{HeaderMap, HeaderValue},
-        Request,
-    },
+    http::{header::HeaderMap, Request},
     izanami_util::{
         buf_stream::{BufStream, SizeHint},
         http::{HasTrailers, Upgrade},
@@ -197,17 +194,14 @@ mod imp {
 
     impl<'a> InputImpl for Request<&'a str> {
         fn build_request(self) -> http::Result<Request<MockRequestBody>> {
-            self.map(|body| body.to_owned()).build_request()
+            Ok(self.map(MockRequestBody::new))
         }
     }
 
     impl Input for Request<String> {}
 
     impl InputImpl for Request<String> {
-        fn build_request(mut self) -> http::Result<Request<MockRequestBody>> {
-            self.headers_mut()
-                .entry(http::header::CONTENT_TYPE)?
-                .or_insert_with(|| HeaderValue::from_static("text/plain; charset=utf-8"));
+        fn build_request(self) -> http::Result<Request<MockRequestBody>> {
             Ok(self.map(MockRequestBody::new))
         }
     }
@@ -216,7 +210,7 @@ mod imp {
 
     impl<'a> InputImpl for Request<&'a [u8]> {
         fn build_request(self) -> http::Result<Request<MockRequestBody>> {
-            self.map(|body| body.to_owned()).build_request()
+            Ok(self.map(MockRequestBody::new))
         }
     }
 
@@ -288,25 +282,7 @@ mod test {
             .build_request()?;
         assert_eq!(request.method(), Method::GET);
         assert_eq!(request.uri().path(), "/");
-        assert_eq!(
-            request.headers().get("content-type").map(|h| h.as_bytes()),
-            Some(&b"text/plain; charset=utf-8"[..])
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn input_request_str_with_explicit_content_type() -> http::Result<()> {
-        let request = Request::get("/")
-            .header("content-type", "application/json")
-            .body(r#"{"id":0}"#)
-            .build_request()?;
-        assert_eq!(request.method(), Method::GET);
-        assert_eq!(request.uri().path(), "/");
-        assert_eq!(
-            request.headers().get("content-type").map(|h| h.as_bytes()),
-            Some(&b"application/json"[..])
-        );
+        assert!(!request.headers().contains_key("content-type"));
         Ok(())
     }
 
