@@ -2,7 +2,7 @@
 
 use {
     futures::{Async, Poll, Stream},
-    std::{io, time::Duration},
+    std::{io, net::SocketAddr, time::Duration},
     tokio::{
         io::{AsyncRead, AsyncWrite},
         timer::Delay,
@@ -19,6 +19,12 @@ pub trait Transport {
 
     /// Consume itself and creates an incoming `Stream` of asynchronous I/Os.
     fn incoming(self) -> Self::Incoming;
+
+    #[doc(hidden)]
+    #[allow(unused_variables)]
+    fn remote_addr(conn: &Self::Conn) -> Option<SocketAddr> {
+        None
+    }
 }
 
 impl Transport for hyper::server::conn::AddrIncoming {
@@ -28,6 +34,11 @@ impl Transport for hyper::server::conn::AddrIncoming {
     #[inline]
     fn incoming(self) -> Self::Incoming {
         self
+    }
+
+    #[inline]
+    fn remote_addr(conn: &Self::Conn) -> Option<SocketAddr> {
+        Some(conn.remote_addr())
     }
 }
 
@@ -117,6 +128,70 @@ where
     }
 }
 
+/// An asynchronous I/O that will hold the peer's address.
+#[derive(Debug)]
+pub struct AddrStream<T> {
+    io: T,
+    remote_addr: Option<SocketAddr>,
+}
+
+impl<T> AddrStream<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
+    pub fn get_ref(&self) -> &T {
+        &self.io
+    }
+
+    pub fn get_mut(&mut self) -> &mut T {
+        &mut self.io
+    }
+
+    pub fn remote_addr(&self) -> Option<SocketAddr> {
+        self.remote_addr
+    }
+}
+
+impl<T> io::Read for AddrStream<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
+    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+        self.io.read(dst)
+    }
+}
+
+impl<T> io::Write for AddrStream<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
+    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
+        self.io.write(src)
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        self.io.flush()
+    }
+}
+
+impl<T> AsyncRead for AddrStream<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
+    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [u8]) -> bool {
+        self.io.prepare_uninitialized_buffer(buf)
+    }
+}
+
+impl<T> AsyncWrite for AddrStream<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
+    fn shutdown(&mut self) -> Poll<(), io::Error> {
+        self.io.shutdown()
+    }
+}
+
 mod default {
     use {super::*, futures::Future};
 
@@ -125,33 +200,37 @@ mod default {
         T: Transport,
         A: Acceptor<T::Conn>,
     {
-        type Conn = A::Accepted;
-        type Incoming = Incoming<T::Incoming, A>;
+        type Conn = AddrStream<A::Accepted>;
+        type Incoming = Incoming<T, A>;
 
         fn incoming(self) -> Self::Incoming {
             Incoming {
-                stream: self.transport.incoming(),
+                incoming: self.transport.incoming(),
                 acceptor: self.acceptor,
                 sleep_on_errors: self.sleep_on_errors,
                 timeout: None,
             }
         }
+
+        fn remote_addr(conn: &Self::Conn) -> Option<SocketAddr> {
+            conn.remote_addr
+        }
     }
 
     #[derive(Debug)]
-    pub struct Incoming<S, A> {
-        stream: S,
+    pub struct Incoming<T: Transport, A> {
+        incoming: T::Incoming,
         acceptor: A,
         sleep_on_errors: Option<Duration>,
         timeout: Option<Delay>,
     }
 
-    impl<S, A> Stream for Incoming<S, A>
+    impl<T, A> Stream for Incoming<T, A>
     where
-        S: Stream<Error = io::Error>,
-        A: Acceptor<S::Item>,
+        T: Transport,
+        A: Acceptor<T::Conn>,
     {
-        type Item = A::Accepted;
+        type Item = AddrStream<A::Accepted>;
         type Error = io::Error;
 
         #[inline]
@@ -166,9 +245,15 @@ mod default {
             self.timeout = None;
 
             loop {
-                match self.stream.poll() {
+                match self.incoming.poll() {
                     Ok(Async::Ready(io_opt)) => {
-                        return Ok(Async::Ready(io_opt.map(|io| self.acceptor.accept(io))));
+                        return Ok(Async::Ready(io_opt.map(|io| {
+                            let remote_addr = T::remote_addr(&io);
+                            AddrStream {
+                                io: self.acceptor.accept(io),
+                                remote_addr,
+                            }
+                        })));
                     }
                     Ok(Async::NotReady) => return Ok(Async::NotReady),
                     Err(err) => {
@@ -210,7 +295,7 @@ mod default {
 
 mod tcp {
     use {
-        super::Transport,
+        super::*,
         tokio::net::{tcp::Incoming, TcpListener, TcpStream},
     };
 
@@ -221,6 +306,11 @@ mod tcp {
         #[inline]
         fn incoming(self) -> Self::Incoming {
             self.incoming()
+        }
+
+        #[inline]
+        fn remote_addr(conn: &Self::Conn) -> Option<SocketAddr> {
+            conn.peer_addr().ok()
         }
     }
 }

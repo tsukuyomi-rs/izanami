@@ -96,6 +96,29 @@ impl Upgrade for RequestBody {
     }
 }
 
+// ==== RemoteAddr ====
+
+/// A type representing the address of the peer.
+///
+/// The value of this type is typically contained into the extension map
+/// of `Request` before calling the service.
+#[derive(Debug, Copy, Clone)]
+pub struct RemoteAddr(SocketAddr);
+
+impl AsRef<SocketAddr> for RemoteAddr {
+    fn as_ref(&self) -> &SocketAddr {
+        &self.0
+    }
+}
+
+impl std::ops::Deref for RemoteAddr {
+    type Target = SocketAddr;
+
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
 // ==== MakeServiceContext ====
 
 /// A type representing the context information that can be used from the inside
@@ -451,21 +474,47 @@ mod imp {
         type Error = S::Error;
         type Service = LiftedHttpService<S::Service>;
         type MakeError = S::MakeError;
-        type Future = futures::future::Map<S::Future, fn(S::Service) -> Self::Service>;
+        type Future = LiftedMakeHttpServiceFuture<S::Future>;
 
         fn make_service(&mut self, conn: &'a T::Conn) -> Self::Future {
-            self.make_service
-                .make_service(MakeServiceContext {
+            let remote_addr = T::remote_addr(conn);
+            LiftedMakeHttpServiceFuture {
+                inner: self.make_service.make_service(MakeServiceContext {
                     conn,
                     _anchor: PhantomData,
-                })
-                .map(|service| LiftedHttpService { service })
+                }),
+                remote_addr,
+            }
+        }
+    }
+
+    #[allow(missing_debug_implementations)]
+    struct LiftedMakeHttpServiceFuture<Fut> {
+        inner: Fut,
+        remote_addr: Option<SocketAddr>,
+    }
+
+    impl<Fut> Future for LiftedMakeHttpServiceFuture<Fut>
+    where
+        Fut: Future,
+    {
+        type Item = LiftedHttpService<Fut::Item>;
+        type Error = Fut::Error;
+
+        #[inline]
+        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+            Ok(LiftedHttpService {
+                service: futures::try_ready!(self.inner.poll()),
+                remote_addr: self.remote_addr,
+            }
+            .into())
         }
     }
 
     #[allow(missing_debug_implementations)]
     struct LiftedHttpService<S> {
         service: S,
+        remote_addr: Option<SocketAddr>,
     }
 
     impl<S, Bd> hyper::service::Service for LiftedHttpService<S>
@@ -483,8 +532,13 @@ mod imp {
 
         #[inline]
         fn call(&mut self, request: Request<hyper::Body>) -> Self::Future {
+            let mut request = request.map(RequestBody::from_hyp);
+            if let Some(remote_addr) = self.remote_addr {
+                request.extensions_mut().insert(RemoteAddr(remote_addr));
+            }
+
             LiftedHttpServiceFuture {
-                inner: self.service.call(request.map(RequestBody::from_hyp)),
+                inner: self.service.call(request),
             }
         }
     }
