@@ -1,6 +1,9 @@
 //! A lightweight implementation of HTTP server based on Hyper.
 
 pub mod conn;
+mod remote;
+
+pub use remote::RemoteAddr;
 
 use {
     self::conn::{Acceptor, DefaultTransport, Transport},
@@ -93,29 +96,6 @@ impl Upgrade for RequestBody {
                 Inner::OnUpgrade(on_upgrade) => return on_upgrade.poll(),
             };
         }
-    }
-}
-
-// ==== RemoteAddr ====
-
-/// A type representing the address of the peer.
-///
-/// The value of this type is typically contained into the extension map
-/// of `Request` before calling the service.
-#[derive(Debug, Copy, Clone)]
-pub struct RemoteAddr(SocketAddr);
-
-impl AsRef<SocketAddr> for RemoteAddr {
-    fn as_ref(&self) -> &SocketAddr {
-        &self.0
-    }
-}
-
-impl std::ops::Deref for RemoteAddr {
-    type Target = SocketAddr;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
     }
 }
 
@@ -483,7 +463,7 @@ mod imp {
                     conn,
                     _anchor: PhantomData,
                 }),
-                remote_addr,
+                remote_addr: Some(remote_addr),
             }
         }
     }
@@ -491,7 +471,7 @@ mod imp {
     #[allow(missing_debug_implementations)]
     struct LiftedMakeHttpServiceFuture<Fut> {
         inner: Fut,
-        remote_addr: Option<SocketAddr>,
+        remote_addr: Option<RemoteAddr>,
     }
 
     impl<Fut> Future for LiftedMakeHttpServiceFuture<Fut>
@@ -505,7 +485,10 @@ mod imp {
         fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
             Ok(LiftedHttpService {
                 service: futures::try_ready!(self.inner.poll()),
-                remote_addr: self.remote_addr,
+                remote_addr: self
+                    .remote_addr
+                    .take()
+                    .expect("the future has already been polled."),
             }
             .into())
         }
@@ -514,7 +497,7 @@ mod imp {
     #[allow(missing_debug_implementations)]
     struct LiftedHttpService<S> {
         service: S,
-        remote_addr: Option<SocketAddr>,
+        remote_addr: RemoteAddr,
     }
 
     impl<S, Bd> hyper::service::Service for LiftedHttpService<S>
@@ -533,9 +516,7 @@ mod imp {
         #[inline]
         fn call(&mut self, request: Request<hyper::Body>) -> Self::Future {
             let mut request = request.map(RequestBody::from_hyp);
-            if let Some(remote_addr) = self.remote_addr {
-                request.extensions_mut().insert(RemoteAddr(remote_addr));
-            }
+            request.extensions_mut().insert(self.remote_addr.clone());
 
             LiftedHttpServiceFuture {
                 inner: self.service.call(request),

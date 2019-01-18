@@ -1,8 +1,9 @@
 //! Abstraction around low-level I/O.
 
 use {
+    super::RemoteAddr,
     futures::{Async, Poll, Stream},
-    std::{io, net::SocketAddr, time::Duration},
+    std::{io, time::Duration},
     tokio::{
         io::{AsyncRead, AsyncWrite},
         timer::Delay,
@@ -20,10 +21,10 @@ pub trait Transport {
     /// Consume itself and creates an incoming `Stream` of asynchronous I/Os.
     fn incoming(self) -> Self::Incoming;
 
-    #[doc(hidden)]
+    /// Retrieve the value of remote address from the provided connection.
     #[allow(unused_variables)]
-    fn remote_addr(conn: &Self::Conn) -> Option<SocketAddr> {
-        None
+    fn remote_addr(conn: &Self::Conn) -> RemoteAddr {
+        RemoteAddr::unknown()
     }
 }
 
@@ -37,8 +38,8 @@ impl Transport for hyper::server::conn::AddrIncoming {
     }
 
     #[inline]
-    fn remote_addr(conn: &Self::Conn) -> Option<SocketAddr> {
-        Some(conn.remote_addr())
+    fn remote_addr(conn: &Self::Conn) -> RemoteAddr {
+        conn.remote_addr().into()
     }
 }
 
@@ -132,7 +133,7 @@ where
 #[derive(Debug)]
 pub struct AddrStream<T> {
     io: T,
-    remote_addr: Option<SocketAddr>,
+    remote_addr: RemoteAddr,
 }
 
 impl<T> AddrStream<T>
@@ -147,8 +148,8 @@ where
         &mut self.io
     }
 
-    pub fn remote_addr(&self) -> Option<SocketAddr> {
-        self.remote_addr
+    pub fn remote_addr(&self) -> &RemoteAddr {
+        &self.remote_addr
     }
 }
 
@@ -212,8 +213,8 @@ mod default {
             }
         }
 
-        fn remote_addr(conn: &Self::Conn) -> Option<SocketAddr> {
-            conn.remote_addr
+        fn remote_addr(conn: &Self::Conn) -> RemoteAddr {
+            conn.remote_addr().clone()
         }
     }
 
@@ -296,21 +297,41 @@ mod default {
 mod tcp {
     use {
         super::*,
-        tokio::net::{tcp::Incoming, TcpListener, TcpStream},
+        tokio::net::{TcpListener, TcpStream},
     };
 
     impl Transport for TcpListener {
-        type Conn = TcpStream;
+        type Conn = AddrStream<TcpStream>;
         type Incoming = Incoming;
 
         #[inline]
         fn incoming(self) -> Self::Incoming {
-            self.incoming()
+            Incoming { listener: self }
         }
 
         #[inline]
-        fn remote_addr(conn: &Self::Conn) -> Option<SocketAddr> {
-            conn.peer_addr().ok()
+        fn remote_addr(conn: &Self::Conn) -> RemoteAddr {
+            conn.remote_addr.clone()
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Incoming {
+        listener: TcpListener,
+    }
+
+    impl Stream for Incoming {
+        type Item = AddrStream<TcpStream>;
+        type Error = io::Error;
+
+        #[inline]
+        fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+            let (io, addr) = futures::try_ready!(self.listener.poll_accept());
+            Ok(Some(AddrStream {
+                io,
+                remote_addr: addr.into(),
+            })
+            .into())
         }
     }
 }
@@ -318,17 +339,42 @@ mod tcp {
 #[cfg(unix)]
 mod uds {
     use {
-        super::Transport,
-        tokio::net::{unix::Incoming, UnixListener, UnixStream},
+        super::*,
+        tokio::net::{UnixListener, UnixStream},
     };
 
     impl Transport for UnixListener {
-        type Conn = UnixStream;
+        type Conn = AddrStream<UnixStream>;
         type Incoming = Incoming;
 
         #[inline]
         fn incoming(self) -> Self::Incoming {
-            self.incoming()
+            Incoming { listener: self }
+        }
+
+        #[inline]
+        fn remote_addr(conn: &Self::Conn) -> RemoteAddr {
+            conn.remote_addr.clone()
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Incoming {
+        listener: UnixListener,
+    }
+
+    impl Stream for Incoming {
+        type Item = AddrStream<UnixStream>;
+        type Error = io::Error;
+
+        #[inline]
+        fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+            let (io, addr) = futures::try_ready!(self.listener.poll_accept());
+            Ok(Some(AddrStream {
+                io,
+                remote_addr: addr.into(),
+            })
+            .into())
         }
     }
 }
