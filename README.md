@@ -23,7 +23,7 @@ the Web services.
 
 ## Status
 
-* CI status - [![Build Status](https://travis-ci.org/ubnt-intrepid/izanami.svg?branch=master)](https://travis-ci.org/ubnt-intrepid/izanami)
+* CI status - [![Build Status](https://ubnt-intrepid.visualstudio.com/izanami/_apis/build/status/ubnt-intrepid.izanami?branchName=master)](https://ubnt-intrepid.visualstudio.com/izanami/_build/latest?definitionId=2?branchName=master)
 * Coverage - [![codecov](https://codecov.io/gh/ubnt-intrepid/izanami/branch/master/graph/badge.svg)](https://codecov.io/gh/ubnt-intrepid/izanami)
 * Dependencies - [![dependency status](https://deps.rs/repo/github/ubnt-intrepid/izanami/status.svg)](https://deps.rs/repo/github/ubnt-intrepid/izanami)
 
