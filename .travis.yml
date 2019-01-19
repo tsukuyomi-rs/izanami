@@ -46,6 +46,10 @@ matrix:
         local_dir: target/doc
         on:
           branch: master
-    - rust: 1.31.1
+    - rust: 1.32.0 # mininum supported toolchain
     - rust: beta
     - rust: nightly
+    - rust: stable
+      os: osx
+    - rust: stable
+      os: windows
