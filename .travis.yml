@@ -13,10 +13,14 @@ addons:
       - libiberty-dev
       - libssl-dev
       - g++
+git:
+  submodule: false
 
 branches:
   only:
     - master
+
+before_install: .ci/sync-local-registry.sh
 
 script: .ci/run-test.sh
 
