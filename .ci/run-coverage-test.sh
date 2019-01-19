@@ -1,12 +1,9 @@
 #!/bin/bash
 
-set -e
-
-rm -f .codecov
-curl -s https://codecov.io/bash -O .codecov
+set -ex
 
 cargo tarpaulin --all
-bash .codecov
+bash <(https://codecov.io/bash)
 
 cargo tarpaulin --package izanami --all-features
-bash .codecov
+bash <(https://codecov.io/bash)
