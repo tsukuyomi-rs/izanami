@@ -30,8 +30,8 @@ matrix:
   fast_finish: true
   include:      
     - rust: stable
-      before_script:
-        - rustup component add rustfmt clippy
+      script:
+        echo "disabled"
       after_success:
         - rm -f ./install_kcov.sh
         - wget https://raw.githubusercontent.com/kennytm/cargo-kcov/master/src/install_kcov.sh
@@ -50,10 +50,3 @@ matrix:
         local_dir: target/doc
         on:
           branch: master
-    - rust: 1.32.0 # mininum supported toolchain
-    - rust: beta
-    - rust: nightly
-    - rust: stable
-      os: osx
-    - rust: stable
-      os: windows
