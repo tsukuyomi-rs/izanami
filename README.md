@@ -1,7 +1,7 @@
 # `izanami`
 
 [![crates.io](https://img.shields.io/crates/v/izanami.svg)](https://crates.io/crates/izanami)
-[![rust toolchain](https://img.shields.io/badge/rust%20toolchain-1.32.0%2B-yellowgreen.svg)](https://blog.rust-lang.org/2019/01/17/Rust-1.32.0.html)
+[![rust toolchain](https://img.shields.io/badge/rust%20toolchain-1.31.1%2B-yellowgreen.svg)](https://blog.rust-lang.org/2018/12/20/Rust-1.31.1.html)
 
 > This library is in the experimental stage, and it cannot be used for production use.
 
@@ -23,7 +23,7 @@ the Web services.
 
 ## Status
 
-* CI status - [![Build Status](https://travis-ci.org/ubnt-intrepid/izanami.svg?branch=master)](https://travis-ci.org/ubnt-intrepid/izanami)
+* CI status - [![Build Status](https://ubnt-intrepid.visualstudio.com/izanami/_apis/build/status/ubnt-intrepid.izanami?branchName=master)](https://ubnt-intrepid.visualstudio.com/izanami/_build/latest?definitionId=2?branchName=master)
 * Coverage - [![codecov](https://codecov.io/gh/ubnt-intrepid/izanami/branch/master/graph/badge.svg)](https://codecov.io/gh/ubnt-intrepid/izanami)
 * Dependencies - [![dependency status](https://deps.rs/repo/github/ubnt-intrepid/izanami/status.svg)](https://deps.rs/repo/github/ubnt-intrepid/izanami)
 

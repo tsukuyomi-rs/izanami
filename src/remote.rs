@@ -5,34 +5,10 @@ mod unix {
     pub(super) use std::os::unix::net::SocketAddr;
 }
 
-#[cfg(not(unix))]
-mod unix {
-    use std::fmt;
-
-    pub enum SocketAddr {}
-
-    impl Clone for SocketAddr {
-        fn clone(&self) -> Self {
-            match *self {}
-        }
-    }
-
-    impl fmt::Debug for SocketAddr {
-        fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match *self {}
-        }
-    }
-
-    impl fmt::Display for SocketAddr {
-        fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match *self {}
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 enum RemoteAddrKind {
     Tcp(SocketAddr),
+    #[cfg(unix)]
     Unix(unix::SocketAddr),
     Unknown,
 }
@@ -42,13 +18,17 @@ enum RemoteAddrKind {
 /// The value of this type is typically contained into the extension map
 /// of `Request` before calling the service.
 #[derive(Debug, Clone)]
-pub struct RemoteAddr(RemoteAddrKind);
+pub struct RemoteAddr {
+    kind: RemoteAddrKind,
+}
 
 impl RemoteAddr {
     /// Create a `RemoteAddr` indicating that the remote address cannot be acquired.
     #[inline]
     pub fn unknown() -> Self {
-        Self(RemoteAddrKind::Unknown)
+        Self {
+            kind: RemoteAddrKind::Unknown,
+        }
     }
 
     /// Create a `RemoteAddr` from the specified value of [`SocketAddr`].
@@ -56,7 +36,9 @@ impl RemoteAddr {
     /// [`SocketAddr`]: https://doc.rust-lang.org/std/net/enum.SocketAddr.html
     #[inline]
     pub fn tcp(addr: SocketAddr) -> Self {
-        Self(RemoteAddrKind::Tcp(addr))
+        Self {
+            kind: RemoteAddrKind::Tcp(addr),
+        }
     }
 
     /// Create a `RemoteAddr` from the specified value of [`SocketAddr`].
@@ -67,13 +49,15 @@ impl RemoteAddr {
     #[cfg(unix)]
     #[inline]
     pub fn unix(addr: unix::SocketAddr) -> Self {
-        Self(RemoteAddrKind::Unix(addr))
+        Self {
+            kind: RemoteAddrKind::Unix(addr),
+        }
     }
 
     /// Returns whether this address is unknown or not.
     #[inline]
     pub fn is_unknown(&self) -> bool {
-        match self.0 {
+        match self.kind {
             RemoteAddrKind::Unknown => true,
             _ => false,
         }
@@ -82,7 +66,7 @@ impl RemoteAddr {
     /// Returns whether this address originates from TCP or not.
     #[inline]
     pub fn is_tcp(&self) -> bool {
-        match self.0 {
+        match self.kind {
             RemoteAddrKind::Tcp(..) => true,
             _ => false,
         }
@@ -94,7 +78,7 @@ impl RemoteAddr {
     #[cfg(unix)]
     #[inline]
     pub fn is_unix(&self) -> bool {
-        match self.0 {
+        match self.kind {
             RemoteAddrKind::Unix(..) => true,
             _ => false,
         }
@@ -105,7 +89,7 @@ impl RemoteAddr {
     /// [`SocketAddr`]: https://doc.rust-lang.org/std/net/enum.SocketAddr.html
     #[inline]
     pub fn as_tcp(&self) -> Option<&SocketAddr> {
-        match &self.0 {
+        match &self.kind {
             RemoteAddrKind::Tcp(addr) => Some(addr),
             _ => None,
         }
@@ -117,7 +101,7 @@ impl RemoteAddr {
     #[cfg(unix)]
     #[inline]
     pub fn as_unix(&self) -> Option<&unix::SocketAddr> {
-        match &self.0 {
+        match &self.kind {
             RemoteAddrKind::Unix(addr) => Some(addr),
             _ => None,
         }
