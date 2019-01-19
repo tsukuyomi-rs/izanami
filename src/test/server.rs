@@ -3,7 +3,7 @@ use {
         input::{Input, MockRequestBody},
         output::Output,
     },
-    crate::CritError,
+    crate::{remote::RemoteAddr, CritError},
     cookie::Cookie,
     http::{
         header::{COOKIE, SET_COOKIE},
@@ -252,6 +252,7 @@ where
 {
     make_service: S,
     cookies: Option<HashMap<String, String>>,
+    remote_addr: RemoteAddr,
     runtime: Rt,
 }
 
@@ -265,6 +266,7 @@ where
         Self {
             make_service,
             cookies: None,
+            remote_addr: RemoteAddr::tcp(([127, 0, 0, 1], 12345).into()),
             runtime,
         }
     }
@@ -297,6 +299,11 @@ where
             .insert(name.to_owned(), value);
     }
 
+    /// Sets the value of remote address associated with this test server.
+    pub fn set_remote_addr(&mut self, addr: impl Into<RemoteAddr>) {
+        self.remote_addr = addr.into();
+    }
+
     /// Create a `Client` associated with this server.
     pub fn client(&mut self) -> crate::Result<Client<'_, S, Rt>> {
         Ok(Client {
@@ -322,6 +329,11 @@ where
 
     fn build_request(&self, input: impl Input) -> crate::Result<Request<MockRequestBody>> {
         let mut request = input.build_request()?;
+
+        if request.extensions().get::<RemoteAddr>().is_none() {
+            request.extensions_mut().insert(self.remote_addr.clone());
+        }
+
         if let Some(cookies) = &self.cookies {
             for (k, v) in cookies {
                 request.headers_mut().append(
@@ -332,6 +344,7 @@ where
                 );
             }
         }
+
         Ok(request)
     }
 

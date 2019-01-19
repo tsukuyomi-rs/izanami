@@ -1,13 +1,10 @@
 //! A lightweight implementation of HTTP server based on Hyper.
 
 pub mod conn;
-mod remote;
-
-pub use remote::RemoteAddr;
 
 use {
     self::conn::{Acceptor, DefaultTransport, Transport},
-    crate::CritError,
+    crate::{remote::RemoteAddr, CritError},
     futures::{Future, Poll},
     http::{HeaderMap, Request, Response},
     hyper::{body::Payload as _Payload, server::conn::Http},

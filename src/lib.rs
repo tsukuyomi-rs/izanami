@@ -11,12 +11,14 @@
 #![forbid(clippy::unimplemented)]
 
 mod error;
+mod remote;
 pub mod server;
 pub mod test;
 
 #[doc(inline)]
 pub use crate::{
     error::{Error, Result},
+    remote::RemoteAddr,
     server::Server,
 };
 
