@@ -2,8 +2,8 @@
 
 set -ex
 
-cargo tarpaulin --all
-bash <(https://codecov.io/bash)
+cargo tarpaulin --all --out Xml
+bash <(curl -s https://codecov.io/bash)
 
-cargo tarpaulin --package izanami --all-features
-bash <(https://codecov.io/bash)
+cargo tarpaulin --packages izanami --all-features --out Xml
+bash <(curl -s https://codecov.io/bash)
