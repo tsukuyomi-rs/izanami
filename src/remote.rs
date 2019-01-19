@@ -5,34 +5,10 @@ mod unix {
     pub(super) use std::os::unix::net::SocketAddr;
 }
 
-#[cfg(not(unix))]
-mod unix {
-    use std::fmt;
-
-    pub enum SocketAddr {}
-
-    impl Clone for SocketAddr {
-        fn clone(&self) -> Self {
-            match *self {}
-        }
-    }
-
-    impl fmt::Debug for SocketAddr {
-        fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match *self {}
-        }
-    }
-
-    impl fmt::Display for SocketAddr {
-        fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
-            match *self {}
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 enum RemoteAddrKind {
     Tcp(SocketAddr),
+    #[cfg(unix)]
     Unix(unix::SocketAddr),
     Unknown,
 }
