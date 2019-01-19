@@ -129,7 +129,7 @@ where
     }
 }
 
-/// An asynchronous I/O that will hold the peer's address.
+/// Wrapper for asynchronouss I/O that holds the peer's address.
 #[derive(Debug)]
 pub struct AddrStream<T> {
     io: T,
@@ -140,14 +140,17 @@ impl<T> AddrStream<T>
 where
     T: AsyncRead + AsyncWrite,
 {
+    /// Returns a reference to the underlying I/O.
     pub fn get_ref(&self) -> &T {
         &self.io
     }
 
+    /// Returns a mutable reference to the underlying I/O.
     pub fn get_mut(&mut self) -> &mut T {
         &mut self.io
     }
 
+    /// Returns a reference to the remote address acquired from the underlying I/O.
     pub fn remote_addr(&self) -> &RemoteAddr {
         &self.remote_addr
     }
@@ -157,6 +160,7 @@ impl<T> io::Read for AddrStream<T>
 where
     T: AsyncRead + AsyncWrite,
 {
+    #[inline]
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         self.io.read(dst)
     }
@@ -166,10 +170,12 @@ impl<T> io::Write for AddrStream<T>
 where
     T: AsyncRead + AsyncWrite,
 {
+    #[inline]
     fn write(&mut self, src: &[u8]) -> io::Result<usize> {
         self.io.write(src)
     }
 
+    #[inline]
     fn flush(&mut self) -> io::Result<()> {
         self.io.flush()
     }
@@ -179,6 +185,7 @@ impl<T> AsyncRead for AddrStream<T>
 where
     T: AsyncRead + AsyncWrite,
 {
+    #[inline]
     unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [u8]) -> bool {
         self.io.prepare_uninitialized_buffer(buf)
     }
@@ -188,6 +195,7 @@ impl<T> AsyncWrite for AddrStream<T>
 where
     T: AsyncRead + AsyncWrite,
 {
+    #[inline]
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         self.io.shutdown()
     }
