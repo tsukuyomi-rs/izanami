@@ -11,12 +11,9 @@ jobs:
   variables:
     CARGO_TERM_VERBOSE: true
     OPENSSL_DIR: C:\OpenSSL
-    OPENSSL_VERSION: 1_1_0j
   steps:
   - script: |
-      mkdir %OPENSSL_DIR%
-      curl -sSfO http://slproweb.com/download/Win64OpenSSL-%OPENSSL_VERSION%.exe
-      Win64OpenSSL-%OPENSSL_VERSION%.exe /SILENT /VERYSILENT /SP- /DIR=%OPENSSL_DIR%
+      choco install openssl.light -y --params /InstallDir:%OPENSSL_DIR%
     displayName: 'install OpenSSL'
 
   - script: |
