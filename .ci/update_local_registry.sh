@@ -2,7 +2,7 @@
 
 set -e
 
-MANIFEST_DIR="$(cd $(dirname $BASH_SOURCE); pwd)"
+MANIFEST_DIR="$(cd $(dirname $BASH_SOURCE)/..; pwd)"
 REGISTRY_INDEX="$(cd "${MANIFEST_DIR}/.registry-index"; pwd)"
 
 cd

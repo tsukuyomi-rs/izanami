@@ -8,6 +8,12 @@ repository = "https://github.com/ubnt-intrepid/izanami.git"
 readme = "README.md"
 description = "A meta library for creating Web frameworks."
 
+include = [
+  "/Cargo.toml",
+  "/src/**/*.rs",
+  "/tests/**/*.rs",
+]
+
 [dependencies]
 izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
 izanami-util = { version = "0.1.0-preview.1", path = "izanami-util" }
