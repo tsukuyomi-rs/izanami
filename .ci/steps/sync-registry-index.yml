@@ -1,0 +1,23 @@
+parameters:
+  artifactName: 'registry-index'
+  targetPath: '.registry-index'
+
+steps:
+- task: DownloadPipelineArtifact@0
+  inputs:
+    artifactName: ${{ parameters.artifactName }}
+    targetPath: ${{ parameters.targetPath }}
+
+- bash: |
+    set -ex
+    cp -f .registry-index/Cargo.lock Cargo.lock
+    mkdir -p .cargo
+    cat << EOF > .cargo/config
+    [source.registry-index]
+    local-registry = '${TARGET_PATH}'
+    [source.crates-io]
+    replace-with = "registry-index"
+    EOF
+  displayName: 'override crates-io to the local registry index'
+  env:
+    TARGET_PATH: ${{ parameters.targetPath }}

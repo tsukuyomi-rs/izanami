@@ -1,0 +1,22 @@
+parameters:
+  artifactName: 'registry-index'
+  targetPath: '.registry-index'
+
+jobs:
+- job: Prepare
+  pool:
+    vmImage: 'ubuntu-16.04'
+  container: cargo-local-registry
+  steps:
+  - bash: |
+      cargo update
+      cargo local-registry --verbose -s Cargo.lock $TARGET_PATH
+      cp -f Cargo.lock $TARGET_PATH/Cargo.lock
+    displayName: create registry index
+    env:
+      TARGET_PATH: ${{ parameters.targetPath }}
+
+  - task: PublishPipelineArtifact@0
+    inputs:
+      artifactName: ${{ parameters.artifactName }}
+      targetPath: ${{ parameters.targetPath }}

@@ -19,4 +19,4 @@ BRANCH="$(git symbolic-ref --short HEAD)"
 }
 
 set -x
-exec "$(git rev-parse --show-toplevel)/.ci/run-test.sh"
+exec "$(git rev-parse --show-toplevel)/.ci/scripts/run-test.sh"

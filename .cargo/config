@@ -1,6 +1,0 @@
-[source.registry-index]
-local-registry = '.registry-index'
-
-# uncomment when using the local registry index
-#[source.crates-io]
-#replace-with = "registry-index"
