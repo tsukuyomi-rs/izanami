@@ -21,6 +21,12 @@ the Web services.
     - [`rustls`](./examples/rustls-server)
 * Utility for testing HTTP services
 
+## Resources
+
+* [API documentation (master)](https://ubnt-intrepid.github.io/izanami)
+* [API documentation (released)](https://docs.rs/izanami)
+* [Examples](./examples)
+
 ## Status
 
 * CI status - [![Build Status](https://ubnt-intrepid.visualstudio.com/izanami/_apis/build/status/ubnt-intrepid.izanami?branchName=master)](https://ubnt-intrepid.visualstudio.com/izanami/_build/latest?definitionId=2?branchName=master)
