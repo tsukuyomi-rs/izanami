@@ -3,7 +3,7 @@
 pub mod conn;
 
 use {
-    self::conn::{Acceptor, DefaultTransport, Transport},
+    self::conn::{Acceptor, DefaultTransport, MakeTransport, Transport},
     crate::{remote::RemoteAddr, CritError},
     futures::{Future, Poll},
     http::{HeaderMap, Request, Response},
@@ -15,16 +15,10 @@ use {
     },
     std::{
         fmt, //
-        io,
         marker::PhantomData,
-        net::SocketAddr,
         time::Duration,
     },
-    tokio::net::TcpListener,
 };
-
-#[cfg(unix)]
-use {std::path::Path, tokio::net::UnixListener};
 
 /// A struct that represents the stream of chunks from client.
 #[derive(Debug)]
@@ -130,10 +124,7 @@ where
 // ==== Server ====
 
 /// A simple HTTP server that wraps the `hyper`'s server implementation.
-pub struct Server<
-    T = DefaultTransport<TcpListener>, //
-    B = Threadpool,
-> {
+pub struct Server<T, B = Threadpool> {
     transport: T,
     protocol: Http,
     _marker: PhantomData<B>,
@@ -141,7 +132,7 @@ pub struct Server<
 
 impl<T, B> fmt::Debug for Server<T, B>
 where
-    T: Transport + fmt::Debug,
+    T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Server")
@@ -151,18 +142,14 @@ where
     }
 }
 
-impl Server {
-    /// Creates an HTTP server using a TCP listener.
-    pub fn bind_tcp(addr: &SocketAddr) -> io::Result<Server<DefaultTransport<TcpListener>>> {
-        let transport = TcpListener::bind(addr)?;
-        Ok(Server::new(DefaultTransport::new(transport, ())))
-    }
-
-    /// Creates an HTTP server using a Unix domain socket listener.
-    #[cfg(unix)]
-    pub fn bind_uds(path: impl AsRef<Path>) -> io::Result<Server<DefaultTransport<UnixListener>>> {
-        let transport = UnixListener::bind(path)?;
-        Ok(Server::new(DefaultTransport::new(transport, ())))
+impl Server<()> {
+    /// Creates an HTTP server using the specified transport.
+    pub fn bind<T>(transport: T) -> Result<Server<T::Transport>, T::Error>
+    where
+        T: MakeTransport,
+    {
+        let transport = transport.make_transport()?;
+        Ok(Server::new(transport))
     }
 }
 

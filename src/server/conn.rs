@@ -43,6 +43,23 @@ impl Transport for hyper::server::conn::AddrIncoming {
     }
 }
 
+pub trait MakeTransport {
+    type Transport: Transport;
+    type Error;
+
+    fn make_transport(self) -> Result<Self::Transport, Self::Error>;
+}
+
+impl<T: Transport> MakeTransport for T {
+    type Transport = Self;
+    type Error = io::Error; // FIXME: replace with `!`
+
+    #[inline]
+    fn make_transport(self) -> Result<Self::Transport, Self::Error> {
+        Ok(self)
+    }
+}
+
 /// A trait that represents the conversion of asynchronous I/Os.
 ///
 /// Typically, the implementors of this trait establish a TLS session.
@@ -308,6 +325,48 @@ mod tcp {
         tokio::net::{TcpListener, TcpStream},
     };
 
+    impl MakeTransport for std::net::SocketAddr {
+        type Transport = DefaultTransport<TcpListener>;
+        type Error = io::Error;
+
+        fn make_transport(self) -> Result<Self::Transport, Self::Error> {
+            let listener = TcpListener::bind(&self)?;
+            Ok(DefaultTransport::new(listener, ()))
+        }
+    }
+
+    impl<'a> MakeTransport for &'a std::net::SocketAddr {
+        type Transport = DefaultTransport<TcpListener>;
+        type Error = io::Error;
+
+        fn make_transport(self) -> Result<Self::Transport, Self::Error> {
+            let listener = TcpListener::bind(self)?;
+            Ok(DefaultTransport::new(listener, ()))
+        }
+    }
+
+    impl<'a> MakeTransport for &'a str {
+        type Transport = DefaultTransport<TcpListener>;
+        type Error = io::Error;
+
+        fn make_transport(self) -> Result<Self::Transport, Self::Error> {
+            let addr = self
+                .parse()
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            let listener = TcpListener::bind(&addr)?;
+            Ok(DefaultTransport::new(listener, ()))
+        }
+    }
+
+    impl MakeTransport for String {
+        type Transport = DefaultTransport<TcpListener>;
+        type Error = io::Error;
+
+        fn make_transport(self) -> Result<Self::Transport, Self::Error> {
+            self.as_str().make_transport()
+        }
+    }
+
     impl Transport for TcpListener {
         type Conn = AddrStream<TcpStream>;
         type Incoming = Incoming;
@@ -350,6 +409,25 @@ mod uds {
         super::*,
         tokio::net::{UnixListener, UnixStream},
     };
+
+    impl MakeTransport for std::path::PathBuf {
+        type Transport = DefaultTransport<UnixListener>;
+        type Error = io::Error;
+
+        fn make_transport(self) -> Result<Self::Transport, Self::Error> {
+            self.as_path().make_transport()
+        }
+    }
+
+    impl<'a> MakeTransport for &'a std::path::Path {
+        type Transport = DefaultTransport<UnixListener>;
+        type Error = io::Error;
+
+        fn make_transport(self) -> Result<Self::Transport, Self::Error> {
+            let listener = UnixListener::bind(&self)?;
+            Ok(DefaultTransport::new(listener, ()))
+        }
+    }
 
     impl Transport for UnixListener {
         type Conn = AddrStream<UnixStream>;
