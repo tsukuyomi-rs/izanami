@@ -11,7 +11,7 @@ use {
 };
 
 /// A trait that represents the listener.
-pub trait Transport {
+pub trait Listener {
     /// The type of connection to the peer returned from `Incoming`.
     type Conn: AsyncRead + AsyncWrite;
 
@@ -28,7 +28,7 @@ pub trait Transport {
     }
 }
 
-impl Transport for hyper::server::conn::AddrIncoming {
+impl Listener for hyper::server::conn::AddrIncoming {
     type Conn = hyper::server::conn::AddrStream;
     type Incoming = Self;
 
@@ -40,6 +40,23 @@ impl Transport for hyper::server::conn::AddrIncoming {
     #[inline]
     fn remote_addr(conn: &Self::Conn) -> RemoteAddr {
         conn.remote_addr().into()
+    }
+}
+
+pub trait MakeListener {
+    type Listener: Listener;
+    type Error;
+
+    fn make_listener(self) -> Result<Self::Listener, Self::Error>;
+}
+
+impl<T: Listener> MakeListener for T {
+    type Listener = Self;
+    type Error = io::Error; // FIXME: replace with `!`
+
+    #[inline]
+    fn make_listener(self) -> Result<Self::Listener, Self::Error> {
+        Ok(self)
     }
 }
 
@@ -81,41 +98,41 @@ where
     }
 }
 
-/// An instance of `Transport` used in `Server` by default.
+/// An instance of `Listener` used in `Server` by default.
 #[derive(Debug)]
-pub struct DefaultTransport<T, A = ()> {
-    transport: T,
+pub struct DefaultListener<T, A = ()> {
+    raw: T,
     acceptor: A,
     sleep_on_errors: Option<Duration>,
 }
 
-impl<T, A> DefaultTransport<T, A>
+impl<T, A> DefaultListener<T, A>
 where
-    T: Transport,
+    T: Listener,
     A: Acceptor<T::Conn>,
 {
-    pub(crate) fn new(transport: T, acceptor: A) -> Self {
+    pub(crate) fn new(raw: T, acceptor: A) -> Self {
         Self {
-            transport,
+            raw,
             acceptor,
             sleep_on_errors: Some(Duration::from_secs(1)),
         }
     }
 
     pub fn get_ref(&self) -> (&T, &A) {
-        (&self.transport, &self.acceptor)
+        (&self.raw, &self.acceptor)
     }
 
     pub fn get_mut(&mut self) -> (&mut T, &mut A) {
-        (&mut self.transport, &mut self.acceptor)
+        (&mut self.raw, &mut self.acceptor)
     }
 
-    pub fn accept<A2>(self, acceptor: A2) -> DefaultTransport<T, A2>
+    pub fn accept<A2>(self, acceptor: A2) -> DefaultListener<T, A2>
     where
         A2: Acceptor<T::Conn>,
     {
-        DefaultTransport {
-            transport: self.transport,
+        DefaultListener {
+            raw: self.raw,
             acceptor,
             sleep_on_errors: self.sleep_on_errors,
         }
@@ -204,9 +221,9 @@ where
 mod default {
     use {super::*, futures::Future};
 
-    impl<T, A> Transport for DefaultTransport<T, A>
+    impl<T, A> Listener for DefaultListener<T, A>
     where
-        T: Transport,
+        T: Listener,
         A: Acceptor<T::Conn>,
     {
         type Conn = AddrStream<A::Accepted>;
@@ -214,7 +231,7 @@ mod default {
 
         fn incoming(self) -> Self::Incoming {
             Incoming {
-                incoming: self.transport.incoming(),
+                incoming: self.raw.incoming(),
                 acceptor: self.acceptor,
                 sleep_on_errors: self.sleep_on_errors,
                 timeout: None,
@@ -227,7 +244,7 @@ mod default {
     }
 
     #[derive(Debug)]
-    pub struct Incoming<T: Transport, A> {
+    pub struct Incoming<T: Listener, A> {
         incoming: T::Incoming,
         acceptor: A,
         sleep_on_errors: Option<Duration>,
@@ -236,7 +253,7 @@ mod default {
 
     impl<T, A> Stream for Incoming<T, A>
     where
-        T: Transport,
+        T: Listener,
         A: Acceptor<T::Conn>,
     {
         type Item = AddrStream<A::Accepted>;
@@ -308,7 +325,49 @@ mod tcp {
         tokio::net::{TcpListener, TcpStream},
     };
 
-    impl Transport for TcpListener {
+    impl MakeListener for std::net::SocketAddr {
+        type Listener = DefaultListener<TcpListener>;
+        type Error = io::Error;
+
+        fn make_listener(self) -> Result<Self::Listener, Self::Error> {
+            let listener = TcpListener::bind(&self)?;
+            Ok(DefaultListener::new(listener, ()))
+        }
+    }
+
+    impl<'a> MakeListener for &'a std::net::SocketAddr {
+        type Listener = DefaultListener<TcpListener>;
+        type Error = io::Error;
+
+        fn make_listener(self) -> Result<Self::Listener, Self::Error> {
+            let listener = TcpListener::bind(self)?;
+            Ok(DefaultListener::new(listener, ()))
+        }
+    }
+
+    impl<'a> MakeListener for &'a str {
+        type Listener = DefaultListener<TcpListener>;
+        type Error = io::Error;
+
+        fn make_listener(self) -> Result<Self::Listener, Self::Error> {
+            let addr = self
+                .parse()
+                .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            let listener = TcpListener::bind(&addr)?;
+            Ok(DefaultListener::new(listener, ()))
+        }
+    }
+
+    impl MakeListener for String {
+        type Listener = DefaultListener<TcpListener>;
+        type Error = io::Error;
+
+        fn make_listener(self) -> Result<Self::Listener, Self::Error> {
+            self.as_str().make_listener()
+        }
+    }
+
+    impl Listener for TcpListener {
         type Conn = AddrStream<TcpStream>;
         type Incoming = Incoming;
 
@@ -351,7 +410,26 @@ mod uds {
         tokio::net::{UnixListener, UnixStream},
     };
 
-    impl Transport for UnixListener {
+    impl MakeListener for std::path::PathBuf {
+        type Listener = DefaultListener<UnixListener>;
+        type Error = io::Error;
+
+        fn make_listener(self) -> Result<Self::Listener, Self::Error> {
+            self.as_path().make_listener()
+        }
+    }
+
+    impl<'a> MakeListener for &'a std::path::Path {
+        type Listener = DefaultListener<UnixListener>;
+        type Error = io::Error;
+
+        fn make_listener(self) -> Result<Self::Listener, Self::Error> {
+            let listener = UnixListener::bind(&self)?;
+            Ok(DefaultListener::new(listener, ()))
+        }
+    }
+
+    impl Listener for UnixListener {
         type Conn = AddrStream<UnixStream>;
         type Incoming = Incoming;
 

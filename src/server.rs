@@ -3,7 +3,7 @@
 pub mod conn;
 
 use {
-    self::conn::{Acceptor, DefaultTransport, Transport},
+    self::conn::{Acceptor, DefaultListener, Listener, MakeListener},
     crate::{remote::RemoteAddr, CritError},
     futures::{Future, Poll},
     http::{HeaderMap, Request, Response},
@@ -15,16 +15,10 @@ use {
     },
     std::{
         fmt, //
-        io,
         marker::PhantomData,
-        net::SocketAddr,
         time::Duration,
     },
-    tokio::net::TcpListener,
 };
-
-#[cfg(unix)]
-use {std::path::Path, tokio::net::UnixListener};
 
 /// A struct that represents the stream of chunks from client.
 #[derive(Debug)]
@@ -101,14 +95,14 @@ impl Upgrade for RequestBody {
 /// A type representing the context information that can be used from the inside
 /// of `MakeService::make_service`.
 #[derive(Debug)]
-pub struct MakeServiceContext<'a, T: Transport> {
+pub struct MakeServiceContext<'a, T: Listener> {
     conn: &'a T::Conn,
     _anchor: PhantomData<std::rc::Rc<()>>,
 }
 
 impl<'a, T> MakeServiceContext<'a, T>
 where
-    T: Transport,
+    T: Listener,
 {
     /// Returns a reference to the instance of a connection to a peer.
     pub fn conn(&self) -> &T::Conn {
@@ -118,7 +112,7 @@ where
 
 impl<'a, T> std::ops::Deref for MakeServiceContext<'a, T>
 where
-    T: Transport,
+    T: Listener,
 {
     type Target = T::Conn;
 
@@ -130,69 +124,67 @@ where
 // ==== Server ====
 
 /// A simple HTTP server that wraps the `hyper`'s server implementation.
-pub struct Server<
-    T = DefaultTransport<TcpListener>, //
-    B = Threadpool,
-> {
-    transport: T,
+pub struct Server<T, B = Threadpool> {
+    listener: T,
     protocol: Http,
     _marker: PhantomData<B>,
 }
 
 impl<T, B> fmt::Debug for Server<T, B>
 where
-    T: Transport + fmt::Debug,
+    T: fmt::Debug,
 {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Server")
-            .field("transport", &self.transport)
+            .field("listener", &self.listener)
             .field("protocol", &self.protocol)
             .finish()
     }
 }
 
-impl Server {
-    /// Creates an HTTP server using a TCP listener.
-    pub fn bind_tcp(addr: &SocketAddr) -> io::Result<Server<DefaultTransport<TcpListener>>> {
-        let transport = TcpListener::bind(addr)?;
-        Ok(Server::new(DefaultTransport::new(transport, ())))
-    }
-
-    /// Creates an HTTP server using a Unix domain socket listener.
-    #[cfg(unix)]
-    pub fn bind_uds(path: impl AsRef<Path>) -> io::Result<Server<DefaultTransport<UnixListener>>> {
-        let transport = UnixListener::bind(path)?;
-        Ok(Server::new(DefaultTransport::new(transport, ())))
+impl Server<()> {
+    /// Creates an HTTP server from the specified listener.
+    pub fn bind<T>(listener: T) -> Result<Server<T::Listener>, T::Error>
+    where
+        T: MakeListener,
+    {
+        let listener = listener.make_listener()?;
+        Ok(Server {
+            listener,
+            protocol: Http::new(),
+            _marker: PhantomData,
+        })
     }
 }
 
 impl<T, B> Server<T, B>
 where
-    T: Transport,
+    T: Listener,
 {
-    /// Create a `Server` from a specific `Transport`.
-    pub fn new(transport: T) -> Self {
-        Self {
-            transport,
-            protocol: Http::new(),
-            _marker: PhantomData,
-        }
+    /// Returns a reference to the inner listener.
+    pub fn listener(&self) -> &T {
+        &self.listener
     }
 
-    /// Returns a reference to the inner transport.
-    pub fn transport(&mut self) -> &mut T {
-        &mut self.transport
+    /// Returns a mutable reference to the inner listener.
+    pub fn listener_mut(&mut self) -> &mut T {
+        &mut self.listener
     }
 
     /// Returns a reference to the HTTP-level configuration.
-    pub fn protocol(&mut self) -> &mut Http {
+    pub fn protocol(&self) -> &Http {
+        &self.protocol
+    }
+
+    /// Returns a mutable reference to the HTTP-level configuration.
+    pub fn protocol_mut(&mut self) -> &mut Http {
         &mut self.protocol
     }
 
     /// Switches the backend to `CurrentThread`.
     pub fn current_thread(self) -> Server<T, CurrentThread> {
         Server {
-            transport: self.transport,
+            listener: self.listener,
             protocol: self.protocol,
             _marker: PhantomData,
         }
@@ -204,25 +196,25 @@ where
         S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
         B: Backend<T, S>,
     {
-        B::start(self.protocol, self.transport.incoming(), make_service)
+        B::start(self.protocol, self.listener.incoming(), make_service)
     }
 }
 
-impl<T, A, R> Server<DefaultTransport<T, A>, R>
+impl<T, A, R> Server<DefaultListener<T, A>, R>
 where
-    T: Transport,
+    T: Listener,
     A: Acceptor<T::Conn>,
 {
     /// Sets the instance of `Acceptor` to the server.
     ///
     /// By default, the raw acceptor is set, which returns the incoming
     /// I/Os directly.
-    pub fn acceptor<A2>(self, acceptor: A2) -> Server<DefaultTransport<T, A2>, R>
+    pub fn acceptor<A2>(self, acceptor: A2) -> Server<DefaultListener<T, A2>, R>
     where
         A2: Acceptor<T::Conn>,
     {
         Server {
-            transport: self.transport.accept(acceptor),
+            listener: self.listener.accept(acceptor),
             protocol: self.protocol,
             _marker: PhantomData,
         }
@@ -237,7 +229,7 @@ where
     /// The default value is `Some(1sec)`.
     pub fn sleep_on_errors(self, duration: Option<Duration>) -> Self {
         Self {
-            transport: self.transport.sleep_on_errors(duration),
+            listener: self.listener.sleep_on_errors(duration),
             ..self
         }
     }
@@ -259,7 +251,7 @@ pub struct CurrentThread(Never);
 /// A trait for abstracting the process around executing the HTTP server.
 pub trait Backend<T, S>: self::imp::BackendImpl<T, S>
 where
-    T: Transport,
+    T: Listener,
     S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
 {
 }
@@ -269,7 +261,7 @@ mod imp {
 
     pub trait BackendImpl<T, S>
     where
-        T: Transport,
+        T: Listener,
         S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
     {
         fn start(
@@ -281,7 +273,7 @@ mod imp {
 
     impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> Backend<T, S> for Threadpool
     where
-        T: Transport + 'static,
+        T: Listener + 'static,
         T::Conn: Send + 'static,
         T::Incoming: Send + 'static,
         S: for<'a> MakeService<
@@ -313,7 +305,7 @@ mod imp {
 
     impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> BackendImpl<T, S> for Threadpool
     where
-        T: Transport + 'static,
+        T: Listener + 'static,
         T::Conn: Send + 'static,
         T::Incoming: Send + 'static,
         S: for<'a> MakeService<
@@ -356,7 +348,7 @@ mod imp {
 
     impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> Backend<T, S> for CurrentThread
     where
-        T: Transport + 'static,
+        T: Listener + 'static,
         T::Conn: Send + 'static,
         T::Incoming: 'static,
         S: for<'a> MakeService<
@@ -385,7 +377,7 @@ mod imp {
 
     impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> BackendImpl<T, S> for CurrentThread
     where
-        T: Transport + 'static,
+        T: Listener + 'static,
         T::Conn: Send + 'static,
         T::Incoming: 'static,
         S: for<'a> MakeService<
@@ -434,7 +426,7 @@ mod imp {
     #[allow(clippy::type_complexity)]
     impl<'a, T, S, Bd> hyper::service::MakeService<&'a T::Conn> for LiftedMakeHttpService<T, S>
     where
-        T: Transport,
+        T: Listener,
         S: MakeService<
             MakeServiceContext<'a, T>, //
             Request<RequestBody>,

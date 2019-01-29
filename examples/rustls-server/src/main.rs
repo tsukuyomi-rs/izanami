@@ -16,7 +16,7 @@ fn main() -> izanami::Result<()> {
         .build();
 
     let tls_config = build_tls_config()?;
-    izanami::Server::bind_tcp(&([127, 0, 0, 1], 4000).into())? //
+    izanami::Server::bind("127.0.0.1:4000")? //
         .acceptor(tls_config)
         .start(echo)
 }

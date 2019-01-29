@@ -27,7 +27,7 @@ fn main() -> izanami::Result<()> {
     });
     let acceptor = builder.build();
 
-    izanami::Server::bind_tcp(&([127, 0, 0, 1], 4000).into())? //
+    izanami::Server::bind("127.0.0.1:4000")? //
         .acceptor(acceptor)
         .start(echo)
 }

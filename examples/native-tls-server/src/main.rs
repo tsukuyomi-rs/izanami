@@ -17,7 +17,7 @@ fn main() -> izanami::Result<()> {
     let cert = Identity::from_pkcs12(&der, "mypass")?;
     let acceptor = TlsAcceptor::builder(cert).build()?;
 
-    izanami::Server::bind_tcp(&([127, 0, 0, 1], 4000).into())? //
+    izanami::Server::bind("127.0.0.1:4000")? //
         .acceptor(acceptor)
         .start(echo)
 }
