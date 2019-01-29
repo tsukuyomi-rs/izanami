@@ -3,7 +3,7 @@
 pub mod conn;
 
 use {
-    self::conn::{Acceptor, DefaultListener, Listener, MakeListener},
+    self::conn::{Acceptor, Listener, MakeListener, WithAcceptor},
     crate::{remote::RemoteAddr, CritError},
     futures::{Future, Poll},
     http::{HeaderMap, Request, Response},
@@ -13,11 +13,7 @@ use {
         buf_stream::{BufStream, SizeHint},
         http::{HasTrailers, Upgrade},
     },
-    std::{
-        fmt, //
-        marker::PhantomData,
-        time::Duration,
-    },
+    std::{fmt, marker::PhantomData},
 };
 
 /// A struct that represents the stream of chunks from client.
@@ -181,6 +177,18 @@ where
         &mut self.protocol
     }
 
+    /// Sets the instance of `Acceptor` to the server.
+    pub fn acceptor<A>(self, acceptor: A) -> Server<WithAcceptor<T, A>, B>
+    where
+        A: Acceptor<T::Conn>,
+    {
+        Server {
+            listener: WithAcceptor::new(self.listener, acceptor),
+            protocol: self.protocol,
+            _marker: PhantomData,
+        }
+    }
+
     /// Switches the backend to `CurrentThread`.
     pub fn current_thread(self) -> Server<T, CurrentThread> {
         Server {
@@ -197,41 +205,6 @@ where
         B: Backend<T, S>,
     {
         B::start(self.protocol, self.listener.incoming(), make_service)
-    }
-}
-
-impl<T, A, R> Server<DefaultListener<T, A>, R>
-where
-    T: Listener,
-    A: Acceptor<T::Conn>,
-{
-    /// Sets the instance of `Acceptor` to the server.
-    ///
-    /// By default, the raw acceptor is set, which returns the incoming
-    /// I/Os directly.
-    pub fn acceptor<A2>(self, acceptor: A2) -> Server<DefaultListener<T, A2>, R>
-    where
-        A2: Acceptor<T::Conn>,
-    {
-        Server {
-            listener: self.listener.accept(acceptor),
-            protocol: self.protocol,
-            _marker: PhantomData,
-        }
-    }
-
-    /// Sets the time interval for sleeping on errors.
-    ///
-    /// If this value is set, the incoming stream sleeps for
-    /// the specific period instead of terminating, and then
-    /// attemps to accept again after woken up.
-    ///
-    /// The default value is `Some(1sec)`.
-    pub fn sleep_on_errors(self, duration: Option<Duration>) -> Self {
-        Self {
-            listener: self.listener.sleep_on_errors(duration),
-            ..self
-        }
     }
 }
 
