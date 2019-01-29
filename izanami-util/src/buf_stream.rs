@@ -10,8 +10,8 @@
 
 use {
     bytes::Buf,
-    futures::{Async, Poll},
-    std::error::Error,
+    futures::{Async, Future, Poll},
+    std::{error::Error, fmt},
 };
 
 /// A trait which abstracts an asynchronous stream of bytes.
@@ -28,6 +28,18 @@ pub trait BufStream {
     #[allow(clippy::drop_copy)]
     fn consume_hint(&mut self, amount: usize) {
         drop(amount);
+    }
+
+    fn collect<T>(self) -> Collect<Self, T>
+    where
+        Self: Sized,
+        T: FromBufStream<Self::Item>,
+    {
+        let builder = T::builder(&self.size_hint());
+        Collect {
+            stream: self,
+            builder: Some(builder),
+        }
     }
 }
 
@@ -58,6 +70,78 @@ impl SizeHint {
     pub fn set_upper(&mut self, value: u64) {
         assert!(value >= self.lower);
         self.upper = Some(value);
+    }
+}
+
+#[derive(Debug)]
+pub struct Collect<S, T>
+where
+    S: BufStream,
+    T: FromBufStream<S::Item>,
+{
+    stream: S,
+    builder: Option<T::Builder>,
+}
+
+impl<S, T> Future for Collect<S, T>
+where
+    S: BufStream,
+    T: FromBufStream<S::Item>,
+{
+    type Item = T;
+    type Error = CollectError<S::Error, T::Error>;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        while let Some(mut buf) = futures::try_ready! {
+            self.stream.poll_buf()//
+                .map_err(|e| CollectError {
+                    kind: CollectErrorKind::Stream(e),
+                })
+        } {
+            let builder = self.builder.as_mut().expect("cannot poll after done");
+            T::extend(builder, &mut buf, &self.stream.size_hint()) //
+                .map_err(|e| CollectError {
+                    kind: CollectErrorKind::Collect(e),
+                })?;
+        }
+
+        let builder = self.builder.take().expect("cannot poll after done");
+        let value = T::build(builder) //
+            .map_err(|e| CollectError {
+                kind: CollectErrorKind::Collect(e),
+            })?;
+
+        Ok(Async::Ready(value))
+    }
+}
+
+#[derive(Debug)]
+pub struct CollectError<S, T> {
+    kind: CollectErrorKind<S, T>,
+}
+
+#[derive(Debug)]
+enum CollectErrorKind<S, T> {
+    Stream(S),
+    Collect(T),
+}
+
+impl<S, T> fmt::Display for CollectError<S, T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("collect error")
+    }
+}
+
+impl<S, T> Error for CollectError<S, T>
+where
+    S: Error + 'static,
+    T: Error + 'static,
+{
+    fn source(&self) -> Option<&(dyn Error + 'static)> {
+        match &self.kind {
+            CollectErrorKind::Stream(e) => Some(e),
+            CollectErrorKind::Collect(e) => Some(e),
+        }
     }
 }
 
@@ -261,6 +345,144 @@ mod impl_either {
                 EitherBuf::Left(l) => l.advance(cnt),
                 EitherBuf::Right(r) => r.advance(cnt),
             }
+        }
+    }
+}
+
+/// Trait representing the conversion from a `BufStream`.
+pub trait FromBufStream<T: Buf>: Sized {
+    type Builder;
+    type Error;
+
+    fn builder(hint: &SizeHint) -> Self::Builder;
+
+    fn extend(builder: &mut Self::Builder, buf: &mut T, hint: &SizeHint)
+        -> Result<(), Self::Error>;
+
+    fn build(build: Self::Builder) -> Result<Self, Self::Error>;
+}
+
+mod from_buf_stream {
+    use {
+        super::*,
+        bytes::{Bytes, BytesMut},
+    };
+
+    #[derive(Debug)]
+    pub struct CollectVec {
+        buf: Vec<u8>,
+    }
+
+    impl CollectVec {
+        fn new(_: &SizeHint) -> Self {
+            Self { buf: Vec::new() }
+        }
+
+        fn extend<T: Buf>(&mut self, buf: &mut T, _: &SizeHint) -> Result<(), CollectVecError> {
+            self.buf.extend_from_slice(buf.bytes());
+            Ok(())
+        }
+
+        fn build(self) -> Result<Vec<u8>, CollectVecError> {
+            Ok(self.buf)
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct CollectVecError(());
+
+    impl fmt::Display for CollectVecError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("collect vec error")
+        }
+    }
+
+    impl Error for CollectVecError {}
+
+    impl<T> FromBufStream<T> for Vec<u8>
+    where
+        T: Buf,
+    {
+        type Builder = CollectVec;
+        type Error = CollectVecError;
+
+        #[inline]
+        fn builder(hint: &SizeHint) -> Self::Builder {
+            CollectVec::new(hint)
+        }
+
+        #[inline]
+        fn extend(
+            builder: &mut Self::Builder,
+            buf: &mut T,
+            hint: &SizeHint,
+        ) -> Result<(), Self::Error> {
+            builder.extend(buf, hint)
+        }
+
+        #[inline]
+        fn build(builder: Self::Builder) -> Result<Self, Self::Error> {
+            builder.build()
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct CollectBytes {
+        buf: BytesMut,
+    }
+
+    impl CollectBytes {
+        fn new(_hint: &SizeHint) -> Self {
+            Self {
+                buf: BytesMut::new(),
+            }
+        }
+
+        fn extend<T: Buf>(&mut self, buf: &mut T, _: &SizeHint) -> Result<(), CollectBytesError> {
+            self.buf.extend_from_slice(buf.bytes());
+            Ok(())
+        }
+
+        fn build(self) -> Result<Bytes, CollectBytesError> {
+            Ok(self.buf.freeze())
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct CollectBytesError(());
+
+    impl fmt::Display for CollectBytesError {
+        fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+            f.write_str("collect bytes error")
+        }
+    }
+
+    impl Error for CollectBytesError {}
+
+    impl<T> FromBufStream<T> for Bytes
+    where
+        T: Buf,
+    {
+        type Builder = CollectBytes;
+        type Error = CollectBytesError;
+
+        #[inline]
+        fn builder(hint: &SizeHint) -> Self::Builder {
+            CollectBytes::new(hint)
+        }
+
+        #[inline]
+        fn extend(
+            builder: &mut Self::Builder,
+            buf: &mut T,
+            hint: &SizeHint,
+        ) -> Result<(), Self::Error> {
+            builder.extend(buf, hint)
+        }
+
+        #[inline]
+        fn build(builder: Self::Builder) -> Result<Self, Self::Error> {
+            builder.build()
         }
     }
 }
