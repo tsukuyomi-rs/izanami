@@ -4,7 +4,7 @@ pub mod conn;
 
 use {
     self::conn::{Acceptor, Listener, MakeListener, WithAcceptor},
-    crate::{remote::RemoteAddr, CritError},
+    crate::CritError,
     futures::{Future, Poll},
     http::{HeaderMap, Request, Response},
     hyper::{body::Payload as _Payload, server::conn::Http},
@@ -12,6 +12,7 @@ use {
     izanami_util::{
         buf_stream::{BufStream, SizeHint},
         http::{HasTrailers, Upgrade},
+        RemoteAddr,
     },
     std::{fmt, marker::PhantomData},
 };

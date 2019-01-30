@@ -13,5 +13,8 @@
 
 pub mod buf_stream;
 pub mod http;
+mod remote;
 pub mod rt;
 mod util;
+
+pub use crate::remote::RemoteAddr;

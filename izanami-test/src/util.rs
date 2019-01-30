@@ -1,16 +1,3 @@
-//! Utilities for testing HTTP services.
-
-pub mod input;
-mod output;
-mod server;
-
-#[doc(no_inline)]
-pub use self::input::{Input, MockRequestBody};
-pub use self::{
-    output::Output,
-    server::{local_server, server, Client, Runtime, Server},
-};
-
 /// A set of extension methods of [`Response`] used within test cases.
 ///
 /// [`Response`]: https://docs.rs/http/0.1/http/struct.Response.html
