@@ -1,7 +1,7 @@
 use {echo_service::Echo, http::Response};
 
 #[test]
-fn test_empty_routes() -> izanami::Result<()> {
+fn test_empty_routes() -> izanami::test::Result<()> {
     let mut server = izanami::test::server(
         Echo::builder() //
             .build(),
@@ -13,7 +13,7 @@ fn test_empty_routes() -> izanami::Result<()> {
 }
 
 #[test]
-fn test_single_route() -> izanami::Result<()> {
+fn test_single_route() -> izanami::test::Result<()> {
     let mut server = izanami::test::server(
         Echo::builder() //
             .add_route("/", |_| {
@@ -32,7 +32,7 @@ fn test_single_route() -> izanami::Result<()> {
 }
 
 #[test]
-fn test_capture_param() -> izanami::Result<()> {
+fn test_capture_param() -> izanami::test::Result<()> {
     let mut server = izanami::test::server(
         Echo::builder() //
             .add_route("/([0-9]+)", |cx| {

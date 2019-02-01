@@ -11,20 +11,18 @@
 #![forbid(clippy::unimplemented)]
 
 mod error;
-mod remote;
 pub mod server;
-pub mod test;
 
 #[doc(inline)]
 pub use crate::{
     error::{Error, Result},
-    remote::RemoteAddr,
     server::Server,
 };
 
 #[doc(no_inline)]
 pub use {
     izanami_service as service, //
+    izanami_test as test,
     izanami_util as util,
 };
 
