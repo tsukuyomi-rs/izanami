@@ -41,7 +41,7 @@ impl<Bd> Service<Request<Bd>> for Echo {
 fn threadpool_test_server() -> izanami_test::Result<()> {
     let mut server = izanami_test::server(Echo)?;
 
-    let response = server.perform("/")?;
+    let response = server.perform(Request::get("/").body(())?)?;
     assert_eq!(response.status(), 200);
     assert_eq!(response.body().to_utf8()?, "hello");
 
@@ -52,7 +52,7 @@ fn threadpool_test_server() -> izanami_test::Result<()> {
 fn singlethread_test_server() -> izanami_test::Result<()> {
     let mut server = izanami_test::local_server(Echo)?;
 
-    let response = server.perform("/")?;
+    let response = server.perform(Request::get("/").body(())?)?;
     assert_eq!(response.status(), 200);
     assert_eq!(response.body().to_utf8()?, "hello");
 

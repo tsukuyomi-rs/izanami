@@ -1,4 +1,7 @@
-use {echo_service::Echo, http::Response};
+use {
+    echo_service::Echo,
+    http::{Request, Response},
+};
 
 #[test]
 fn test_empty_routes() -> izanami_test::Result<()> {
@@ -6,7 +9,8 @@ fn test_empty_routes() -> izanami_test::Result<()> {
         Echo::builder() //
             .build(),
     )?;
-    assert_eq!(server.perform("/")?.status(), 404);
+    let response = server.perform(Request::get("/").body(())?)?;
+    assert_eq!(response.status(), 404);
     Ok(())
 }
 
@@ -22,7 +26,7 @@ fn test_single_route() -> izanami_test::Result<()> {
             .build(),
     )?;
 
-    let response = server.perform("/")?;
+    let response = server.perform(Request::get("/").body(())?)?;
     assert_eq!(response.status(), 200);
     assert_eq!(response.body().to_utf8()?, "hello");
 
@@ -52,11 +56,11 @@ fn test_capture_param() -> izanami_test::Result<()> {
             .build(),
     )?;
 
-    let response = server.perform("/42")?;
+    let response = server.perform(Request::get("/42").body(())?)?;
     assert_eq!(response.status(), 200);
     assert_eq!(response.body().to_utf8()?, "id=42");
 
-    let response = server.perform("/fox")?;
+    let response = server.perform(Request::get("/fox").body(())?)?;
     assert_eq!(response.status(), 404);
 
     Ok(())

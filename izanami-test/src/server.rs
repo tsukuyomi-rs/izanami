@@ -1,7 +1,6 @@
 use {
-    super::{
-        input::Input, //
-        output::Output,
+    crate::{
+        output::Output, //
         runtime::Runtime,
         service::{MakeTestService, MockRequestBody, TestService},
     },
@@ -90,8 +89,11 @@ where
     ///
     /// This method is a shortcut to `self.client()?.perform(input)`.
     #[inline]
-    pub fn perform(&mut self, input: impl Input) -> crate::Result<Response<Output>> {
-        self.client()?.perform(input)
+    pub fn perform(
+        &mut self,
+        request: Request<impl Into<MockRequestBody>>,
+    ) -> crate::Result<Response<Output>> {
+        self.client()?.perform(request)
     }
 
     /// Waits for completing the background task spawned by the service.
@@ -99,8 +101,11 @@ where
         self.runtime.shutdown();
     }
 
-    fn build_request(&self, input: impl Input) -> crate::Result<Request<MockRequestBody>> {
-        let mut request = input.build_request()?;
+    fn build_request(
+        &self,
+        request: Request<impl Into<MockRequestBody>>,
+    ) -> crate::Result<Request<MockRequestBody>> {
+        let mut request = request.map(Into::into);
 
         if request.extensions().get::<RemoteAddr>().is_none() {
             request.extensions_mut().insert(self.remote_addr.clone());
@@ -152,8 +157,11 @@ where
     Rt: Runtime<S>,
 {
     /// Applies an HTTP request to this client and await its response.
-    pub fn perform(&mut self, input: impl Input) -> crate::Result<Response<Output>> {
-        let request = self.server.build_request(input)?;
+    pub fn perform(
+        &mut self,
+        request: Request<impl Into<MockRequestBody>>,
+    ) -> crate::Result<Response<Output>> {
+        let request = self.server.build_request(request)?;
         let response = self.server.runtime.call(self.service.call(request))?;
         self.server.handle_set_cookies(&response)?;
         Ok(response)

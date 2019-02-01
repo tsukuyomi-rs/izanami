@@ -11,7 +11,6 @@
 #![forbid(clippy::unimplemented)]
 
 mod error;
-mod input;
 mod output;
 mod runtime;
 mod server;
@@ -19,7 +18,6 @@ pub mod service;
 
 pub use crate::{
     error::{Error, Result},
-    input::Input,
     output::Output,
     runtime::Runtime,
     server::{Client, Server},

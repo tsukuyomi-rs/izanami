@@ -66,12 +66,36 @@ enum Inner {
 }
 
 impl MockRequestBody {
-    pub(crate) fn new(data: impl Into<Bytes>) -> Self {
+    pub fn sized(data: impl Into<Bytes>) -> Self {
         Self {
             inner: Inner::Sized(Some(data.into())),
             _anchor: PhantomData,
         }
     }
+}
+
+impl From<()> for MockRequestBody {
+    fn from(_: ()) -> Self {
+        Self::sized(Bytes::new())
+    }
+}
+
+macro_rules! impl_from_for_sized_data {
+    ($($t:ty,)*) => {$(
+        impl From<$t> for MockRequestBody {
+            fn from(data: $t) -> Self {
+                Self::sized(data)
+            }
+        }
+    )*};
+}
+
+impl_from_for_sized_data! {
+    &'static [u8],
+    &'static str,
+    String,
+    Vec<u8>,
+    Bytes,
 }
 
 impl BufStream for MockRequestBody {
@@ -144,7 +168,7 @@ impl Upgrade for MockRequestBody {
 /// The type of context values passed by the test server, used within `MakeService`s.
 #[derive(Debug)]
 pub struct TestContext<'a> {
-    _anchor: PhantomData<&'a mut ()>,
+    _anchor: PhantomData<&'a std::rc::Rc<()>>,
 }
 
 impl<'a> TestContext<'a> {
