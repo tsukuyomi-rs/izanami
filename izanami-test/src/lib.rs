@@ -16,7 +16,6 @@ mod output;
 mod runtime;
 mod server;
 pub mod service;
-pub mod util;
 
 pub use crate::{
     error::{Error, Result},
