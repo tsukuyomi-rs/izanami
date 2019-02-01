@@ -1,20 +1,18 @@
 use {echo_service::Echo, http::Response};
 
 #[test]
-fn test_empty_routes() -> izanami::test::Result<()> {
-    let mut server = izanami::test::server(
+fn test_empty_routes() -> izanami_test::Result<()> {
+    let mut server = izanami_test::server(
         Echo::builder() //
             .build(),
     )?;
-
     assert_eq!(server.perform("/")?.status(), 404);
-
     Ok(())
 }
 
 #[test]
-fn test_single_route() -> izanami::test::Result<()> {
-    let mut server = izanami::test::server(
+fn test_single_route() -> izanami_test::Result<()> {
+    let mut server = izanami_test::server(
         Echo::builder() //
             .add_route("/", |_| {
                 Response::builder() //
@@ -32,8 +30,8 @@ fn test_single_route() -> izanami::test::Result<()> {
 }
 
 #[test]
-fn test_capture_param() -> izanami::test::Result<()> {
-    let mut server = izanami::test::server(
+fn test_capture_param() -> izanami_test::Result<()> {
+    let mut server = izanami_test::server(
         Echo::builder() //
             .add_route("/([0-9]+)", |cx| {
                 match cx

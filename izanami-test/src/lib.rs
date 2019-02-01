@@ -1,4 +1,4 @@
-//! Utilities for testing HTTP services.
+//! The *basic* utility for testing HTTP services.
 
 #![doc(html_root_url = "https://docs.rs/izanami-test/0.1.0-preview.1")]
 #![deny(
@@ -37,7 +37,7 @@ where
     let mut builder = tokio::runtime::Builder::new();
     builder.core_threads(1);
     builder.blocking_threads(1);
-    builder.name_prefix("izanami");
+    builder.name_prefix("izanami-test");
     let runtime = builder.build()?;
 
     Ok(Server::new(make_service, runtime))

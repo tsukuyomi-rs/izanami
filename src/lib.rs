@@ -22,7 +22,6 @@ pub use crate::{
 #[doc(no_inline)]
 pub use {
     izanami_service as service, //
-    izanami_test as test,
     izanami_util as util,
 };
 
