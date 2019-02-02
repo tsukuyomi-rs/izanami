@@ -1,8 +1,8 @@
 // FIXME: replace with mock_io::Mock
 
 use {
-    crate::CritError,
-    bytes::Bytes,
+    crate::error::BoxedStdError,
+    bytes::{Buf, Bytes},
     futures::{Async, Future, Poll},
     http::{header::HeaderMap, Request, Response},
     izanami_service::{MakeService, Service},
@@ -181,10 +181,10 @@ impl<'a> TestContext<'a> {
 
 /// A trait that abstracts the service factory used by the test server.
 pub trait MakeTestService {
-    type ResponseBody: BufStream;
-    type Error: Into<CritError>;
+    type ResponseBody: ResponseBody;
+    type Error: Into<BoxedStdError>;
     type Service: TestService<ResponseBody = Self::ResponseBody, Error = Self::Error>;
-    type MakeError: Into<CritError>;
+    type MakeError: Into<BoxedStdError>;
     type Future: Future<Item = Self::Service, Error = Self::MakeError>;
 
     fn make_service(&self, cx: TestContext<'_>) -> Self::Future;
@@ -201,10 +201,10 @@ where
         MakeError = MkErr,
         Future = Fut,
     >,
-    Bd: BufStream,
+    Bd: ResponseBody,
     Svc: Service<Request<MockRequestBody>, Response = Response<Bd>, Error = SvcErr>,
-    SvcErr: Into<CritError>,
-    MkErr: Into<CritError>,
+    SvcErr: Into<BoxedStdError>,
+    MkErr: Into<BoxedStdError>,
     Fut: Future<Item = Svc, Error = MkErr>,
 {
     type ResponseBody = Bd;
@@ -220,8 +220,8 @@ where
 
 /// A trait that abstracts the service used by the test server.
 pub trait TestService {
-    type ResponseBody: BufStream;
-    type Error: Into<CritError>;
+    type ResponseBody: ResponseBody;
+    type Error: Into<BoxedStdError>;
     type Future: Future<Item = Response<Self::ResponseBody>, Error = Self::Error>;
 
     fn call(&mut self, request: Request<MockRequestBody>) -> Self::Future;
@@ -230,8 +230,8 @@ pub trait TestService {
 impl<S, Bd> TestService for S
 where
     S: Service<Request<MockRequestBody>, Response = Response<Bd>>,
-    S::Error: Into<CritError>,
-    Bd: BufStream,
+    S::Error: Into<BoxedStdError>,
+    Bd: ResponseBody,
 {
     type ResponseBody = Bd;
     type Error = S::Error;
@@ -239,5 +239,32 @@ where
 
     fn call(&mut self, request: Request<MockRequestBody>) -> Self::Future {
         Service::call(self, request)
+    }
+}
+
+/// Trait that abstracts the type of response body from `TestService`s.
+pub trait ResponseBody {
+    type Item: Buf;
+    type Error: Into<BoxedStdError>;
+
+    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error>;
+
+    fn size_hint(&self) -> SizeHint;
+}
+
+impl<T> ResponseBody for T
+where
+    T: BufStream,
+    T::Error: Into<BoxedStdError>,
+{
+    type Item = T::Item;
+    type Error = T::Error;
+
+    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        BufStream::poll_buf(self)
+    }
+
+    fn size_hint(&self) -> SizeHint {
+        BufStream::size_hint(self)
     }
 }

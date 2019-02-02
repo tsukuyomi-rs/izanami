@@ -1,6 +1,7 @@
 use {
     http::{Request, Response},
     izanami_service::{MakeService, Service},
+    izanami_test::Server,
     std::io,
 };
 
@@ -39,22 +40,30 @@ impl<Bd> Service<Request<Bd>> for Echo {
 
 #[test]
 fn threadpool_test_server() -> izanami_test::Result<()> {
-    let mut server = izanami_test::server(Echo)?;
+    let mut server = Server::new(Echo)?;
+    let mut client = server.client().build()?;
 
-    let response = server.perform(Request::get("/").body(())?)?;
+    let response = client.request(
+        Request::get("/") //
+            .body(())?,
+    )?;
     assert_eq!(response.status(), 200);
-    assert_eq!(response.body().to_utf8()?, "hello");
+    assert_eq!(response.send()?.to_utf8()?, "hello");
 
     Ok(())
 }
 
 #[test]
 fn singlethread_test_server() -> izanami_test::Result<()> {
-    let mut server = izanami_test::local_server(Echo)?;
+    let mut server = Server::new_current_thread(Echo)?;
+    let mut client = server.client().build()?;
 
-    let response = server.perform(Request::get("/").body(())?)?;
+    let response = client.request(
+        Request::get("/") //
+            .body(())?,
+    )?;
     assert_eq!(response.status(), 200);
-    assert_eq!(response.body().to_utf8()?, "hello");
+    assert_eq!(response.send()?.to_utf8()?, "hello");
 
     Ok(())
 }

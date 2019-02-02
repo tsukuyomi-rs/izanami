@@ -1,13 +1,12 @@
 use {
     crate::{
+        error::BoxedStdError,
         output::Output,
-        service::{MakeTestService, TestService},
-        CritError,
+        service::{MakeTestService, ResponseBody, TestService},
     },
     bytes::{Buf, Bytes},
     futures::{Async, Future, Poll},
     http::Response,
-    izanami_util::buf_stream::BufStream,
     std::{
         mem,
         panic::{resume_unwind, AssertUnwindSafe},
@@ -22,6 +21,7 @@ where
 {
 }
 
+#[doc(hidden)]
 pub trait RuntimeImpl<S>
 where
     S: MakeTestService,
@@ -31,122 +31,135 @@ where
     fn call(
         &mut self,
         future: <S::Service as TestService>::Future,
-    ) -> crate::Result<Response<Output>>;
+    ) -> crate::Result<Response<S::ResponseBody>>;
+
+    fn receive_body(&mut self, body: S::ResponseBody) -> crate::Result<Output>;
 
     fn shutdown(self);
 }
 
-fn block_on<F>(runtime: &mut tokio::runtime::Runtime, future: F) -> Result<F::Item, F::Error>
-where
-    F: Future + Send + 'static,
-    F::Item: Send + 'static,
-    F::Error: Send + 'static,
-{
-    match runtime.block_on(AssertUnwindSafe(future).catch_unwind()) {
-        Ok(result) => result,
-        Err(err) => resume_unwind(Box::new(err)),
+/// An implementor of `Runtime<S>` using the default Tokio runtime.
+#[derive(Debug)]
+pub struct DefaultRuntime {
+    runtime: tokio::runtime::Runtime,
+}
+
+impl DefaultRuntime {
+    pub(crate) fn new() -> crate::Result<Self> {
+        let mut builder = tokio::runtime::Builder::new();
+        builder.core_threads(1);
+        builder.blocking_threads(1);
+        builder.name_prefix("izanami-test");
+
+        Ok(Self {
+            runtime: builder.build()?,
+        })
+    }
+
+    fn block_on<F>(&mut self, mut future: F) -> crate::Result<F::Item>
+    where
+        F: Future + Send + 'static,
+        F::Item: Send + 'static,
+        F::Error: Into<BoxedStdError>,
+    {
+        let future = futures::future::poll_fn(move || {
+            future.poll().map_err(crate::Error::from_boxed_compat)
+        });
+        match self
+            .runtime
+            .block_on(AssertUnwindSafe(future).catch_unwind())
+        {
+            Ok(result) => result,
+            Err(err) => resume_unwind(Box::new(err)),
+        }
     }
 }
 
-impl<S> Runtime<S> for tokio::runtime::Runtime
+impl<S> Runtime<S> for DefaultRuntime
 where
     S: MakeTestService,
     S::Service: Send + 'static,
     <S::Service as TestService>::Future: Send + 'static,
     S::Future: Send + 'static,
-    S::ResponseBody: BufStream + Send + 'static,
-    <S::ResponseBody as BufStream>::Error: Into<CritError>,
+    S::ResponseBody: Send + 'static,
 {
 }
 
-impl<S> RuntimeImpl<S> for tokio::runtime::Runtime
+impl<S> RuntimeImpl<S> for DefaultRuntime
 where
     S: MakeTestService,
     S::Service: Send + 'static,
     <S::Service as TestService>::Future: Send + 'static,
     S::Future: Send + 'static,
-    S::ResponseBody: BufStream + Send + 'static,
-    <S::ResponseBody as BufStream>::Error: Into<CritError>,
-{
-    fn make_service(&mut self, mut future: S::Future) -> crate::Result<S::Service> {
-        block_on(
-            self,
-            futures::future::poll_fn(move || future.poll().map_err(Into::into)),
-        )
-        .map_err(failure::Error::from_boxed_compat)
-        .map_err(Into::into)
-    }
-
-    fn call(
-        &mut self,
-        mut future: <S::Service as TestService>::Future,
-    ) -> crate::Result<Response<Output>> {
-        let (parts, body) = block_on(
-            self,
-            futures::future::poll_fn(move || {
-                future
-                    .poll()
-                    .map_err(Into::into)
-                    .map_err(failure::Error::from_boxed_compat)
-            }),
-        )?
-        .into_parts();
-
-        let output = block_on(
-            self,
-            Receive {
-                state: ReceiveState::Init(Some(body)),
-            },
-        )?;
-
-        Ok(Response::from_parts(parts, output))
-    }
-
-    fn shutdown(self) {
-        self.shutdown_on_idle().wait().unwrap();
-    }
-}
-
-impl<S> Runtime<S> for tokio::runtime::current_thread::Runtime
-where
-    S: MakeTestService,
-    <S::ResponseBody as BufStream>::Error: Into<CritError>,
-{
-}
-
-impl<S> RuntimeImpl<S> for tokio::runtime::current_thread::Runtime
-where
-    S: MakeTestService,
-    <S::ResponseBody as BufStream>::Error: Into<CritError>,
+    S::ResponseBody: Send + 'static,
 {
     fn make_service(&mut self, future: S::Future) -> crate::Result<S::Service> {
         self.block_on(future)
-            .map_err(|err| failure::Error::from_boxed_compat(err.into()))
-            .map_err(Into::into)
     }
 
     fn call(
         &mut self,
-        mut future: <S::Service as TestService>::Future,
-    ) -> crate::Result<Response<Output>> {
-        let (parts, body) = self
-            .block_on(futures::future::poll_fn(move || {
-                future
-                    .poll()
-                    .map_err(Into::into)
-                    .map_err(failure::Error::from_boxed_compat)
-            }))?
-            .into_parts();
+        future: <S::Service as TestService>::Future,
+    ) -> crate::Result<Response<S::ResponseBody>> {
+        self.block_on(future)
+    }
 
-        let output = self.block_on(Receive {
-            state: ReceiveState::Init(Some(body)),
-        })?;
+    fn receive_body(&mut self, body: S::ResponseBody) -> crate::Result<Output> {
+        self.block_on(Receive::new(body))
+    }
 
-        Ok(Response::from_parts(parts, output))
+    fn shutdown(self) {
+        self.runtime.shutdown_on_idle().wait().unwrap();
+    }
+}
+
+/// An implementor of `Runtime<S>` using single threaded Tokio runtime.
+#[derive(Debug)]
+pub struct CurrentThread {
+    runtime: tokio::runtime::current_thread::Runtime,
+}
+
+impl CurrentThread {
+    pub(crate) fn new() -> crate::Result<Self> {
+        Ok(Self {
+            runtime: tokio::runtime::current_thread::Runtime::new()?,
+        })
+    }
+
+    fn block_on<F>(&mut self, mut future: F) -> crate::Result<F::Item>
+    where
+        F: Future,
+        F::Error: Into<BoxedStdError>,
+    {
+        self.runtime.block_on(futures::future::poll_fn(move || {
+            future.poll().map_err(crate::Error::from_boxed_compat)
+        }))
+    }
+}
+
+impl<S> Runtime<S> for CurrentThread where S: MakeTestService {}
+
+impl<S> RuntimeImpl<S> for CurrentThread
+where
+    S: MakeTestService,
+{
+    fn make_service(&mut self, future: S::Future) -> crate::Result<S::Service> {
+        self.block_on(future)
+    }
+
+    fn call(
+        &mut self,
+        future: <S::Service as TestService>::Future,
+    ) -> crate::Result<Response<S::ResponseBody>> {
+        self.block_on(future)
+    }
+
+    fn receive_body(&mut self, body: S::ResponseBody) -> crate::Result<Output> {
+        self.block_on(Receive::new(body))
     }
 
     fn shutdown(mut self) {
-        self.run().unwrap();
+        self.runtime.run().unwrap();
     }
 }
 
@@ -161,13 +174,23 @@ enum ReceiveState<Bd> {
     InFlight { body: Bd, chunks: Vec<Bytes> },
 }
 
+impl<Bd> Receive<Bd>
+where
+    Bd: ResponseBody,
+{
+    fn new(body: Bd) -> Self {
+        Self {
+            state: ReceiveState::Init(Some(body)),
+        }
+    }
+}
+
 impl<Bd> Future for Receive<Bd>
 where
-    Bd: BufStream,
-    Bd::Error: Into<CritError>,
+    Bd: ResponseBody,
 {
     type Item = Output;
-    type Error = crate::Error;
+    type Error = Bd::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
@@ -180,11 +203,7 @@ where
                     ref mut body,
                     ref mut chunks,
                 } => {
-                    while let Some(chunk) = futures::try_ready!({
-                        body.poll_buf()
-                            .map_err(Into::into)
-                            .map_err(failure::Error::from_boxed_compat)
-                    }) {
+                    while let Some(chunk) = futures::try_ready!(body.poll_buf()) {
                         chunks.push(chunk.collect());
                     }
                     return Ok(Async::Ready(Output {

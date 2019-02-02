@@ -5,18 +5,23 @@ use {
 
 #[test]
 fn test_empty_routes() -> izanami_test::Result<()> {
-    let mut server = izanami_test::server(
+    let mut server = izanami_test::Server::new(
         Echo::builder() //
             .build(),
     )?;
-    let response = server.perform(Request::get("/").body(())?)?;
+    let mut client = server.client().build()?;
+
+    let response = client.request(
+        Request::get("/") //
+            .body(())?,
+    )?;
     assert_eq!(response.status(), 404);
     Ok(())
 }
 
 #[test]
 fn test_single_route() -> izanami_test::Result<()> {
-    let mut server = izanami_test::server(
+    let mut server = izanami_test::Server::new(
         Echo::builder() //
             .add_route("/", |_| {
                 Response::builder() //
@@ -25,17 +30,21 @@ fn test_single_route() -> izanami_test::Result<()> {
             })?
             .build(),
     )?;
+    let mut client = server.client().build()?;
 
-    let response = server.perform(Request::get("/").body(())?)?;
+    let response = client.request(
+        Request::get("/") //
+            .body(())?,
+    )?;
     assert_eq!(response.status(), 200);
-    assert_eq!(response.body().to_utf8()?, "hello");
+    assert_eq!(response.send()?.to_utf8()?, "hello");
 
     Ok(())
 }
 
 #[test]
 fn test_capture_param() -> izanami_test::Result<()> {
-    let mut server = izanami_test::server(
+    let mut server = izanami_test::Server::new(
         Echo::builder() //
             .add_route("/([0-9]+)", |cx| {
                 match cx
@@ -55,12 +64,19 @@ fn test_capture_param() -> izanami_test::Result<()> {
             })?
             .build(),
     )?;
+    let mut client = server.client().build()?;
 
-    let response = server.perform(Request::get("/42").body(())?)?;
+    let response = client.request(
+        Request::get("/42") //
+            .body(())?,
+    )?;
     assert_eq!(response.status(), 200);
-    assert_eq!(response.body().to_utf8()?, "id=42");
+    assert_eq!(response.send()?.to_utf8()?, "id=42");
 
-    let response = server.perform(Request::get("/fox").body(())?)?;
+    let response = client.request(
+        Request::get("/fox") //
+            .body(())?,
+    )?;
     assert_eq!(response.status(), 404);
 
     Ok(())

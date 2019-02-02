@@ -5,7 +5,7 @@ edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ubnt-intrepid/izanami.git"
-description = "The *basic* utility for testing HTTP services."
+description = "The basic utility for testing HTTP services."
 publish = false
 
 [dependencies]

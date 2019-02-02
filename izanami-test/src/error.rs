@@ -1,11 +1,18 @@
 use std::fmt;
 
+pub(crate) type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 #[derive(Debug)]
 pub struct Error {
     compat: Compat,
 }
 
 impl Error {
+    pub(crate) fn from_boxed_compat(err: impl Into<BoxedStdError>) -> Self {
+        failure::Error::from_boxed_compat(err.into()) //
+            .into()
+    }
+
     pub fn compat(self) -> Compat {
         self.compat
     }
