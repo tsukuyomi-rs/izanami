@@ -12,13 +12,11 @@
 
 pub mod client;
 mod error;
-mod output;
 pub mod runtime;
 mod server;
 pub mod service;
 
 pub use crate::{
     error::{Error, Result},
-    output::Output,
     server::Server,
 };

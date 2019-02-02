@@ -41,14 +41,16 @@ impl<Bd> Service<Request<Bd>> for Echo {
 #[test]
 fn threadpool_test_server() -> izanami_test::Result<()> {
     let mut server = Server::new(Echo)?;
-    let mut client = server.client().build()?;
+    let mut client = server.client()?;
 
-    let response = client.request(
+    let response = client.respond(
         Request::get("/") //
             .body(())?,
     )?;
     assert_eq!(response.status(), 200);
-    assert_eq!(response.send()?.to_utf8()?, "hello");
+
+    let body = response.send_body()?;
+    assert_eq!(body.to_utf8()?, "hello");
 
     Ok(())
 }
@@ -56,14 +58,16 @@ fn threadpool_test_server() -> izanami_test::Result<()> {
 #[test]
 fn singlethread_test_server() -> izanami_test::Result<()> {
     let mut server = Server::new_current_thread(Echo)?;
-    let mut client = server.client().build()?;
+    let mut client = server.client()?;
 
-    let response = client.request(
+    let response = client.respond(
         Request::get("/") //
             .body(())?,
     )?;
     assert_eq!(response.status(), 200);
-    assert_eq!(response.send()?.to_utf8()?, "hello");
+
+    let body = response.send_body()?;
+    assert_eq!(body.to_utf8()?, "hello");
 
     Ok(())
 }

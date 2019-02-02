@@ -1,16 +1,12 @@
 use {
     crate::{
+        client::{ResponseData, SendResponseBody},
         error::BoxedStdError,
-        output::Output,
-        service::{MakeTestService, ResponseBody, TestService},
+        service::{MakeTestService, TestService},
     },
-    bytes::{Buf, Bytes},
-    futures::{Async, Future, Poll},
+    futures::Future,
     http::Response,
-    std::{
-        mem,
-        panic::{resume_unwind, AssertUnwindSafe},
-    },
+    std::panic::{resume_unwind, AssertUnwindSafe},
 };
 
 /// A trait that abstracts the runtime for executing asynchronous computations
@@ -33,7 +29,10 @@ where
         future: <S::Service as TestService>::Future,
     ) -> crate::Result<Response<S::ResponseBody>>;
 
-    fn receive_body(&mut self, body: S::ResponseBody) -> crate::Result<Output>;
+    fn send_response_body(
+        &mut self,
+        body: SendResponseBody<S::ResponseBody>,
+    ) -> crate::Result<ResponseData>;
 
     fn shutdown(self);
 }
@@ -104,8 +103,11 @@ where
         self.block_on(future)
     }
 
-    fn receive_body(&mut self, body: S::ResponseBody) -> crate::Result<Output> {
-        self.block_on(Receive::new(body))
+    fn send_response_body(
+        &mut self,
+        body: SendResponseBody<S::ResponseBody>,
+    ) -> crate::Result<ResponseData> {
+        self.block_on(body)
     }
 
     fn shutdown(self) {
@@ -154,63 +156,14 @@ where
         self.block_on(future)
     }
 
-    fn receive_body(&mut self, body: S::ResponseBody) -> crate::Result<Output> {
-        self.block_on(Receive::new(body))
+    fn send_response_body(
+        &mut self,
+        body: SendResponseBody<S::ResponseBody>,
+    ) -> crate::Result<ResponseData> {
+        self.block_on(body)
     }
 
     fn shutdown(mut self) {
         self.runtime.run().unwrap();
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct Receive<Bd> {
-    state: ReceiveState<Bd>,
-}
-
-#[allow(missing_debug_implementations)]
-enum ReceiveState<Bd> {
-    Init(Option<Bd>),
-    InFlight { body: Bd, chunks: Vec<Bytes> },
-}
-
-impl<Bd> Receive<Bd>
-where
-    Bd: ResponseBody,
-{
-    fn new(body: Bd) -> Self {
-        Self {
-            state: ReceiveState::Init(Some(body)),
-        }
-    }
-}
-
-impl<Bd> Future for Receive<Bd>
-where
-    Bd: ResponseBody,
-{
-    type Item = Output;
-    type Error = Bd::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            self.state = match self.state {
-                ReceiveState::Init(ref mut body) => ReceiveState::InFlight {
-                    body: body.take().expect("unexpected condition"),
-                    chunks: vec![],
-                },
-                ReceiveState::InFlight {
-                    ref mut body,
-                    ref mut chunks,
-                } => {
-                    while let Some(chunk) = futures::try_ready!(body.poll_buf()) {
-                        chunks.push(chunk.collect());
-                    }
-                    return Ok(Async::Ready(Output {
-                        chunks: mem::replace(chunks, vec![]),
-                    }));
-                }
-            }
-        }
     }
 }
