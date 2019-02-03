@@ -5,14 +5,8 @@ use {
         service::{MakeTestService, MockRequestBody, ResponseBody, TestService},
     },
     bytes::{Buf, Bytes},
-    cookie::Cookie,
     futures::{Async, Future, Poll},
-    http::{
-        header::{COOKIE, SET_COOKIE},
-        Request, Response,
-    },
-    izanami_util::RemoteAddr,
-    std::collections::HashMap,
+    http::{Request, Response},
     std::{borrow::Cow, str},
 };
 
@@ -25,7 +19,6 @@ where
 {
     service: S::Service,
     server: &'a mut Server<S, Rt>,
-    cookies: HashMap<String, String>,
 }
 
 impl<'a, S, Rt> Client<'a, S, Rt>
@@ -34,25 +27,7 @@ where
     Rt: Runtime<S>,
 {
     pub(crate) fn new(server: &'a mut Server<S, Rt>, service: S::Service) -> Self {
-        Client {
-            server,
-            service,
-            cookies: HashMap::new(),
-        }
-    }
-
-    /// Returns the value of Cookie entry with the specified name stored on this server.
-    ///
-    /// It returns a `None` if the specific Cookie is missing or Cookie saving is disabled.
-    pub fn cookie(&self, name: &str) -> Option<&str> {
-        self.cookies.get(name).map(|s| s.as_str())
-    }
-
-    /// Registers a Cookie entry with the specified name and value.
-    pub fn set_cookie(&mut self, name: &str, value: String) {
-        if self.server.cookie_enabled() {
-            self.cookies.insert(name.to_owned(), value);
-        }
+        Client { server, service }
     }
 
     /// Applies an HTTP request to this client and await its response.
@@ -63,54 +38,17 @@ where
     where
         Bd: Into<MockRequestBody>,
     {
-        let mut request = request.map(Into::into);
-        self.prepare_request(&mut request)?;
+        let request = request.map(Into::into);
 
         let response = {
             let (_, runtime) = self.server.get_mut();
             runtime.call(self.service.call(request))?
         };
-        self.after_respond(&response)?;
 
         Ok(AwaitResponse {
             response,
             client: self,
         })
-    }
-
-    fn prepare_request<T>(&self, request: &mut Request<T>) -> crate::Result<()> {
-        if request.extensions().get::<RemoteAddr>().is_none() {
-            request
-                .extensions_mut()
-                .insert(self.server.remote_addr().clone());
-        }
-
-        if self.server.cookie_enabled() {
-            for (k, v) in &self.cookies {
-                let cookie = Cookie::new(k.to_owned(), v.to_owned())
-                    .to_string()
-                    .parse()?;
-                request.headers_mut().append(COOKIE, cookie);
-            }
-        }
-
-        Ok(())
-    }
-
-    fn after_respond<T>(&mut self, response: &Response<T>) -> crate::Result<()> {
-        if self.server.cookie_enabled() {
-            for set_cookie in response.headers().get_all(SET_COOKIE) {
-                let cookie = Cookie::parse_encoded(set_cookie.to_str()?)?;
-                if cookie.value().is_empty() {
-                    self.cookies.remove(cookie.name());
-                } else {
-                    self.cookies
-                        .insert(cookie.name().to_owned(), cookie.value().to_owned());
-                }
-            }
-        }
-
-        Ok(())
     }
 }
 

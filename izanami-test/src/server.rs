@@ -12,7 +12,6 @@ use {
 pub struct Server<S, Rt> {
     make_service: S,
     runtime: Rt,
-    cookie_enabled: bool,
     remote_addr: RemoteAddr,
 }
 
@@ -48,7 +47,6 @@ where
         Self {
             make_service,
             runtime,
-            cookie_enabled: false,
             remote_addr: RemoteAddr::tcp(([127, 0, 0, 1], 12345).into()),
         }
     }
@@ -71,17 +69,6 @@ where
     /// Returns a mutable reference to the remote address associated with this server.
     pub fn remote_addr_mut(&mut self) -> &mut RemoteAddr {
         &mut self.remote_addr
-    }
-
-    /// Sets whether to save the Cookie entries or not.
-    ///
-    /// By default, the Cookie saving is disabled.
-    pub fn enable_cookies(&mut self, value: bool) {
-        self.cookie_enabled = value;
-    }
-
-    pub(crate) fn cookie_enabled(&self) -> bool {
-        self.cookie_enabled
     }
 
     /// Create a `Client` associated with this server.
