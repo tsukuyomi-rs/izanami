@@ -10,7 +10,7 @@
 //! use {
 //!     http::{Request, Response},
 //!     izanami_service::MakeService,
-//!     izanami_test::Server,
+//!     izanami_test::{Server, runtime::Awaitable},
 //! };
 //! # use {
 //! #   izanami_service::Service,
@@ -18,6 +18,7 @@
 //! # };
 //!
 //! # fn test_echo() -> izanami_test::Result<()> {
+//! # izanami_test::runtime::with_default(|rt| {
 //! // the target service factory to be tested.
 //! let make_service = {
 //!     struct Echo(());
@@ -45,26 +46,29 @@
 //! // create a `Server`, that contains the specified
 //! // service factory and a runtime for driving the inner
 //! // asynchronous tasks.
-//! let mut server = Server::new(make_service)?;
+//! let mut server = Server::new(make_service);
 //!
 //! // create a `Client` to test an established connection
 //! // with the peer.
-//! let mut client = server.client()?;
+//! let mut client = server.client().wait(rt)?;
 //!
 //! // applies an HTTP request to the client and await
 //! // its response.
 //! //
 //! // the method simulates the behavior of service until
 //! // just before starting to send the response body.
-//! let response = client.respond(
-//!     Request::get("/").body(())?
-//! )?;
+//! let response = client
+//!     .respond(
+//!         Request::get("/").body(())?
+//!     )
+//!     .wait(rt)?;
 //! assert_eq!(response.status(), 200);
 //!
 //! // drive the response body and await its result.
-//! let body = response.send_body()?;
+//! let body = response.send_body().wait(rt)?;
 //! assert_eq!(body.to_utf8()?, "hello");
 //! # Ok(())
+//! # })
 //! # }
 //! # fn main() {}
 //! ```

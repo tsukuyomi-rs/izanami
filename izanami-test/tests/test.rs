@@ -1,7 +1,7 @@
 use {
     http::{Request, Response},
     izanami_service::{MakeService, Service},
-    izanami_test::Server,
+    izanami_test::{runtime::Awaitable, Server},
     std::io,
 };
 
@@ -40,34 +40,42 @@ impl<Bd> Service<Request<Bd>> for Echo {
 
 #[test]
 fn threadpool_test_server() -> izanami_test::Result<()> {
-    let mut server = Server::new(Echo)?;
-    let mut client = server.client()?;
+    izanami_test::runtime::with_default(|rt| {
+        let mut server = Server::new(Echo);
+        let mut client = server.client().wait(rt)?;
 
-    let response = client.respond(
-        Request::get("/") //
-            .body(())?,
-    )?;
-    assert_eq!(response.status(), 200);
+        let response = client
+            .respond(
+                Request::get("/") //
+                    .body(())?,
+            )
+            .wait(rt)?;
+        assert_eq!(response.status(), 200);
 
-    let body = response.send_body()?;
-    assert_eq!(body.to_utf8()?, "hello");
+        let body = response.send_body().wait(rt)?;
+        assert_eq!(body.to_utf8()?, "hello");
 
-    Ok(())
+        Ok(())
+    })
 }
 
 #[test]
 fn singlethread_test_server() -> izanami_test::Result<()> {
-    let mut server = Server::new_current_thread(Echo)?;
-    let mut client = server.client()?;
+    izanami_test::runtime::with_current_thread(|rt| {
+        let mut server = Server::new(Echo);
+        let mut client = server.client().wait(rt)?;
 
-    let response = client.respond(
-        Request::get("/") //
-            .body(())?,
-    )?;
-    assert_eq!(response.status(), 200);
+        let response = client
+            .respond(
+                Request::get("/") //
+                    .body(())?,
+            )
+            .wait(rt)?;
+        assert_eq!(response.status(), 200);
 
-    let body = response.send_body()?;
-    assert_eq!(body.to_utf8()?, "hello");
+        let body = response.send_body().wait(rt)?;
+        assert_eq!(body.to_utf8()?, "hello");
 
-    Ok(())
+        Ok(())
+    })
 }
