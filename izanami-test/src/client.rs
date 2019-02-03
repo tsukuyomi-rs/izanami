@@ -2,7 +2,10 @@ use {
     crate::{
         runtime::Runtime,
         server::Server,
-        service::{MakeTestService, MockRequestBody, ResponseBody, TestService},
+        service::{
+            imp::{ResponseBody, TestService},
+            MakeTestService, MockRequestBody,
+        },
     },
     bytes::{Buf, Bytes},
     futures::{Async, Future, Poll},

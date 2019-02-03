@@ -180,91 +180,115 @@ impl<'a> TestContext<'a> {
 }
 
 /// A trait that abstracts the service factory used by the test server.
-pub trait MakeTestService {
-    type ResponseBody: ResponseBody;
-    type Error: Into<BoxedStdError>;
-    type Service: TestService<ResponseBody = Self::ResponseBody, Error = Self::Error>;
-    type MakeError: Into<BoxedStdError>;
-    type Future: Future<Item = Self::Service, Error = Self::MakeError>;
+pub trait MakeTestService: self::imp::MakeTestServiceImpl {}
 
-    fn make_service(&self, cx: TestContext<'_>) -> Self::Future;
-}
+pub(crate) mod imp {
+    use super::*;
 
-impl<S, Bd, SvcErr, Svc, MkErr, Fut> MakeTestService for S
-where
-    S: for<'a> MakeService<
-        TestContext<'a>,
-        Request<MockRequestBody>,
-        Response = Response<Bd>,
-        Error = SvcErr,
-        Service = Svc,
-        MakeError = MkErr,
-        Future = Fut,
-    >,
-    Bd: ResponseBody,
-    Svc: Service<Request<MockRequestBody>, Response = Response<Bd>, Error = SvcErr>,
-    SvcErr: Into<BoxedStdError>,
-    MkErr: Into<BoxedStdError>,
-    Fut: Future<Item = Svc, Error = MkErr>,
-{
-    type ResponseBody = Bd;
-    type Error = SvcErr;
-    type Service = Svc;
-    type MakeError = MkErr;
-    type Future = Fut;
+    pub trait MakeTestServiceImpl {
+        type ResponseBody: ResponseBody;
+        type Error: Into<BoxedStdError>;
+        type Service: TestService<ResponseBody = Self::ResponseBody, Error = Self::Error>;
+        type MakeError: Into<BoxedStdError>;
+        type Future: Future<Item = Self::Service, Error = Self::MakeError>;
 
-    fn make_service(&self, cx: TestContext<'_>) -> Self::Future {
-        MakeService::make_service(self, cx)
-    }
-}
-
-/// A trait that abstracts the service used by the test server.
-pub trait TestService {
-    type ResponseBody: ResponseBody;
-    type Error: Into<BoxedStdError>;
-    type Future: Future<Item = Response<Self::ResponseBody>, Error = Self::Error>;
-
-    fn call(&mut self, request: Request<MockRequestBody>) -> Self::Future;
-}
-
-impl<S, Bd> TestService for S
-where
-    S: Service<Request<MockRequestBody>, Response = Response<Bd>>,
-    S::Error: Into<BoxedStdError>,
-    Bd: ResponseBody,
-{
-    type ResponseBody = Bd;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn call(&mut self, request: Request<MockRequestBody>) -> Self::Future {
-        Service::call(self, request)
-    }
-}
-
-/// Trait that abstracts the type of response body from `TestService`s.
-pub trait ResponseBody {
-    type Item: Buf;
-    type Error: Into<BoxedStdError>;
-
-    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error>;
-
-    fn size_hint(&self) -> SizeHint;
-}
-
-impl<T> ResponseBody for T
-where
-    T: BufStream,
-    T::Error: Into<BoxedStdError>,
-{
-    type Item = T::Item;
-    type Error = T::Error;
-
-    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        BufStream::poll_buf(self)
+        fn make_service(&self, cx: TestContext<'_>) -> Self::Future;
     }
 
-    fn size_hint(&self) -> SizeHint {
-        BufStream::size_hint(self)
+    impl<S, Bd, SvcErr, Svc, MkErr, Fut> MakeTestService for S
+    where
+        S: for<'a> MakeService<
+            TestContext<'a>,
+            Request<MockRequestBody>,
+            Response = Response<Bd>,
+            Error = SvcErr,
+            Service = Svc,
+            MakeError = MkErr,
+            Future = Fut,
+        >,
+        Bd: ResponseBody,
+        Svc: Service<Request<MockRequestBody>, Response = Response<Bd>, Error = SvcErr>,
+        SvcErr: Into<BoxedStdError>,
+        MkErr: Into<BoxedStdError>,
+        Fut: Future<Item = Svc, Error = MkErr>,
+    {
+    }
+
+    impl<S, Bd, SvcErr, Svc, MkErr, Fut> MakeTestServiceImpl for S
+    where
+        S: for<'a> MakeService<
+            TestContext<'a>,
+            Request<MockRequestBody>,
+            Response = Response<Bd>,
+            Error = SvcErr,
+            Service = Svc,
+            MakeError = MkErr,
+            Future = Fut,
+        >,
+        Bd: ResponseBody,
+        Svc: Service<Request<MockRequestBody>, Response = Response<Bd>, Error = SvcErr>,
+        SvcErr: Into<BoxedStdError>,
+        MkErr: Into<BoxedStdError>,
+        Fut: Future<Item = Svc, Error = MkErr>,
+    {
+        type ResponseBody = Bd;
+        type Error = SvcErr;
+        type Service = Svc;
+        type MakeError = MkErr;
+        type Future = Fut;
+
+        fn make_service(&self, cx: TestContext<'_>) -> Self::Future {
+            MakeService::make_service(self, cx)
+        }
+    }
+
+    #[doc(hidden)]
+    pub trait TestService {
+        type ResponseBody: ResponseBody;
+        type Error: Into<BoxedStdError>;
+        type Future: Future<Item = Response<Self::ResponseBody>, Error = Self::Error>;
+
+        fn call(&mut self, request: Request<MockRequestBody>) -> Self::Future;
+    }
+
+    impl<S, Bd> TestService for S
+    where
+        S: Service<Request<MockRequestBody>, Response = Response<Bd>>,
+        S::Error: Into<BoxedStdError>,
+        Bd: ResponseBody,
+    {
+        type ResponseBody = Bd;
+        type Error = S::Error;
+        type Future = S::Future;
+
+        fn call(&mut self, request: Request<MockRequestBody>) -> Self::Future {
+            Service::call(self, request)
+        }
+    }
+
+    pub trait ResponseBody {
+        type Item: Buf;
+        type Error: Into<BoxedStdError>;
+
+        fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error>;
+
+        fn size_hint(&self) -> SizeHint;
+    }
+
+    impl<T> ResponseBody for T
+    where
+        T: BufStream,
+        T::Error: Into<BoxedStdError>,
+    {
+        type Item = T::Item;
+        type Error = T::Error;
+
+        fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+            BufStream::poll_buf(self)
+        }
+
+        fn size_hint(&self) -> SizeHint {
+            BufStream::size_hint(self)
+        }
     }
 }
