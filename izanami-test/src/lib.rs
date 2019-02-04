@@ -10,7 +10,7 @@
 //! use {
 //!     http::{Request, Response},
 //!     izanami_service::MakeService,
-//!     izanami_test::{Server, runtime::Awaitable},
+//!     izanami_test::{Server, AsyncResult},
 //! };
 //! # use {
 //! #   izanami_service::Service,
@@ -18,7 +18,7 @@
 //! # };
 //!
 //! # fn test_echo() -> izanami_test::Result<()> {
-//! # izanami_test::runtime::with_default(|rt| {
+//! # izanami_test::with_default(|cx| {
 //! // the target service factory to be tested.
 //! let make_service = {
 //!     struct Echo(());
@@ -50,7 +50,7 @@
 //!
 //! // create a `Client` to test an established connection
 //! // with the peer.
-//! let mut client = server.client().wait(rt)?;
+//! let mut client = server.client().wait(cx)?;
 //!
 //! // applies an HTTP request to the client and await
 //! // its response.
@@ -61,11 +61,11 @@
 //!     .respond(
 //!         Request::get("/").body(())?
 //!     )
-//!     .wait(rt)?;
+//!     .wait(cx)?;
 //! assert_eq!(response.status(), 200);
 //!
 //! // drive the response body and await its result.
-//! let body = response.send_body().wait(rt)?;
+//! let body = response.send_body().wait(cx)?;
 //! assert_eq!(body.to_utf8()?, "hello");
 //! # Ok(())
 //! # })
@@ -83,13 +83,18 @@
 )]
 #![forbid(clippy::unimplemented)]
 
+mod async_result;
 pub mod client;
+mod context;
 mod error;
-pub mod runtime;
+mod runtime;
 mod server;
 pub mod service;
 
 pub use crate::{
+    async_result::AsyncResult,
+    context::Context,
     error::{Error, Result},
+    runtime::{with_current_thread, with_default, Runtime},
     server::Server,
 };

@@ -1,6 +1,7 @@
 use {
     crate::{
-        runtime::{Awaitable, Runtime},
+        async_result::AsyncResult,
+        runtime::Runtime,
         server::Server,
         service::{
             imp::{ResponseBody, TestService},
@@ -32,33 +33,16 @@ where
     pub fn respond<Rt>(
         &mut self,
         request: Request<impl Into<MockRequestBody>>,
-    ) -> impl Awaitable<Rt, Ok = AwaitResponse<S>, Error = crate::Error>
+    ) -> impl AsyncResult<Rt, Output = AwaitResponse<S>>
     where
         Rt: Runtime<<S::Service as TestService>::Future>,
     {
-        #[allow(missing_debug_implementations)]
-        struct Respond<S: MakeTestService> {
-            future: <S::Service as TestService>::Future,
-        }
-
-        impl<S, Rt> Awaitable<Rt> for Respond<S>
-        where
-            S: MakeTestService,
-            Rt: Runtime<<S::Service as TestService>::Future>,
-        {
-            type Ok = AwaitResponse<S>;
-            type Error = crate::Error;
-
-            fn wait(self, rt: &mut Rt) -> Result<Self::Ok, Self::Error> {
-                Ok(AwaitResponse {
-                    response: rt.block_on(self.future)?,
-                })
-            }
-        }
-
-        Respond {
-            future: self.service.call(request.map(Into::into)),
-        }
+        let future = self.service.call(request.map(Into::into));
+        crate::async_result::wait_fn(move |cx| {
+            Ok(AwaitResponse {
+                response: cx.block_on(future)?,
+            })
+        })
     }
 }
 
@@ -98,33 +82,13 @@ where
     }
 
     /// Converts the internal response body into a `Future` and awaits its result.
-    pub fn send_body<Rt>(self) -> impl Awaitable<Rt, Ok = ResponseData, Error = crate::Error>
+    pub fn send_body<Rt>(self) -> impl AsyncResult<Rt, Output = ResponseData>
     where
         Rt: Runtime<SendResponseBody<S::ResponseBody>>,
     {
-        #[allow(missing_debug_implementations)]
-        struct SendBody<S: MakeTestService> {
-            body: S::ResponseBody,
-        }
-
-        impl<S, Rt> Awaitable<Rt> for SendBody<S>
-        where
-            S: MakeTestService,
-            Rt: Runtime<SendResponseBody<S::ResponseBody>>,
-        {
-            type Ok = ResponseData;
-            type Error = crate::Error;
-
-            fn wait(self, rt: &mut Rt) -> Result<Self::Ok, Self::Error> {
-                let future = SendResponseBody {
-                    state: SendResponseBodyState::Init(Some(self.body)),
-                };
-                rt.block_on(future)
-            }
-        }
-
-        SendBody::<S> {
-            body: self.response.into_body(),
+        let body = self.response.into_body();
+        SendResponseBody {
+            state: SendResponseBodyState::Init(Some(body)),
         }
     }
 }

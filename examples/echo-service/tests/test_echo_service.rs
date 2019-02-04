@@ -1,24 +1,25 @@
 use {
     echo_service::Echo,
     http::{Request, Response},
-    izanami_test::{runtime::Awaitable, Server},
+    izanami_test::{AsyncResult, Server},
 };
 
 #[test]
 fn test_empty_routes() -> izanami_test::Result<()> {
-    izanami_test::runtime::with_default(|rt| {
+    izanami_test::with_default(|cx| {
         let mut server = Server::new(
             Echo::builder() //
                 .build(),
         );
-        let mut client = server.client().wait(rt)?;
+
+        let mut client = server.client().wait(cx)?;
 
         let response = client
             .respond(
                 Request::get("/") //
                     .body(())?,
             )
-            .wait(rt)?;
+            .wait(cx)?;
         assert_eq!(response.status(), 404);
         Ok(())
     })
@@ -26,7 +27,7 @@ fn test_empty_routes() -> izanami_test::Result<()> {
 
 #[test]
 fn test_single_route() -> izanami_test::Result<()> {
-    izanami_test::runtime::with_default(|rt| {
+    izanami_test::with_default(|cx| {
         let mut server = Server::new(
             Echo::builder() //
                 .add_route("/", |_| {
@@ -36,17 +37,18 @@ fn test_single_route() -> izanami_test::Result<()> {
                 })?
                 .build(),
         );
-        let mut client = server.client().wait(rt)?;
+
+        let mut client = server.client().wait(cx)?;
 
         let response = client
             .respond(
                 Request::get("/") //
                     .body(())?,
             )
-            .wait(rt)?;
+            .wait(cx)?;
         assert_eq!(response.status(), 200);
 
-        let body = response.send_body().wait(rt)?;
+        let body = response.send_body().wait(cx)?;
         assert_eq!(body.to_utf8()?, "hello");
 
         Ok(())
@@ -55,7 +57,7 @@ fn test_single_route() -> izanami_test::Result<()> {
 
 #[test]
 fn test_capture_param() -> izanami_test::Result<()> {
-    izanami_test::runtime::with_default(|rt| {
+    izanami_test::with_default(|cx| {
         let mut server = Server::new(
             Echo::builder() //
                 .add_route("/([0-9]+)", |cx| {
@@ -76,23 +78,26 @@ fn test_capture_param() -> izanami_test::Result<()> {
                 })?
                 .build(),
         );
-        let mut client = server.client().wait(rt)?;
+
+        let mut client = server.client().wait(cx)?;
 
         let response = client
             .respond(
                 Request::get("/42") //
                     .body(())?,
             )
-            .wait(rt)?;
+            .wait(cx)?;
         assert_eq!(response.status(), 200);
-        assert_eq!(response.send_body().wait(rt)?.to_utf8()?, "id=42");
+
+        let body = response.send_body().wait(cx)?;
+        assert_eq!(body.to_utf8()?, "id=42");
 
         let response = client
             .respond(
                 Request::get("/fox") //
                     .body(())?,
             )
-            .wait(rt)?;
+            .wait(cx)?;
         assert_eq!(response.status(), 404);
 
         Ok(())
