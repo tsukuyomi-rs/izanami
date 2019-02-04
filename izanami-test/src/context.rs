@@ -18,7 +18,9 @@ impl<'a, Rt: ?Sized> Context<'a, Rt> {
         }
     }
 
-    pub fn reborrow(&mut self) -> Context<'_, Rt> {
+    /// Reborrows the internal mutable references and create a new instance of `Context`
+    /// with the same configuration as itself.
+    pub fn duplicate(&mut self) -> Context<'_, Rt> {
         Context {
             runtime: &mut *self.runtime,
             timeout: self.timeout,

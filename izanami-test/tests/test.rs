@@ -129,7 +129,10 @@ fn test_timeout() -> izanami_test::Result {
                 Request::get("/") //
                     .body(())?,
             )
-            .wait(cx.reborrow().timeout(Duration::from_millis(1)));
+            .wait(
+                cx.duplicate() //
+                    .timeout(Duration::from_millis(1)),
+            );
         assert!(result.is_err());
 
         Ok(())

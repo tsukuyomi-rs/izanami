@@ -33,60 +33,61 @@ where
     pub fn respond<Rt>(
         &mut self,
         request: Request<impl Into<MockRequestBody>>,
-    ) -> impl AsyncResult<Rt, Output = AwaitResponse<S>>
+    ) -> impl AsyncResult<Rt, Output = ClientResponse<S>>
     where
         Rt: Runtime<<S::Service as TestService>::Future>,
     {
         let future = self.service.call(request.map(Into::into));
         crate::async_result::wait_fn(move |cx| {
-            Ok(AwaitResponse {
-                response: cx.block_on(future)?,
+            Ok(ClientResponse {
+                inner: cx.block_on(future)?,
             })
         })
     }
 }
 
-/// A type representing the result when the `Future`
-/// returned from `S::Service` is completed.
-#[allow(missing_debug_implementations)]
-pub struct AwaitResponse<S: MakeTestService> {
-    response: Response<S::ResponseBody>,
+/// A type that contains the result at the time when `S::Future` is resolved.
+#[derive(Debug)]
+pub struct ClientResponse<S: MakeTestService> {
+    inner: Response<S::ResponseBody>,
 }
 
-impl<S> std::ops::Deref for AwaitResponse<S>
+impl<S> std::ops::Deref for ClientResponse<S>
 where
     S: MakeTestService,
 {
     type Target = Response<S::ResponseBody>;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
-        &self.response
+        &self.inner
     }
 }
 
-impl<S> std::ops::DerefMut for AwaitResponse<S>
+impl<S> std::ops::DerefMut for ClientResponse<S>
 where
     S: MakeTestService,
 {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.response
+        &mut self.inner
     }
 }
 
-impl<S> AwaitResponse<S>
+impl<S> ClientResponse<S>
 where
     S: MakeTestService,
 {
-    pub fn into_response(self) -> Response<S::ResponseBody> {
-        self.response
+    pub fn into_inner(self) -> Response<S::ResponseBody> {
+        self.inner
     }
 
-    /// Converts the internal response body into a `Future` and awaits its result.
+    /// Convert itself into an instance of `AsyncResult` resolved as `ResponseData`.
     pub fn send_body<Rt>(self) -> impl AsyncResult<Rt, Output = ResponseData>
     where
         Rt: Runtime<SendResponseBody<S::ResponseBody>>,
     {
-        let body = self.response.into_body();
+        let body = self.inner.into_body();
         SendResponseBody {
             state: SendResponseBodyState::Init(Some(body)),
         }
