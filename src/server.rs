@@ -199,13 +199,37 @@ where
         }
     }
 
-    /// Starts an HTTP server using the specific `MakeService`.
+    /// Start this HTTP server with the specified service factory.
     pub fn start<S>(self, make_service: S) -> crate::Result<()>
     where
         S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
         B: Backend<T, S>,
     {
-        B::start(self.protocol, self.listener.incoming(), make_service)
+        B::start(
+            self.protocol, //
+            self.listener.incoming(),
+            make_service,
+            None,
+        )
+    }
+
+    /// Start this HTTP server with the specified service factory and shutdown signal.
+    pub fn start_with_graceful_shutdown<S, Sig>(
+        self,
+        make_service: S,
+        signal: Sig,
+    ) -> crate::Result<()>
+    where
+        S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
+        Sig: Future<Item = ()>,
+        B: Backend<T, S, Sig>,
+    {
+        B::start(
+            self.protocol,
+            self.listener.incoming(),
+            make_service,
+            Some(signal),
+        )
     }
 }
 
@@ -223,29 +247,33 @@ pub struct Threadpool(Never);
 pub struct CurrentThread(Never);
 
 /// A trait for abstracting the process around executing the HTTP server.
-pub trait Backend<T, S>: self::imp::BackendImpl<T, S>
+pub trait Backend<T, S, Sig = futures::future::Empty<(), ()>>:
+    self::imp::BackendImpl<T, S, Sig>
 where
     T: Listener,
     S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
+    Sig: Future<Item = ()>,
 {
 }
 
 mod imp {
     use super::*;
 
-    pub trait BackendImpl<T, S>
+    pub trait BackendImpl<T, S, Sig>
     where
         T: Listener,
         S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
+        Sig: Future<Item = ()>,
     {
         fn start(
             protocol: Http, //
             incoming: T::Incoming,
             make_service: S,
+            shutdown_signal: Option<Sig>,
         ) -> crate::Result<()>;
     }
 
-    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> Backend<T, S> for Threadpool
+    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut, Sig> Backend<T, S, Sig> for Threadpool
     where
         T: Listener + 'static,
         T::Conn: Send + 'static,
@@ -274,10 +302,11 @@ mod imp {
         Bd: BufStream + Send + 'static,
         Bd::Item: Send,
         Bd::Error: Into<CritError>,
+        Sig: Future<Item = ()> + Send + 'static,
     {
     }
 
-    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> BackendImpl<T, S> for Threadpool
+    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut, Sig> BackendImpl<T, S, Sig> for Threadpool
     where
         T: Listener + 'static,
         T::Conn: Send + 'static,
@@ -306,21 +335,39 @@ mod imp {
         Bd: BufStream + Send + 'static,
         Bd::Item: Send,
         Bd::Error: Into<CritError>,
+        Sig: Future<Item = ()> + Send + 'static,
     {
-        fn start(protocol: Http, incoming: T::Incoming, make_service: S) -> crate::Result<()> {
+        fn start(
+            protocol: Http,
+            incoming: T::Incoming,
+            make_service: S,
+            shutdown_signal: Option<Sig>,
+        ) -> crate::Result<()> {
             let protocol = protocol.with_executor(tokio::executor::DefaultExecutor::current());
             let serve = hyper::server::Builder::new(incoming, protocol) //
                 .serve(LiftedMakeHttpService {
                     make_service,
                     _marker: PhantomData,
-                })
-                .map_err(|e| log::error!("server error: {}", e));
-            tokio::run(serve);
+                });
+
+            if let Some(shutdown_signal) = shutdown_signal {
+                tokio::run(
+                    serve
+                        .with_graceful_shutdown(shutdown_signal)
+                        .map_err(|e| log::error!("server error: {}", e)),
+                );
+            } else {
+                tokio::run(
+                    serve //
+                        .map_err(|e| log::error!("server error: {}", e)),
+                );
+            }
+
             Ok(())
         }
     }
 
-    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> Backend<T, S> for CurrentThread
+    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut, Sig> Backend<T, S, Sig> for CurrentThread
     where
         T: Listener + 'static,
         T::Conn: Send + 'static,
@@ -346,10 +393,11 @@ mod imp {
         Bd: BufStream + Send + 'static,
         Bd::Item: Send,
         Bd::Error: Into<CritError>,
+        Sig: Future<Item = ()> + 'static,
     {
     }
 
-    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut> BackendImpl<T, S> for CurrentThread
+    impl<T, S, Bd, SvcErr, Svc, MkErr, Fut, Sig> BackendImpl<T, S, Sig> for CurrentThread
     where
         T: Listener + 'static,
         T::Conn: Send + 'static,
@@ -375,18 +423,36 @@ mod imp {
         Bd: BufStream + Send + 'static,
         Bd::Item: Send,
         Bd::Error: Into<CritError>,
+        Sig: Future<Item = ()> + 'static,
     {
-        fn start(protocol: Http, incoming: T::Incoming, make_service: S) -> crate::Result<()> {
+        fn start(
+            protocol: Http,
+            incoming: T::Incoming,
+            make_service: S,
+            shutdown_signal: Option<Sig>,
+        ) -> crate::Result<()> {
             let protocol =
                 protocol.with_executor(tokio::runtime::current_thread::TaskExecutor::current());
+
             let serve = hyper::server::Builder::new(incoming, protocol) //
                 .serve(LiftedMakeHttpService {
                     make_service,
                     _marker: PhantomData,
-                })
-                .map_err(|e| log::error!("server error: {}", e));
+                });
 
-            tokio::runtime::current_thread::run(serve);
+            if let Some(shutdown_signal) = shutdown_signal {
+                tokio::runtime::current_thread::run(
+                    serve
+                        .with_graceful_shutdown(shutdown_signal)
+                        .map_err(|e| log::error!("server error: {}", e)),
+                );
+            } else {
+                tokio::runtime::current_thread::run(
+                    serve //
+                        .map_err(|e| log::error!("server error: {}", e)),
+                );
+            }
+
             Ok(())
         }
     }
