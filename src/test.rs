@@ -2,31 +2,24 @@ use {
     crate::{
         server::{
             conn::Listener,
-            imp::{BackendImpl, LiftedMakeHttpService},
-            Backend, MakeServiceContext, RequestBody,
+            imp::{BackendImpl, ServerConfig},
+            Backend, MakeServiceContext, RequestBody, Serve, Server,
         },
         CritError,
     },
-    futures::sync::oneshot::{self, Receiver, Sender},
     futures::Future,
     http::{Request, Response},
-    hyper::{
-        client::{
-            connect::{Connect, Connected, Destination},
-            Client,
-        },
-        server::conn::Http,
+    hyper::client::{
+        connect::{Connect, Connected, Destination},
+        Client,
     },
     izanami_service::{MakeService, Service},
     izanami_util::buf_stream::BufStream,
-    std::{
-        io,
-        net::SocketAddr,
-        thread::{self, JoinHandle},
-    },
+    std::{io, net::SocketAddr},
     tokio::{
         net::{TcpListener, TcpStream},
-        runtime::current_thread::Runtime,
+        runtime::Runtime,
+        sync::oneshot,
     },
 };
 
@@ -35,7 +28,9 @@ use {
 /// This backend launches the HTTP server using `tokio::runtime::Runtime`
 /// customized for testing purposes.
 #[derive(Debug)]
-pub struct TestBackend(());
+pub struct TestBackend {
+    runtime: tokio::runtime::Runtime,
+}
 
 impl<T, S, Bd, SvcErr, Svc, MkErr, Fut, Sig> Backend<T, S, Sig> for TestBackend
 where
@@ -101,84 +96,85 @@ where
     Bd::Error: Into<CritError>,
     Sig: Future<Item = ()> + Send + 'static,
 {
-    fn start(
-        protocol: Http,
-        incoming: T::Incoming,
-        make_service: S,
-        shutdown_signal: Option<Sig>,
-    ) -> crate::Result<()> {
-        let protocol = protocol.with_executor(tokio::executor::DefaultExecutor::current());
+    fn new() -> crate::Result<Self> {
+        Ok(Self {
+            runtime: {
+                let mut builder = tokio::runtime::Builder::new();
+                builder.name_prefix("izanami");
+                builder.core_threads(1);
+                builder.blocking_threads(1);
+                builder.build()?
+            },
+        })
+    }
+
+    fn spawn(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()> {
+        let incoming = config.listener.incoming();
+        let protocol = config
+            .protocol
+            .with_executor(tokio::executor::DefaultExecutor::current());
         let serve = hyper::server::Builder::new(incoming, protocol) //
-            .serve(LiftedMakeHttpService::new(make_service));
+            .serve(config.make_service);
 
-        let mut runtime = {
-            let mut builder = tokio::runtime::Builder::new();
-            builder.name_prefix("izanami");
-            builder.core_threads(1);
-            builder.blocking_threads(1);
-            builder.build()?
-        };
-
-        if let Some(shutdown_signal) = shutdown_signal {
-            runtime.spawn(
+        if let Some(shutdown_signal) = config.shutdown_signal {
+            self.runtime.spawn(
                 serve
                     .with_graceful_shutdown(shutdown_signal)
                     .map_err(|e| log::error!("server error: {}", e)),
             );
         } else {
-            runtime.spawn(
+            self.runtime.spawn(
                 serve //
                     .map_err(|e| log::error!("server error: {}", e)),
             );
         }
 
-        runtime.shutdown_on_idle().wait().unwrap();
+        Ok(())
+    }
 
+    fn shutdown(self) -> crate::Result<()> {
+        self.runtime.shutdown_on_idle().wait().unwrap();
         Ok(())
     }
 }
 
 /// An HTTP server for testing HTTP services.
 #[derive(Debug)]
-pub struct TestServer {
-    join_handle: JoinHandle<crate::Result<()>>,
-    shutdown_signal: Sender<()>,
+pub struct TestServer<S> {
+    serve: Serve<TestBackend, S, TcpListener, oneshot::Receiver<()>>,
+    shutdown_signal: oneshot::Sender<()>,
     local_addr: SocketAddr,
-    runtime: Runtime,
 }
 
-impl TestServer {
+impl<S> TestServer<S>
+where
+    S: for<'a> MakeService<MakeServiceContext<'a, TcpListener>, Request<RequestBody>>
+        + Send
+        + 'static,
+    TestBackend: Backend<TcpListener, S, oneshot::Receiver<()>>,
+{
     /// Create a `TestServer` using the specified service factory.
-    pub fn new<S>(make_service: S) -> crate::Result<Self>
-    where
-        S: for<'a> MakeService<MakeServiceContext<'a, TcpListener>, Request<RequestBody>>
-            + Send
-            + 'static,
-        TestBackend: Backend<TcpListener, S, Receiver<()>>,
-    {
+    pub fn new(make_service: S) -> crate::Result<Self> {
         let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
         let local_addr = listener.local_addr()?;
 
         let (tx, rx) = oneshot::channel();
-        let join_handle = thread::spawn(move || -> crate::Result<()> {
-            crate::Server::bind(listener)?
-                .backend::<TestBackend>()
-                .start_with_graceful_shutdown(make_service, rx)?;
-            Ok(())
-        });
+        let serve = Server::bind(listener)?
+            .backend::<TestBackend>()
+            .with_graceful_shutdown(rx)
+            .launch(make_service)?;
 
         Ok(Self {
-            join_handle,
+            serve,
             shutdown_signal: tx,
             local_addr,
-            runtime: Runtime::new()?,
         })
     }
 
     /// Create a `TestClient` for sending HTTP requests to the background server.
     pub fn client(&mut self) -> TestClient<'_> {
         TestClient {
-            runtime: &mut self.runtime,
+            runtime: &mut self.serve.get_mut().runtime,
             client: Client::builder() //
                 .build(TestConnector {
                     addr: self.local_addr,
@@ -191,10 +187,7 @@ impl TestServer {
         self.shutdown_signal
             .send(())
             .map_err(|_| failure::format_err!("failed to send shutdown signal"))?;
-        match self.join_handle.join() {
-            Ok(result) => result,
-            Err(err) => std::panic::resume_unwind(err),
-        }
+        self.serve.shutdown()
     }
 }
 

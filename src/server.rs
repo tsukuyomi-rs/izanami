@@ -121,9 +121,10 @@ where
 // ==== Server ====
 
 /// A simple HTTP server that wraps the `hyper`'s server implementation.
-pub struct Server<T, B = Threadpool> {
+pub struct Server<T, B = Threadpool, Sig = futures::future::Empty<(), ()>> {
     listener: T,
     protocol: Http,
+    shutdown_signal: Option<Sig>,
     _marker: PhantomData<B>,
 }
 
@@ -145,18 +146,19 @@ impl Server<()> {
     where
         T: MakeListener,
     {
-        let listener = listener.make_listener()?;
         Ok(Server {
-            listener,
+            listener: listener.make_listener()?,
             protocol: Http::new(),
+            shutdown_signal: None,
             _marker: PhantomData,
         })
     }
 }
 
-impl<T, B> Server<T, B>
+impl<T, B, Sig> Server<T, B, Sig>
 where
     T: Listener,
+    Sig: Future<Item = ()>,
 {
     /// Returns a reference to the inner listener.
     pub fn listener(&self) -> &T {
@@ -179,76 +181,118 @@ where
     }
 
     /// Sets the instance of `Acceptor` to the server.
-    pub fn acceptor<A>(self, acceptor: A) -> Server<WithAcceptor<T, A>, B>
+    pub fn acceptor<A>(self, acceptor: A) -> Server<WithAcceptor<T, A>, B, Sig>
     where
         A: Acceptor<T::Conn>,
     {
         Server {
             listener: WithAcceptor::new(self.listener, acceptor),
             protocol: self.protocol,
+            shutdown_signal: self.shutdown_signal,
             _marker: PhantomData,
         }
     }
 
-    pub(crate) fn backend<B2>(self) -> Server<T, B2> {
+    pub(crate) fn backend<B2>(self) -> Server<T, B2, Sig> {
         Server {
             listener: self.listener,
             protocol: self.protocol,
+            shutdown_signal: self.shutdown_signal,
             _marker: PhantomData,
         }
     }
 
     /// Switches the backend to `CurrentThread`.
-    pub fn current_thread(self) -> Server<T, CurrentThread> {
+    pub fn current_thread(self) -> Server<T, CurrentThread, Sig> {
         self.backend()
+    }
+
+    /// Set the value of shutdown signal.
+    pub fn with_graceful_shutdown<Sig2>(self, signal: Sig2) -> Server<T, B, Sig2>
+    where
+        Sig2: Future<Item = ()>,
+    {
+        Server {
+            listener: self.listener,
+            protocol: self.protocol,
+            shutdown_signal: Some(signal),
+            _marker: PhantomData,
+        }
     }
 
     /// Start this HTTP server with the specified service factory.
     pub fn start<S>(self, make_service: S) -> crate::Result<()>
     where
         S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
-        B: Backend<T, S>,
-    {
-        B::start(
-            self.protocol, //
-            self.listener.incoming(),
-            make_service,
-            None,
-        )
-    }
-
-    /// Start this HTTP server with the specified service factory and shutdown signal.
-    pub fn start_with_graceful_shutdown<S, Sig>(
-        self,
-        make_service: S,
-        signal: Sig,
-    ) -> crate::Result<()>
-    where
-        S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
-        Sig: Future<Item = ()>,
         B: Backend<T, S, Sig>,
     {
-        B::start(
-            self.protocol,
-            self.listener.incoming(),
-            make_service,
-            Some(signal),
-        )
+        self.launch(make_service)?.shutdown()
+    }
+
+    pub fn launch<S>(self, make_service: S) -> crate::Result<Serve<B, S, T, Sig>>
+    where
+        S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
+        B: Backend<T, S, Sig>,
+    {
+        let mut backend = B::new()?;
+
+        backend.spawn(imp::ServerConfig {
+            make_service: imp::LiftedMakeHttpService {
+                make_service,
+                _marker: PhantomData,
+            },
+            listener: self.listener,
+            protocol: self.protocol,
+            shutdown_signal: self.shutdown_signal,
+            _priv: (),
+        })?;
+
+        Ok(Serve {
+            backend,
+            _marker: PhantomData,
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct Serve<B, S, T, Sig> {
+    backend: B,
+    _marker: PhantomData<(S, T, Sig)>,
+}
+
+impl<B, S, T, Sig> Serve<B, S, T, Sig>
+where
+    B: Backend<T, S, Sig>,
+    S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
+    T: Listener,
+    Sig: Future<Item = ()>,
+{
+    pub fn get_ref(&self) -> &B {
+        &self.backend
+    }
+
+    pub fn get_mut(&mut self) -> &mut B {
+        &mut self.backend
+    }
+
+    pub fn shutdown(self) -> crate::Result<()> {
+        self.backend.shutdown()
     }
 }
 
 // ==== Backend ====
 
-#[allow(missing_debug_implementations)]
-enum Never {}
-
 /// A `Backend` indicating that the server uses the default Tokio runtime.
-#[allow(missing_debug_implementations)]
-pub struct Threadpool(Never);
+#[derive(Debug)]
+pub struct Threadpool {
+    runtime: tokio::runtime::Runtime,
+}
 
 /// A `Backend` indicating that the server uses the single-threaded Tokio runtime.
-#[allow(missing_debug_implementations)]
-pub struct CurrentThread(Never);
+#[derive(Debug)]
+pub struct CurrentThread {
+    runtime: tokio::runtime::current_thread::Runtime,
+}
 
 /// A trait for abstracting the process around executing the HTTP server.
 pub trait Backend<T, S, Sig = futures::future::Empty<(), ()>>:
@@ -263,18 +307,15 @@ where
 pub(crate) mod imp {
     use super::*;
 
-    pub trait BackendImpl<T, S, Sig>
+    pub trait BackendImpl<T, S, Sig>: Sized
     where
         T: Listener,
         S: for<'a> MakeService<MakeServiceContext<'a, T>, Request<RequestBody>>,
         Sig: Future<Item = ()>,
     {
-        fn start(
-            protocol: Http, //
-            incoming: T::Incoming,
-            make_service: S,
-            shutdown_signal: Option<Sig>,
-        ) -> crate::Result<()>;
+        fn new() -> crate::Result<Self>;
+        fn spawn(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()>;
+        fn shutdown(self) -> crate::Result<()>;
     }
 
     impl<T, S, Bd, SvcErr, Svc, MkErr, Fut, Sig> Backend<T, S, Sig> for Threadpool
@@ -341,29 +382,36 @@ pub(crate) mod imp {
         Bd::Error: Into<CritError>,
         Sig: Future<Item = ()> + Send + 'static,
     {
-        fn start(
-            protocol: Http,
-            incoming: T::Incoming,
-            make_service: S,
-            shutdown_signal: Option<Sig>,
-        ) -> crate::Result<()> {
-            let protocol = protocol.with_executor(tokio::executor::DefaultExecutor::current());
-            let serve = hyper::server::Builder::new(incoming, protocol) //
-                .serve(LiftedMakeHttpService::new(make_service));
+        fn new() -> crate::Result<Self> {
+            Ok(Self {
+                runtime: tokio::runtime::Runtime::new()?,
+            })
+        }
 
-            if let Some(shutdown_signal) = shutdown_signal {
-                tokio::run(
+        fn spawn(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()> {
+            let incoming = config.listener.incoming();
+            let protocol = config.protocol.with_executor(self.runtime.executor());
+
+            let serve = hyper::server::Builder::new(incoming, protocol) //
+                .serve(config.make_service);
+            if let Some(shutdown_signal) = config.shutdown_signal {
+                self.runtime.spawn(
                     serve
                         .with_graceful_shutdown(shutdown_signal)
                         .map_err(|e| log::error!("server error: {}", e)),
                 );
             } else {
-                tokio::run(
+                self.runtime.spawn(
                     serve //
                         .map_err(|e| log::error!("server error: {}", e)),
                 );
             }
 
+            Ok(())
+        }
+
+        fn shutdown(self) -> crate::Result<()> {
+            self.runtime.shutdown_on_idle().wait().unwrap();
             Ok(())
         }
     }
@@ -426,26 +474,28 @@ pub(crate) mod imp {
         Bd::Error: Into<CritError>,
         Sig: Future<Item = ()> + 'static,
     {
-        fn start(
-            protocol: Http,
-            incoming: T::Incoming,
-            make_service: S,
-            shutdown_signal: Option<Sig>,
-        ) -> crate::Result<()> {
-            let protocol =
-                protocol.with_executor(tokio::runtime::current_thread::TaskExecutor::current());
+        fn new() -> crate::Result<Self> {
+            Ok(Self {
+                runtime: tokio::runtime::current_thread::Runtime::new()?,
+            })
+        }
+
+        fn spawn(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()> {
+            let incoming = config.listener.incoming();
+            let protocol = config
+                .protocol
+                .with_executor(tokio::runtime::current_thread::TaskExecutor::current());
 
             let serve = hyper::server::Builder::new(incoming, protocol) //
-                .serve(LiftedMakeHttpService::new(make_service));
-
-            if let Some(shutdown_signal) = shutdown_signal {
-                tokio::runtime::current_thread::run(
+                .serve(config.make_service);
+            if let Some(shutdown_signal) = config.shutdown_signal {
+                self.runtime.spawn(
                     serve
                         .with_graceful_shutdown(shutdown_signal)
                         .map_err(|e| log::error!("server error: {}", e)),
                 );
             } else {
-                tokio::runtime::current_thread::run(
+                self.runtime.spawn(
                     serve //
                         .map_err(|e| log::error!("server error: {}", e)),
                 );
@@ -453,21 +503,27 @@ pub(crate) mod imp {
 
             Ok(())
         }
+
+        fn shutdown(mut self) -> crate::Result<()> {
+            self.runtime.run().unwrap();
+            Ok(())
+        }
+    }
+
+    #[doc(hidden)]
+    #[allow(missing_debug_implementations)]
+    pub struct ServerConfig<S, T, Sig> {
+        pub(crate) make_service: LiftedMakeHttpService<T, S>,
+        pub(crate) listener: T,
+        pub(crate) protocol: Http,
+        pub(crate) shutdown_signal: Option<Sig>,
+        pub(super) _priv: (),
     }
 
     #[allow(missing_debug_implementations)]
     pub(crate) struct LiftedMakeHttpService<T, S> {
-        make_service: S,
-        _marker: PhantomData<fn(&T)>,
-    }
-
-    impl<T, S> LiftedMakeHttpService<T, S> {
-        pub(crate) fn new(make_service: S) -> Self {
-            Self {
-                make_service,
-                _marker: PhantomData,
-            }
-        }
+        pub(super) make_service: S,
+        pub(super) _marker: PhantomData<fn(&T)>,
     }
 
     #[allow(clippy::type_complexity)]

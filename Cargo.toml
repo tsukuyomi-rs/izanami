@@ -23,7 +23,7 @@ futures = "0.1"
 http = "0.1"
 hyper = "0.12"
 log = "0.4"
-tokio = "0.1"
+tokio = { version = "0.1.15", features = ["sync"] }
 tokio-io = "0.1"
 
 native-tls = { version = "0.2", optional = true }

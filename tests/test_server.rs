@@ -52,7 +52,5 @@ fn test_server() -> izanami::Result<()> {
         .expect("client error");
     assert_eq!(response.status(), 200);
 
-    server.shutdown()?;
-
     Ok(())
 }
