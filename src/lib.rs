@@ -12,6 +12,7 @@
 
 mod error;
 pub mod server;
+pub mod test;
 
 #[doc(inline)]
 pub use crate::{

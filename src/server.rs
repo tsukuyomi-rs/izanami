@@ -190,13 +190,17 @@ where
         }
     }
 
-    /// Switches the backend to `CurrentThread`.
-    pub fn current_thread(self) -> Server<T, CurrentThread> {
+    pub(crate) fn backend<B2>(self) -> Server<T, B2> {
         Server {
             listener: self.listener,
             protocol: self.protocol,
             _marker: PhantomData,
         }
+    }
+
+    /// Switches the backend to `CurrentThread`.
+    pub fn current_thread(self) -> Server<T, CurrentThread> {
+        self.backend()
     }
 
     /// Start this HTTP server with the specified service factory.
@@ -256,7 +260,7 @@ where
 {
 }
 
-mod imp {
+pub(crate) mod imp {
     use super::*;
 
     pub trait BackendImpl<T, S, Sig>
@@ -345,10 +349,7 @@ mod imp {
         ) -> crate::Result<()> {
             let protocol = protocol.with_executor(tokio::executor::DefaultExecutor::current());
             let serve = hyper::server::Builder::new(incoming, protocol) //
-                .serve(LiftedMakeHttpService {
-                    make_service,
-                    _marker: PhantomData,
-                });
+                .serve(LiftedMakeHttpService::new(make_service));
 
             if let Some(shutdown_signal) = shutdown_signal {
                 tokio::run(
@@ -435,10 +436,7 @@ mod imp {
                 protocol.with_executor(tokio::runtime::current_thread::TaskExecutor::current());
 
             let serve = hyper::server::Builder::new(incoming, protocol) //
-                .serve(LiftedMakeHttpService {
-                    make_service,
-                    _marker: PhantomData,
-                });
+                .serve(LiftedMakeHttpService::new(make_service));
 
             if let Some(shutdown_signal) = shutdown_signal {
                 tokio::runtime::current_thread::run(
@@ -458,9 +456,18 @@ mod imp {
     }
 
     #[allow(missing_debug_implementations)]
-    struct LiftedMakeHttpService<T, S> {
+    pub(crate) struct LiftedMakeHttpService<T, S> {
         make_service: S,
         _marker: PhantomData<fn(&T)>,
+    }
+
+    impl<T, S> LiftedMakeHttpService<T, S> {
+        pub(crate) fn new(make_service: S) -> Self {
+            Self {
+                make_service,
+                _marker: PhantomData,
+            }
+        }
     }
 
     #[allow(clippy::type_complexity)]
@@ -498,7 +505,7 @@ mod imp {
     }
 
     #[allow(missing_debug_implementations)]
-    struct LiftedMakeHttpServiceFuture<Fut> {
+    pub(crate) struct LiftedMakeHttpServiceFuture<Fut> {
         inner: Fut,
         remote_addr: Option<RemoteAddr>,
     }
@@ -524,7 +531,7 @@ mod imp {
     }
 
     #[allow(missing_debug_implementations)]
-    struct LiftedHttpService<S> {
+    pub(crate) struct LiftedHttpService<S> {
         service: S,
         remote_addr: RemoteAddr,
     }
@@ -554,7 +561,7 @@ mod imp {
     }
 
     #[allow(missing_debug_implementations)]
-    struct LiftedHttpServiceFuture<Fut> {
+    pub(crate) struct LiftedHttpServiceFuture<Fut> {
         inner: Fut,
     }
 
@@ -577,7 +584,7 @@ mod imp {
     }
 
     #[allow(missing_debug_implementations)]
-    struct WrappedBodyStream<Bd>(Bd);
+    pub(crate) struct WrappedBodyStream<Bd>(Bd);
 
     impl<Bd> hyper::body::Payload for WrappedBodyStream<Bd>
     where

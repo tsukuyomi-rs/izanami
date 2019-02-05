@@ -1,10 +1,8 @@
 use {
-    futures::Future,
     http::{Request, Response},
-    izanami::Server,
+    izanami::test::TestServer,
     izanami_service::{MakeService, Service},
-    std::{io, net::SocketAddr},
-    tokio::net::TcpStream,
+    std::io,
 };
 
 #[test]
@@ -41,63 +39,20 @@ impl<Bd> Service<Request<Bd>> for Echo {
 }
 
 #[test]
-fn smoketest_tcp() -> izanami::Result<()> {
-    let listener = std::net::TcpListener::bind("127.0.0.1:0")?;
-    let local_addr = listener.local_addr()?;
+fn test_server() -> izanami::Result<()> {
+    let mut server = TestServer::new(Echo)?;
 
-    let (tx, rx) = futures::sync::oneshot::channel();
-    let handle = std::thread::spawn(move || -> izanami::Result<()> {
-        let listener =
-            tokio::net::TcpListener::from_std(listener, &tokio::reactor::Handle::default())?;
-        let server = Server::bind(listener)?;
-        server.start_with_graceful_shutdown(Echo, rx)?;
-        Ok(())
-    });
-
-    {
-        let mut runtime = tokio::runtime::current_thread::Runtime::new()?;
-        let response = runtime
-            .block_on(
-                hyper::Client::builder()
-                    .build(TestConnector { addr: local_addr })
-                    .request(
-                        Request::get("http://localhost/") //
-                            .body(hyper::Body::empty())
-                            .unwrap(),
-                    ),
-            )
-            .expect("client error");
-        assert_eq!(response.status(), 200);
-    }
-
-    // finally, send the shutdown signal to the backend HTTP server
-    // and await its completion.
-    tx.send(()).expect("failed to send shutdown signal");
-    match handle.join() {
-        Ok(result) => result,
-        Err(err) => std::panic::resume_unwind(err),
-    }
-}
-
-struct TestConnector {
-    addr: SocketAddr,
-}
-
-impl hyper::client::connect::Connect for TestConnector {
-    type Transport = TcpStream;
-    type Error = io::Error;
-    type Future = Box<
-        dyn Future<
-                Item = (Self::Transport, hyper::client::connect::Connected),
-                Error = Self::Error,
-            > + Send
-            + 'static,
-    >;
-
-    fn connect(&self, _: hyper::client::connect::Destination) -> Self::Future {
-        Box::new(
-            TcpStream::connect(&self.addr)
-                .map(|stream| (stream, hyper::client::connect::Connected::new())),
+    let response = server
+        .client()
+        .request(
+            Request::get("http://localhost/") //
+                .body(hyper::Body::empty())
+                .unwrap(),
         )
-    }
+        .expect("client error");
+    assert_eq!(response.status(), 200);
+
+    server.shutdown()?;
+
+    Ok(())
 }
