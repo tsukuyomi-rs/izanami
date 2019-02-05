@@ -13,11 +13,13 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    let der = std::fs::read("./private/identity.p12")?;
-    let cert = Identity::from_pkcs12(&der, "mypass")?;
-    let acceptor = TlsAcceptor::builder(cert).build()?;
+    let acceptor = {
+        let der = std::fs::read("./private/identity.p12")?;
+        let cert = Identity::from_pkcs12(&der, "mypass")?;
+        TlsAcceptor::builder(cert).build()?
+    };
 
     izanami::Server::bind("127.0.0.1:4000")? //
-        .acceptor(acceptor)
+        .accept(acceptor)
         .start(echo)
 }

@@ -1,5 +1,8 @@
 use std::fmt;
 
+#[allow(dead_code)]
+pub(crate) type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
+
 #[derive(Debug)]
 pub struct Error {
     compat: Compat,

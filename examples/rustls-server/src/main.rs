@@ -6,6 +6,9 @@ use {
     std::{fs::File, io::BufReader, path::Path, sync::Arc},
 };
 
+const CERTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/private/cert.pem");
+const PRIV_KEY_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/private/key.pem");
+
 fn main() -> izanami::Result<()> {
     let echo = Echo::builder()
         .add_route("/", |_cx| {
@@ -15,28 +18,24 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    let tls_config = build_tls_config()?;
+    let acceptor = {
+        let client_auth = NoClientAuth::new();
+
+        let mut config = ServerConfig::new(client_auth);
+        config.key_log = Arc::new(KeyLogFile::new());
+
+        let certs = load_certs(CERTS_PATH)?;
+        let priv_key = load_private_key(PRIV_KEY_PATH)?;
+        config.set_single_cert(certs, priv_key)?;
+
+        config.set_protocols(&["h2".into(), "http/1.1".into()]);
+
+        Arc::new(config)
+    };
+
     izanami::Server::bind("127.0.0.1:4000")? //
-        .acceptor(tls_config)
+        .accept(acceptor)
         .start(echo)
-}
-
-fn build_tls_config() -> Fallible<Arc<ServerConfig>> {
-    const CERTS_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/private/cert.pem");
-    const PRIV_KEY_PATH: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/private/key.pem");
-
-    let client_auth = NoClientAuth::new();
-
-    let mut config = ServerConfig::new(client_auth);
-    config.key_log = Arc::new(KeyLogFile::new());
-
-    let certs = load_certs(CERTS_PATH)?;
-    let priv_key = load_private_key(PRIV_KEY_PATH)?;
-    config.set_single_cert(certs, priv_key)?;
-
-    config.set_protocols(&["h2".into(), "http/1.1".into()]);
-
-    Ok(Arc::new(config))
 }
 
 fn load_certs(path: impl AsRef<Path>) -> Fallible<Vec<Certificate>> {

@@ -1,11 +1,8 @@
 use {
     crate::{
-        server::{
-            conn::Listener,
-            imp::{BackendImpl, ServerConfig},
-            Backend, MakeServiceContext, RequestBody, Serve, Server,
-        },
-        CritError,
+        io::Listener,
+        server::{Serve, Server, ServerConfig, SpawnServer},
+        service::MakeHttpService,
     },
     futures::Future,
     http::{Request, Response},
@@ -13,8 +10,6 @@ use {
         connect::{Connect, Connected, Destination},
         Client,
     },
-    izanami_service::{MakeService, Service},
-    izanami_util::buf_stream::BufStream,
     std::{io, net::SocketAddr},
     tokio::{
         net::{TcpListener, TcpStream},
@@ -28,140 +23,81 @@ use {
 /// This backend launches the HTTP server using `tokio::runtime::Runtime`
 /// customized for testing purposes.
 #[derive(Debug)]
-pub struct TestBackend {
-    runtime: tokio::runtime::Runtime,
+pub struct TestRuntime {
+    inner: Runtime,
 }
 
-impl<T, S, Bd, SvcErr, Svc, MkErr, Fut, Sig> Backend<T, S, Sig> for TestBackend
-where
-    T: Listener + 'static,
-    T::Conn: Send + 'static,
-    T::Incoming: Send + 'static,
-    S: for<'a> MakeService<
-            MakeServiceContext<'a, T>, //
-            Request<RequestBody>,
-            Response = Response<Bd>,
-            Error = SvcErr,
-            Service = Svc,
-            MakeError = MkErr,
-            Future = Fut,
-        > + Send
-        + Sync
-        + 'static,
-    SvcErr: Into<CritError>,
-    MkErr: Into<CritError>,
-    Fut: Future<Item = Svc, Error = MkErr> + Send + 'static,
-    Svc: Service<
-            Request<RequestBody>, //
-            Response = Response<Bd>,
-            Error = SvcErr,
-        > + Send
-        + 'static,
-    Svc::Future: Send + 'static,
-    Bd: BufStream + Send + 'static,
-    Bd::Item: Send,
-    Bd::Error: Into<CritError>,
-    Sig: Future<Item = ()> + Send + 'static,
-{
+impl std::ops::Deref for TestRuntime {
+    type Target = Runtime;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
 }
 
-impl<T, S, Bd, SvcErr, Svc, MkErr, Fut, Sig> BackendImpl<T, S, Sig> for TestBackend
-where
-    T: Listener + 'static,
-    T::Conn: Send + 'static,
-    T::Incoming: Send + 'static,
-    S: for<'a> MakeService<
-            MakeServiceContext<'a, T>, //
-            Request<RequestBody>,
-            Response = Response<Bd>,
-            Error = SvcErr,
-            Service = Svc,
-            MakeError = MkErr,
-            Future = Fut,
-        > + Send
-        + Sync
-        + 'static,
-    SvcErr: Into<CritError>,
-    MkErr: Into<CritError>,
-    Fut: Future<Item = Svc, Error = MkErr> + Send + 'static,
-    Svc: Service<
-            Request<RequestBody>, //
-            Response = Response<Bd>,
-            Error = SvcErr,
-        > + Send
-        + 'static,
-    Svc::Future: Send + 'static,
-    Bd: BufStream + Send + 'static,
-    Bd::Item: Send,
-    Bd::Error: Into<CritError>,
-    Sig: Future<Item = ()> + Send + 'static,
-{
+impl std::ops::DerefMut for TestRuntime {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.inner
+    }
+}
+
+impl TestRuntime {
     fn new() -> crate::Result<Self> {
+        let mut builder = tokio::runtime::Builder::new();
+        builder.name_prefix("izanami");
+        builder.core_threads(1);
+        builder.blocking_threads(1);
+
         Ok(Self {
-            runtime: {
-                let mut builder = tokio::runtime::Builder::new();
-                builder.name_prefix("izanami");
-                builder.core_threads(1);
-                builder.blocking_threads(1);
-                builder.build()?
-            },
+            inner: builder.build()?,
         })
     }
+}
 
-    fn spawn(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()> {
-        let incoming = config.listener.incoming();
-        let protocol = config
-            .protocol
-            .with_executor(tokio::executor::DefaultExecutor::current());
-        let serve = hyper::server::Builder::new(incoming, protocol) //
-            .serve(config.make_service);
-
-        if let Some(shutdown_signal) = config.shutdown_signal {
-            self.runtime.spawn(
-                serve
-                    .with_graceful_shutdown(shutdown_signal)
-                    .map_err(|e| log::error!("server error: {}", e)),
-            );
-        } else {
-            self.runtime.spawn(
-                serve //
-                    .map_err(|e| log::error!("server error: {}", e)),
-            );
-        }
-
-        Ok(())
+impl crate::server::Runtime for TestRuntime {
+    fn new() -> crate::Result<Self> {
+        Self::new()
     }
 
     fn shutdown(self) -> crate::Result<()> {
-        self.runtime.shutdown_on_idle().wait().unwrap();
-        Ok(())
+        self.inner.shutdown()
+    }
+}
+
+impl<T, S, Sig> SpawnServer<T, S, Sig> for TestRuntime
+where
+    T: Listener,
+    S: MakeHttpService<T>,
+    Sig: Future<Item = ()>,
+    tokio::runtime::Runtime: SpawnServer<T, S, Sig>,
+{
+    fn spawn_server(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()> {
+        self.inner.spawn_server(config)
     }
 }
 
 /// An HTTP server for testing HTTP services.
 #[derive(Debug)]
-pub struct TestServer<S> {
-    serve: Serve<TestBackend, S, TcpListener, oneshot::Receiver<()>>,
+pub struct TestServer {
+    serve: Serve<TestRuntime>,
     shutdown_signal: oneshot::Sender<()>,
     local_addr: SocketAddr,
 }
 
-impl<S> TestServer<S>
-where
-    S: for<'a> MakeService<MakeServiceContext<'a, TcpListener>, Request<RequestBody>>
-        + Send
-        + 'static,
-    TestBackend: Backend<TcpListener, S, oneshot::Receiver<()>>,
-{
+impl TestServer {
     /// Create a `TestServer` using the specified service factory.
-    pub fn new(make_service: S) -> crate::Result<Self> {
+    pub fn new<S>(make_service: S) -> crate::Result<Self>
+    where
+        S: MakeHttpService<TcpListener> + Send + 'static,
+        TestRuntime: SpawnServer<TcpListener, S, oneshot::Receiver<()>>,
+    {
         let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
         let local_addr = listener.local_addr()?;
 
         let (tx, rx) = oneshot::channel();
         let serve = Server::bind(listener)?
-            .backend::<TestBackend>()
             .with_graceful_shutdown(rx)
+            .runtime(TestRuntime::new()?)
             .launch(make_service)?;
 
         Ok(Self {
@@ -174,7 +110,7 @@ where
     /// Create a `TestClient` for sending HTTP requests to the background server.
     pub fn client(&mut self) -> TestClient<'_> {
         TestClient {
-            runtime: &mut self.serve.get_mut().runtime,
+            runtime: self.serve.get_mut(),
             client: Client::builder() //
                 .build(TestConnector {
                     addr: self.local_addr,
@@ -195,7 +131,7 @@ where
 #[derive(Debug)]
 pub struct TestClient<'a> {
     client: Client<TestConnector, hyper::Body>,
-    runtime: &'a mut Runtime,
+    runtime: &'a mut TestRuntime,
 }
 
 impl<'a> TestClient<'a> {

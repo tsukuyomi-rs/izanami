@@ -1,4 +1,4 @@
-//! A *meta* library for creating Web frameworks.
+//! A lightweight implementation of HTTP server based on Hyper.
 
 #![doc(html_root_url = "https://docs.rs/izanami/0.1.0-preview.2")]
 #![deny(
@@ -10,8 +10,11 @@
 )]
 #![forbid(clippy::unimplemented)]
 
+pub mod accept;
 mod error;
+pub mod io;
 pub mod server;
+pub mod service;
 pub mod test;
 
 #[doc(inline)]
@@ -19,12 +22,3 @@ pub use crate::{
     error::{Error, Result},
     server::Server,
 };
-
-#[doc(no_inline)]
-pub use {
-    izanami_service as service, //
-    izanami_util as util,
-};
-
-#[allow(dead_code)] // ?
-type CritError = Box<dyn std::error::Error + Send + Sync + 'static>;
