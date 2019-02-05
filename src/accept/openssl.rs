@@ -18,11 +18,16 @@ impl<T> Acceptor<T> for SslAcceptor
 where
     T: AsyncRead + AsyncWrite,
 {
-    type Accepted = SslStreamWithHandshake<T>;
+    type Accepted = WithHandshakeStream<T>;
 
     #[inline]
     fn accept(&self, io: T) -> Self::Accepted {
-        SslStreamWithHandshake::start(self.clone(), io)
+        WithHandshakeStream {
+            state: State::MidHandshake(MidHandshake::Start {
+                acceptor: self.clone(),
+                io,
+            }),
+        }
     }
 }
 
@@ -58,10 +63,26 @@ where
             MidHandshake::Done => Ok(None),
         }
     }
+
+    fn flush(&mut self) -> io::Result<()> {
+        match self {
+            MidHandshake::Start { io, .. } => io.flush(),
+            MidHandshake::Handshake(s) => s.get_mut().flush(),
+            MidHandshake::Done => Err(io::ErrorKind::Other.into()),
+        }
+    }
+
+    fn shutdown(&mut self) -> Poll<(), io::Error> {
+        match self {
+            MidHandshake::Start { io, .. } => io.shutdown(),
+            MidHandshake::Handshake(s) => s.get_mut().shutdown(),
+            MidHandshake::Done => Err(io::ErrorKind::Other.into()),
+        }
+    }
 }
 
 #[allow(missing_debug_implementations)]
-pub struct SslStreamWithHandshake<S> {
+pub struct WithHandshakeStream<S> {
     state: State<S>,
 }
 
@@ -72,67 +93,54 @@ enum State<S> {
     Gone,
 }
 
-impl<S> SslStreamWithHandshake<S>
+impl<S> WithHandshakeStream<S>
 where
     S: AsyncRead + AsyncWrite,
 {
-    fn start(acceptor: SslAcceptor, io: S) -> Self {
-        SslStreamWithHandshake {
-            state: State::MidHandshake(MidHandshake::Start { acceptor, io }),
+    fn progress<T>(
+        &mut self,
+        op: impl FnOnce(&mut SslStream<S>) -> io::Result<T>,
+    ) -> io::Result<T> {
+        loop {
+            self.state = match &mut self.state {
+                State::MidHandshake(m) => match m.try_handshake()? {
+                    Some(io) => State::Ready(io),
+                    None => panic!("cannot perform handshake twice"),
+                },
+                State::Ready(io) => return op(io),
+                State::Gone => return Err(io::ErrorKind::Other.into()),
+            };
         }
     }
 }
 
-impl<S> io::Read for SslStreamWithHandshake<S>
+impl<S> io::Read for WithHandshakeStream<S>
 where
     S: AsyncRead + AsyncWrite,
 {
     fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        loop {
-            self.state = match &mut self.state {
-                State::MidHandshake(m) => match m.try_handshake()? {
-                    Some(io) => State::Ready(io),
-                    None => panic!("cannot perform handshake twice"),
-                },
-                State::Ready(io) => return io.read(buf),
-                State::Gone => return Err(io::ErrorKind::Other.into()),
-            };
-        }
+        self.progress(|io| io.read(buf))
     }
 }
 
-impl<S> io::Write for SslStreamWithHandshake<S>
+impl<S> io::Write for WithHandshakeStream<S>
 where
     S: AsyncRead + AsyncWrite,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        loop {
-            self.state = match &mut self.state {
-                State::MidHandshake(m) => match m.try_handshake()? {
-                    Some(io) => State::Ready(io),
-                    None => panic!("cannot perform handshake twice"),
-                },
-                State::Ready(io) => return io.write(buf),
-                State::Gone => return Err(io::ErrorKind::Other.into()),
-            };
-        }
+        self.progress(|io| io.write(buf))
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        loop {
-            self.state = match &mut self.state {
-                State::MidHandshake(m) => match m.try_handshake()? {
-                    Some(io) => State::Ready(io),
-                    None => return Ok(()),
-                },
-                State::Ready(io) => return io.flush(),
-                State::Gone => return Err(io::ErrorKind::Other.into()),
-            };
+        match &mut self.state {
+            State::MidHandshake(m) => m.flush(),
+            State::Ready(io) => io.flush(),
+            State::Gone => Err(io::ErrorKind::Other.into()),
         }
     }
 }
 
-impl<S> AsyncRead for SslStreamWithHandshake<S>
+impl<S> AsyncRead for WithHandshakeStream<S>
 where
     S: AsyncRead + AsyncWrite,
 {
@@ -141,29 +149,36 @@ where
     }
 }
 
-impl<S> AsyncWrite for SslStreamWithHandshake<S>
+impl<S> AsyncWrite for WithHandshakeStream<S>
 where
     S: AsyncRead + AsyncWrite,
 {
     fn shutdown(&mut self) -> Poll<(), io::Error> {
         match &mut self.state {
-            State::MidHandshake(..) => {
+            State::MidHandshake(m) => {
+                futures::try_ready!(m.shutdown());
                 self.state = State::Gone;
                 Ok(Async::Ready(()))
             }
-            State::Ready(io) => match io.shutdown() {
-                Ok(ShutdownResult::Sent) | Ok(ShutdownResult::Received) => Ok(Async::Ready(())),
-                Err(ref e) if e.code() == ErrorCode::ZERO_RETURN => Ok(Async::Ready(())),
-                Err(ref e)
-                    if e.code() == ErrorCode::WANT_READ || e.code() == ErrorCode::WANT_WRITE =>
-                {
-                    Ok(Async::NotReady)
-                }
-                Err(e) => Err(e
-                    .into_io_error()
-                    .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e))),
-            },
+            State::Ready(io) => shutdown_io(io),
             State::Gone => Ok(().into()),
         }
+    }
+}
+
+fn shutdown_io<S>(io: &mut SslStream<S>) -> Poll<(), io::Error>
+where
+    S: AsyncRead + AsyncWrite,
+{
+    match io.shutdown() {
+        Ok(ShutdownResult::Sent) | Ok(ShutdownResult::Received) => Ok(Async::Ready(())),
+        Err(ref e) if e.code() == ErrorCode::ZERO_RETURN => Ok(Async::Ready(())),
+        Err(ref e) if e.code() == ErrorCode::WANT_READ || e.code() == ErrorCode::WANT_WRITE => {
+            Ok(Async::NotReady)
+        }
+        Err(err) => Err({
+            err.into_io_error()
+                .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e))
+        }),
     }
 }

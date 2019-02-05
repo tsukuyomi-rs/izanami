@@ -1,8 +1,7 @@
 #!/bin/bash
 
-CA_SUBJECT="/C=JP/ST=Tokyo/O=Tsukuyomi CA/CN=Tsukuyomi Root CA"
-SUBJECT="/C=JP/ST=Tokyo/O=Tsukuyomi/CN=localhost"
-ALT="DNS:localhost"
+CA_SUBJECT="/C=JP/ST=Tokyo/O=Izanami CA/CN=localhost"
+SUBJECT="/C=JP/ST=Tokyo/O=Izanami/CN=localhost"
 
 DIR="$(cd $(dirname $BASH_SOURCE); pwd)"
 cd $DIR
@@ -22,15 +21,12 @@ openssl req -new -x509 \
 openssl req -newkey rsa:4096 -nodes -sha256 \
   -keyout key.pem \
   -subj "${SUBJECT}" \
-  -out server.csr
+  -out server-csr.pem
 
 openssl x509 -req -sha256 \
-  -extfile <(printf "subjectAltName=${ALT}") \
   -days 3650 \
   -CA ca_cert.pem \
   -CAkey ca_key.pem \
   -CAcreateserial \
-  -in server.csr \
+  -in server-csr.pem \
   -out cert.pem
-
-rm ca_cert.srl server.csr

@@ -14,7 +14,7 @@ fn main() -> izanami::Result<()> {
         .build();
 
     let acceptor = {
-        let der = std::fs::read("./private/identity.p12")?;
+        let der = std::fs::read("./private/identity.pfx")?;
         let cert = Identity::from_pkcs12(&der, "mypass")?;
         TlsAcceptor::builder(cert).build()?
     };

@@ -9,5 +9,5 @@ $ ./private/gencert.sh
 Test command:
 
 ```
-curl --insecure https://localhost:4000/
+curl --cacert ./private/server-crt.pem https://localhost:4000/
 ```
