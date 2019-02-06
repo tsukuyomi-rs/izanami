@@ -91,8 +91,7 @@ mod uds {
                 sock_path: sock_path.clone(),
             });
 
-        let response = serve
-            .get_mut() //
+        let response = serve //
             .block_on(
                 client.request(
                     Request::get("http://localhost/") //
@@ -101,10 +100,11 @@ mod uds {
             )?;
         assert_eq!(response.status(), 200);
 
-        let body = serve.get_mut().block_on(response.into_body().concat2())?;
+        let body = serve.block_on(response.into_body().concat2())?;
         assert_eq!(body.into_bytes(), "hello");
 
-        Ok(())
+        drop(client);
+        serve.shutdown()
     }
 
     struct TestConnect {
@@ -179,8 +179,7 @@ mod native_tls {
                 connector,
             });
 
-        let response = serve
-            .get_mut() //
+        let response = serve //
             .block_on(
                 client.request(
                     Request::get("http://localhost/") //
@@ -189,14 +188,15 @@ mod native_tls {
             )?;
         assert_eq!(response.status(), 200);
 
-        let body = serve.get_mut().block_on(
+        let body = serve.block_on(
             response
                 .into_body() //
                 .concat2(),
         )?;
         assert_eq!(body.into_bytes(), "hello");
 
-        Ok(())
+        drop(client);
+        serve.shutdown()
     }
 
     struct TestConnect {
@@ -286,8 +286,7 @@ mod openssl {
                 connector,
             });
 
-        let response = serve
-            .get_mut() //
+        let response = serve //
             .block_on(
                 client.request(
                     Request::get("http://localhost/") //
@@ -296,14 +295,15 @@ mod openssl {
             )?;
         assert_eq!(response.status(), 200);
 
-        let body = serve.get_mut().block_on(
+        let body = serve.block_on(
             response
                 .into_body() //
                 .concat2(),
         )?;
         assert_eq!(body.into_bytes(), "hello");
 
-        Ok(())
+        drop(client);
+        serve.shutdown()
     }
 
     struct TestConnect {
@@ -420,8 +420,7 @@ mod rustls {
                     .to_owned(),
             });
 
-        let response = serve
-            .get_mut() //
+        let response = serve //
             .block_on(
                 client.request(
                     Request::get("http://localhost/") //
@@ -430,14 +429,15 @@ mod rustls {
             )?;
         assert_eq!(response.status(), 200);
 
-        let body = serve.get_mut().block_on(
+        let body = serve.block_on(
             response
                 .into_body() //
                 .concat2(),
         )?;
         assert_eq!(body.into_bytes(), "hello");
 
-        Ok(())
+        drop(client);
+        serve.shutdown()
     }
 
     struct TestConnect {

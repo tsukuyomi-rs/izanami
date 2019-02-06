@@ -14,7 +14,6 @@ use {
     tokio::{
         net::{TcpListener, TcpStream},
         runtime::Runtime,
-        sync::oneshot,
     },
 };
 
@@ -42,7 +41,7 @@ impl std::ops::DerefMut for TestRuntime {
 }
 
 impl TestRuntime {
-    fn new() -> crate::Result<Self> {
+    fn create() -> crate::Result<Self> {
         let mut builder = tokio::runtime::Builder::new();
         builder.name_prefix("izanami");
         builder.core_threads(1);
@@ -55,23 +54,22 @@ impl TestRuntime {
 }
 
 impl crate::server::Runtime for TestRuntime {
-    fn new() -> crate::Result<Self> {
-        Self::new()
+    fn create() -> crate::Result<Self> {
+        Self::create()
     }
 
-    fn shutdown(self) -> crate::Result<()> {
-        self.inner.shutdown()
+    fn shutdown_on_idle(self) -> crate::Result<()> {
+        crate::server::Runtime::shutdown_on_idle(self.inner)
     }
 }
 
-impl<T, S, Sig> SpawnServer<T, S, Sig> for TestRuntime
+impl<T, S> SpawnServer<T, S> for TestRuntime
 where
     T: Listener,
     S: MakeHttpService<T>,
-    Sig: Future<Item = ()>,
-    tokio::runtime::Runtime: SpawnServer<T, S, Sig>,
+    tokio::runtime::Runtime: SpawnServer<T, S>,
 {
-    fn spawn_server(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()> {
+    fn spawn_server(&mut self, config: ServerConfig<S, T>) -> crate::Result<()> {
         self.inner.spawn_server(config)
     }
 }
@@ -80,7 +78,6 @@ where
 #[derive(Debug)]
 pub struct TestServer {
     serve: Serve<TestRuntime>,
-    shutdown_signal: oneshot::Sender<()>,
     local_addr: SocketAddr,
 }
 
@@ -89,28 +86,22 @@ impl TestServer {
     pub fn new<S>(make_service: S) -> crate::Result<Self>
     where
         S: MakeHttpService<TcpListener> + Send + 'static,
-        TestRuntime: SpawnServer<TcpListener, S, oneshot::Receiver<()>>,
+        TestRuntime: SpawnServer<TcpListener, S>,
     {
         let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
         let local_addr = listener.local_addr()?;
 
-        let (tx, rx) = oneshot::channel();
         let serve = Server::bind(listener)?
-            .with_graceful_shutdown(rx)
-            .runtime(TestRuntime::new()?)
+            .runtime(TestRuntime::create()?)
             .launch(make_service)?;
 
-        Ok(Self {
-            serve,
-            shutdown_signal: tx,
-            local_addr,
-        })
+        Ok(Self { serve, local_addr })
     }
 
     /// Create a `TestClient` for sending HTTP requests to the background server.
     pub fn client(&mut self) -> TestClient<'_> {
         TestClient {
-            runtime: self.serve.get_mut(),
+            runtime: &mut *self.serve,
             client: Client::builder() //
                 .build(TestConnector {
                     addr: self.local_addr,
@@ -120,9 +111,6 @@ impl TestServer {
 
     /// Send a shutdown signal to the background server and await its completion.
     pub fn shutdown(self) -> crate::Result<()> {
-        self.shutdown_signal
-            .send(())
-            .map_err(|_| failure::format_err!("failed to send shutdown signal"))?;
         self.serve.shutdown()
     }
 }

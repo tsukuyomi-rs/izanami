@@ -9,18 +9,17 @@ use {
     hyper::server::conn::Http,
     izanami_util::RemoteAddr,
     std::marker::PhantomData,
+    tokio::sync::oneshot,
 };
 
 /// A simple HTTP server that wraps the `hyper`'s server implementation.
 #[derive(Debug)]
 pub struct Server<
     T, //
-    Sig = futures::future::Empty<(), ()>,
     Rt = tokio::runtime::Runtime,
 > {
     listener: T,
     protocol: Http,
-    shutdown_signal: Option<Sig>,
     runtime: Option<Rt>,
 }
 
@@ -33,16 +32,14 @@ impl Server<()> {
         Ok(Server {
             listener: listener.make_listener()?,
             protocol: Http::new(),
-            shutdown_signal: None,
             runtime: None,
         })
     }
 }
 
-impl<T, Sig, Rt> Server<T, Sig, Rt>
+impl<T, Rt> Server<T, Rt>
 where
     T: Listener,
-    Sig: Future<Item = ()>,
     Rt: Runtime,
 {
     /// Returns a reference to the inner listener.
@@ -66,133 +63,144 @@ where
     }
 
     /// Sets the instance of `Acceptor` to the server.
-    pub fn accept<A>(self, acceptor: A) -> Server<AcceptWith<T, A>, Sig, Rt>
+    pub fn accept<A>(self, acceptor: A) -> Server<AcceptWith<T, A>, Rt>
     where
         A: Acceptor<T::Conn>,
     {
         Server {
             listener: self.listener.accept_with(acceptor),
             protocol: self.protocol,
-            shutdown_signal: self.shutdown_signal,
             runtime: self.runtime,
         }
     }
 
-    pub fn runtime<Rt2>(self, runtime: Rt2) -> Server<T, Sig, Rt2>
+    /// Specify the instance of runtime to use spawning the server task.
+    pub fn runtime<Rt2>(self, runtime: Rt2) -> Server<T, Rt2>
     where
         Rt2: Runtime,
     {
         Server {
             listener: self.listener,
             protocol: self.protocol,
-            shutdown_signal: self.shutdown_signal,
             runtime: Some(runtime),
         }
     }
 
-    /// Switches the backend to `CurrentThread`.
-    pub fn current_thread(self) -> Server<T, Sig, tokio::runtime::current_thread::Runtime> {
-        Server {
-            listener: self.listener,
-            protocol: self.protocol,
-            shutdown_signal: self.shutdown_signal,
-            runtime: None,
-        }
-    }
-
-    /// Set the value of shutdown signal.
-    pub fn with_graceful_shutdown<Sig2>(self, signal: Sig2) -> Server<T, Sig2, Rt>
-    where
-        Sig2: Future<Item = ()>,
-    {
-        Server {
-            listener: self.listener,
-            protocol: self.protocol,
-            shutdown_signal: Some(signal),
-            runtime: self.runtime,
-        }
-    }
-
+    /// Start an HTTP server using the specified service factory.
     pub fn launch<S>(self, make_service: S) -> crate::Result<Serve<Rt>>
     where
         S: MakeHttpService<T>,
-        Rt: Runtime + SpawnServer<T, S, Sig>,
+        Rt: SpawnServer<T, S>,
     {
         let mut runtime = match self.runtime {
             Some(rt) => rt,
-            None => Rt::new()?,
+            None => Rt::create()?,
         };
 
+        let (tx, rx) = oneshot::channel();
+
         runtime.spawn_server(ServerConfig {
-            make_service: MakeIzanamiService {
-                make_service,
-                _marker: PhantomData,
-            },
+            make_service,
             listener: self.listener,
             protocol: self.protocol,
-            shutdown_signal: self.shutdown_signal,
+            shutdown_signal: rx,
         })?;
 
-        Ok(Serve { runtime })
+        Ok(Serve {
+            runtime,
+            shutdown_signal: tx,
+        })
     }
 
-    /// Start this HTTP server with the specified service factory.
+    /// Start an HTTP server using the specified service factory.
     pub fn start<S>(self, make_service: S) -> crate::Result<()>
     where
         S: MakeHttpService<T>,
-        Rt: Runtime + SpawnServer<T, S, Sig>,
+        Rt: SpawnServer<T, S>,
     {
-        self.launch(make_service)?.shutdown()
+        self.launch(make_service)?.run()
     }
 }
 
 #[derive(Debug)]
 pub struct Serve<Rt: Runtime = tokio::runtime::Runtime> {
     runtime: Rt,
+    shutdown_signal: oneshot::Sender<()>,
 }
 
 impl<Rt> Serve<Rt>
 where
     Rt: Runtime,
 {
-    pub fn get_ref(&self) -> &Rt {
-        &self.runtime
+    /// Wait for completion of all tasks executing on the runtime
+    /// without sending shutdown signal.
+    pub fn run(self) -> crate::Result<()> {
+        self.runtime.shutdown_on_idle()
     }
 
-    pub fn get_mut(&mut self) -> &mut Rt {
-        &mut self.runtime
-    }
-
+    /// Send a shutdown signal to the server task and wait for
+    /// completion of all tasks executing on the runtime.
     pub fn shutdown(self) -> crate::Result<()> {
-        self.runtime.shutdown()
+        self.shutdown_signal
+            .send(())
+            .expect("failed to send shutdown signal");
+        self.runtime.shutdown_on_idle()?;
+        Ok(())
     }
 }
 
+impl<Rt> std::ops::Deref for Serve<Rt>
+where
+    Rt: Runtime,
+{
+    type Target = Rt;
+
+    fn deref(&self) -> &Self::Target {
+        &self.runtime
+    }
+}
+
+impl<Rt> std::ops::DerefMut for Serve<Rt>
+where
+    Rt: Runtime,
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.runtime
+    }
+}
+
+/// A trait abstracting the runtime that executes asynchronous tasks.
 pub trait Runtime {
-    fn new() -> crate::Result<Self>
+    /// Create an instance of this runtime.
+    ///
+    /// This function is called by `Server` when the instance
+    /// of runtime is not given explicitly.
+    fn create() -> crate::Result<Self>
     where
         Self: Sized;
 
-    fn shutdown(self) -> crate::Result<()>;
+    /// Wait for completion of background tasks executing on
+    /// this runtime.
+    fn shutdown_on_idle(self) -> crate::Result<()>;
 }
 
 impl Runtime for tokio::runtime::Runtime {
-    fn new() -> crate::Result<Self> {
+    fn create() -> crate::Result<Self> {
         Ok(Self::new()?)
     }
 
-    fn shutdown(self) -> crate::Result<()> {
+    fn shutdown_on_idle(self) -> crate::Result<()> {
         self.shutdown_on_idle().wait().unwrap();
         Ok(())
     }
 }
 
 impl Runtime for tokio::runtime::current_thread::Runtime {
-    fn new() -> crate::Result<Self> {
+    fn create() -> crate::Result<Self> {
         Ok(Self::new()?)
     }
 
-    fn shutdown(mut self) -> crate::Result<()> {
+    fn shutdown_on_idle(mut self) -> crate::Result<()> {
         self.run().unwrap();
         Ok(())
     }
@@ -200,19 +208,23 @@ impl Runtime for tokio::runtime::current_thread::Runtime {
 
 #[doc(hidden)]
 #[allow(missing_debug_implementations)]
-pub struct ServerConfig<S, T, Sig> {
-    make_service: MakeIzanamiService<T, S>,
+pub struct ServerConfig<S, T> {
+    make_service: S,
     listener: T,
     protocol: Http,
-    shutdown_signal: Option<Sig>,
+    shutdown_signal: oneshot::Receiver<()>,
 }
 
-/// A trait for abstracting the process around executing the HTTP server.
-pub trait SpawnServer<T, S, Sig = futures::future::Empty<(), ()>> {
-    fn spawn_server(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()>;
+/// A trait that represents spawning of HTTP server tasks.
+pub trait SpawnServer<T, S>
+where
+    T: Listener,
+    S: MakeHttpService<T>,
+{
+    fn spawn_server(&mut self, config: ServerConfig<S, T>) -> crate::Result<()>;
 }
 
-impl<T, S, Sig> SpawnServer<T, S, Sig> for tokio::runtime::Runtime
+impl<T, S> SpawnServer<T, S> for tokio::runtime::Runtime
 where
     T: Listener + 'static,
     T::Conn: Send + 'static,
@@ -221,32 +233,20 @@ where
     S::Future: Send + 'static,
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
-    Sig: Future<Item = ()> + Send + 'static,
 {
-    fn spawn_server(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()> {
+    fn spawn_server(&mut self, config: ServerConfig<S, T>) -> crate::Result<()> {
         let incoming = config.listener.incoming();
         let protocol = config.protocol.with_executor(self.executor());
-
         let serve = hyper::server::Builder::new(incoming, protocol) //
-            .serve(config.make_service);
-        if let Some(shutdown_signal) = config.shutdown_signal {
-            self.spawn(
-                serve
-                    .with_graceful_shutdown(shutdown_signal)
-                    .map_err(|e| log::error!("server error: {}", e)),
-            );
-        } else {
-            self.spawn(
-                serve //
-                    .map_err(|e| log::error!("server error: {}", e)),
-            );
-        }
-
+            .serve(MakeIzanamiService::new(config.make_service))
+            .with_graceful_shutdown(config.shutdown_signal)
+            .map_err(|e| log::error!("server error: {}", e));
+        self.spawn(serve);
         Ok(())
     }
 }
 
-impl<T, S, Sig> SpawnServer<T, S, Sig> for tokio::runtime::current_thread::Runtime
+impl<T, S> SpawnServer<T, S> for tokio::runtime::current_thread::Runtime
 where
     T: Listener + 'static,
     T::Conn: Send + 'static,
@@ -254,30 +254,17 @@ where
     S: MakeHttpService<T> + 'static,
     S::Service: 'static,
     S::Future: 'static,
-    Sig: Future<Item = ()> + 'static,
 {
-    fn spawn_server(&mut self, config: ServerConfig<S, T, Sig>) -> crate::Result<()> {
+    fn spawn_server(&mut self, config: ServerConfig<S, T>) -> crate::Result<()> {
         let incoming = config.listener.incoming();
         let protocol = config
             .protocol
             .with_executor(tokio::runtime::current_thread::TaskExecutor::current());
-
         let serve = hyper::server::Builder::new(incoming, protocol) //
-            .serve(config.make_service);
-
-        if let Some(shutdown_signal) = config.shutdown_signal {
-            self.spawn(
-                serve
-                    .with_graceful_shutdown(shutdown_signal)
-                    .map_err(|e| log::error!("server error: {}", e)),
-            );
-        } else {
-            self.spawn(
-                serve //
-                    .map_err(|e| log::error!("server error: {}", e)),
-            );
-        }
-
+            .serve(MakeIzanamiService::new(config.make_service))
+            .with_graceful_shutdown(config.shutdown_signal)
+            .map_err(|e| log::error!("server error: {}", e));
+        self.spawn(serve);
         Ok(())
     }
 }
@@ -286,6 +273,19 @@ where
 struct MakeIzanamiService<T, S> {
     make_service: S,
     _marker: PhantomData<fn(&T)>,
+}
+
+impl<T, S> MakeIzanamiService<T, S>
+where
+    T: Listener,
+    S: MakeHttpService<T>,
+{
+    fn new(make_service: S) -> Self {
+        Self {
+            make_service,
+            _marker: PhantomData,
+        }
+    }
 }
 
 impl<'a, T, S> hyper::service::MakeService<&'a T::Conn> for MakeIzanamiService<T, S>
