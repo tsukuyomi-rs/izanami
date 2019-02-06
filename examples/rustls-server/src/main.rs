@@ -2,6 +2,7 @@ use {
     echo_service::Echo,
     failure::format_err,
     http::Response,
+    izanami::tls::rustls::TlsAcceptor,
     rustls::{KeyLogFile, NoClientAuth, ServerConfig},
     std::{io, sync::Arc},
 };
@@ -36,15 +37,12 @@ fn main() -> izanami::Result<()> {
             .ok_or_else(|| format_err!("invalid private key"))?
     };
 
-    let acceptor = {
-        let client_auth = NoClientAuth::new();
-
-        let mut config = ServerConfig::new(client_auth);
+    let acceptor: TlsAcceptor = {
+        let mut config = ServerConfig::new(NoClientAuth::new());
         config.key_log = Arc::new(KeyLogFile::new());
         config.set_single_cert(certs, priv_key)?;
         config.set_protocols(&["h2".into(), "http/1.1".into()]);
-
-        Arc::new(config)
+        config.into()
     };
 
     izanami::Server::bind("127.0.0.1:4000")? //

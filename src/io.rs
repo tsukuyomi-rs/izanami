@@ -1,7 +1,7 @@
 //! Abstraction around low-level I/O.
 
 use {
-    crate::accept::Acceptor,
+    crate::tls::Acceptor,
     futures::{Async, Poll, Stream},
     izanami_util::RemoteAddr,
     std::{io, time::Duration},

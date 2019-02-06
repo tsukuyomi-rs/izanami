@@ -10,12 +10,12 @@
 )]
 #![forbid(clippy::unimplemented)]
 
-pub mod accept;
 mod error;
 pub mod io;
 pub mod server;
 pub mod service;
 pub mod test;
+pub mod tls;
 
 #[doc(inline)]
 pub use crate::{
