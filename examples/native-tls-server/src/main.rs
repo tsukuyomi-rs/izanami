@@ -1,7 +1,8 @@
 use {
-    echo_service::Echo,
+    echo_service::Echo, //
     http::Response,
-    native_tls::{Identity, TlsAcceptor},
+    izanami::tls::native_tls::TlsAcceptor,
+    native_tls::Identity,
 };
 
 const IDENTITY: &[u8] = include_bytes!("../../../test/identity.pfx");
@@ -15,9 +16,9 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    let acceptor = {
+    let acceptor: TlsAcceptor = {
         let cert = Identity::from_pkcs12(IDENTITY, "mypass")?;
-        TlsAcceptor::builder(cert).build()?
+        native_tls::TlsAcceptor::builder(cert).build()?.into()
     };
 
     izanami::Server::bind("127.0.0.1:4000")? //

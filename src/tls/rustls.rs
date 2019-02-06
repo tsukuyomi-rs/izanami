@@ -7,7 +7,24 @@ use {
     std::{io, sync::Arc},
 };
 
-impl<T> Acceptor<T> for Arc<ServerConfig>
+#[allow(missing_debug_implementations)]
+pub struct TlsAcceptor {
+    config: Arc<ServerConfig>,
+}
+
+impl From<ServerConfig> for TlsAcceptor {
+    fn from(config: ServerConfig) -> Self {
+        Self::from(Arc::new(config))
+    }
+}
+
+impl From<Arc<ServerConfig>> for TlsAcceptor {
+    fn from(config: Arc<ServerConfig>) -> Self {
+        Self { config }
+    }
+}
+
+impl<T> Acceptor<T> for TlsAcceptor
 where
     T: AsyncRead + AsyncWrite,
 {
@@ -18,7 +35,7 @@ where
         TlsStream {
             io,
             is_shutdown: false,
-            session: ServerSession::new(self),
+            session: ServerSession::new(&self.config),
         }
     }
 }

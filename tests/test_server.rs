@@ -130,7 +130,7 @@ mod uds {
 #[cfg(feature = "native-tls")]
 mod native_tls {
     use {
-        ::native_tls::{Certificate, Identity, TlsAcceptor, TlsConnector},
+        ::native_tls::{Certificate, Identity, TlsConnector},
         futures::{Future, Stream},
         http::Request,
         hyper::{
@@ -140,7 +140,7 @@ mod native_tls {
             },
             Body,
         },
-        izanami::Server, //
+        izanami::{tls::native_tls::TlsAcceptor, Server},
         std::{io, net::SocketAddr},
         tokio::{
             net::{TcpListener, TcpStream}, //
@@ -157,9 +157,9 @@ mod native_tls {
         let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
         let local_addr = listener.local_addr()?;
 
-        let acceptor = {
+        let acceptor: TlsAcceptor = {
             let identity = Identity::from_pkcs12(IDENTITY, "mypass")?;
-            TlsAcceptor::builder(identity).build()?
+            ::native_tls::TlsAcceptor::builder(identity).build()?.into()
         };
 
         let runtime = Runtime::new()?;
@@ -238,16 +238,11 @@ mod openssl {
             },
             Body,
         },
-        izanami::Server, //
+        izanami::{tls::openssl::SslAcceptor, Server},
         openssl::{
             pkey::PKey,
             rsa::Rsa,
-            ssl::{
-                SslAcceptor, //
-                SslConnector,
-                SslMethod,
-                SslVerifyMode,
-            },
+            ssl::{SslConnector, SslMethod, SslVerifyMode},
             x509::X509,
         },
         std::{io, net::SocketAddr},
@@ -269,12 +264,7 @@ mod openssl {
         let cert = X509::from_pem(CERTIFICATE)?;
         let pkey = PKey::from_rsa(Rsa::private_key_from_pem(PRIVATE_KEY)?)?;
 
-        let acceptor = {
-            let mut builder = SslAcceptor::mozilla_modern(SslMethod::tls())?;
-            builder.set_certificate(&cert)?;
-            builder.set_private_key(&pkey)?;
-            builder.build()
-        };
+        let acceptor = SslAcceptor::new(&cert, &pkey)?;
 
         let runtime = Runtime::new()?;
         let mut serve = Server::bind(listener)?
@@ -356,7 +346,7 @@ mod rustls {
             },
             Body,
         },
-        izanami::Server,
+        izanami::{tls::rustls::TlsAcceptor, Server},
         rustls::{
             ClientConfig, //
             ClientSession,
@@ -402,11 +392,11 @@ mod rustls {
                 .ok_or_else(|| format_err!("invalid private key"))?
         };
 
-        let acceptor = {
+        let acceptor: TlsAcceptor = {
             let mut config = ServerConfig::new(NoClientAuth::new());
             config.key_log = Arc::new(KeyLogFile::new());
             config.set_single_cert(certs.clone(), priv_key.clone())?;
-            Arc::new(config)
+            config.into()
         };
 
         let runtime = Runtime::new()?;
