@@ -1,13 +1,5 @@
-Usage
-
-Generate the certtificate:
-
-```
-$ ./private/gencert.sh
-```
-
 Test command:
 
-```
-$ curl --cacert ./private/ca_cert.pem https://localhost:4000/
+```shell-session
+$ curl --cacert keys/server-crt.pem https://localhost:4000/
 ```

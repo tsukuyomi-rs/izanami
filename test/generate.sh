@@ -16,14 +16,16 @@ openssl req -new \
   -key server-key.pem \
   -out server-csr.pem
 
+# create server certificate
 openssl x509 -req \
   -days 3650 \
   -signkey server-key.pem \
   -in server-csr.pem \
   -out server-crt.pem
 
+# export certificate as PKCS12 format
 openssl pkcs12 -export \
-  -name "tsukuyomi" \
+  -name "izanami" \
   -password "pass:mypass" \
   -inkey server-key.pem \
   -in server-crt.pem \

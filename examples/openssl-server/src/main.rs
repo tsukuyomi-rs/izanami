@@ -1,8 +1,16 @@
 use {
     echo_service::Echo,
     http::Response,
-    openssl::ssl::{AlpnError, SslAcceptor, SslFiletype, SslMethod},
+    openssl::{
+        pkey::PKey,
+        rsa::Rsa,
+        ssl::{AlpnError, SslAcceptor, SslMethod},
+        x509::X509,
+    },
 };
+
+const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
+const PRIVATE_KEY: &[u8] = include_bytes!("../../../test/server-key.pem");
 
 fn main() -> izanami::Result<()> {
     let echo = Echo::builder()
@@ -13,10 +21,13 @@ fn main() -> izanami::Result<()> {
         })? //
         .build();
 
+    let cert = X509::from_pem(CERTIFICATE)?;
+    let pkey = PKey::from_rsa(Rsa::private_key_from_pem(PRIVATE_KEY)?)?;
+
     let acceptor = {
         let mut builder = SslAcceptor::mozilla_modern(SslMethod::tls())?;
-        builder.set_certificate_file("./private/cert.pem", SslFiletype::PEM)?;
-        builder.set_private_key_file("./private/key.pem", SslFiletype::PEM)?;
+        builder.set_certificate(&cert)?;
+        builder.set_private_key(&pkey)?;
         builder.set_alpn_protos(b"\x02h2\x08http/1.1")?;
         builder.set_alpn_select_callback(|_, protos| {
             const H2: &[u8] = b"\x02h2";

@@ -4,6 +4,8 @@ use {
     native_tls::{Identity, TlsAcceptor},
 };
 
+const IDENTITY: &[u8] = include_bytes!("../../../test/identity.pfx");
+
 fn main() -> izanami::Result<()> {
     let echo = Echo::builder()
         .add_route("/", |_| {
@@ -14,8 +16,7 @@ fn main() -> izanami::Result<()> {
         .build();
 
     let acceptor = {
-        let der = std::fs::read("./private/identity.pfx")?;
-        let cert = Identity::from_pkcs12(&der, "mypass")?;
+        let cert = Identity::from_pkcs12(IDENTITY, "mypass")?;
         TlsAcceptor::builder(cert).build()?
     };
 
