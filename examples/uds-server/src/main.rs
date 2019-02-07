@@ -12,7 +12,8 @@ fn main() -> izanami::Result<()> {
 
     let sock_path = std::path::Path::new("/tmp/echo-service.sock");
     izanami::Server::bind(sock_path)? //
-        .start(echo)
+        .launch(echo)?
+        .run()
 }
 
 #[cfg(not(unix))]

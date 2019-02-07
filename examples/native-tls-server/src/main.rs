@@ -19,5 +19,6 @@ fn main() -> izanami::Result<()> {
 
     izanami::Server::bind("127.0.0.1:4000")? //
         .accept(acceptor)
-        .start(echo)
+        .launch(echo)?
+        .run()
 }

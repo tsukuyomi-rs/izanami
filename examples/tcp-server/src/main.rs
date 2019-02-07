@@ -10,5 +10,6 @@ fn main() -> izanami::Result<()> {
         .build();
 
     izanami::Server::bind("127.0.0.1:5000")? //
-        .start(echo)
+        .launch(echo)?
+        .run()
 }

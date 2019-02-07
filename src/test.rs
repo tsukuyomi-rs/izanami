@@ -1,7 +1,7 @@
 use {
     crate::{
         net::Listener,
-        server::{Serve, Server, ServerConfig, SpawnServer},
+        server::{Server, ServerConfig, SpawnServer},
         service::MakeHttpService,
     },
     bytes::Bytes,
@@ -80,7 +80,7 @@ where
 /// An HTTP server for testing HTTP services.
 #[derive(Debug)]
 pub struct TestServer {
-    serve: Serve<TestRuntime>,
+    inner: Server<TestRuntime>,
     connector: TestConnector,
 }
 
@@ -91,32 +91,33 @@ impl TestServer {
         S: MakeHttpService<TestStream> + Send + 'static,
         TestRuntime: SpawnServer<TestListener, S>,
     {
+        let runtime = TestRuntime::create()?;
         let listener = TestListener::new()?;
         let connector = listener.connector();
-
-        let serve = Server::bind(listener)?
-            .runtime(TestRuntime::create()?)
-            .launch(make_service)?;
-
-        Ok(Self { serve, connector })
+        Ok(Self {
+            inner: Server::bind(listener)?
+                .runtime(runtime)
+                .launch(make_service)?,
+            connector,
+        })
     }
 
     /// Create a `TestClient` for sending HTTP requests to the background server.
     pub fn client(&mut self) -> TestClient<'_> {
         TestClient {
-            runtime: &mut *self.serve,
+            runtime: &mut *self.inner,
             client: Client::builder() //
                 .build(self.connector.clone()),
         }
     }
 
     pub fn runtime_mut(&mut self) -> &mut TestRuntime {
-        &mut *self.serve
+        &mut *self.inner
     }
 
     /// Send a shutdown signal to the background server and await its completion.
     pub fn shutdown(self) -> crate::Result<()> {
-        self.serve.shutdown()
+        self.inner.shutdown()
     }
 }
 

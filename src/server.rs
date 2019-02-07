@@ -12,7 +12,6 @@ use {
     },
     futures::{Future, Poll, Stream},
     http::{Request, Response},
-    hyper::server::conn::Http,
     izanami_util::RemoteAddr,
     std::{io, marker::PhantomData},
     tokio::{
@@ -21,32 +20,14 @@ use {
     },
 };
 
-/// A simple HTTP server that wraps the `hyper`'s server implementation.
+///
 #[derive(Debug)]
-pub struct Server<
-    T, //
-    Rt = tokio::runtime::Runtime,
-> {
+pub struct Builder<T, Rt = tokio::runtime::Runtime> {
     listener: T,
-    protocol: Http,
     runtime: Option<Rt>,
 }
 
-impl Server<()> {
-    /// Creates an HTTP server from the specified listener.
-    pub fn bind<B>(bind: B) -> crate::Result<Server<B::Listener>>
-    where
-        B: Bind,
-    {
-        Ok(Server {
-            listener: bind.bind()?,
-            protocol: Http::new(),
-            runtime: None,
-        })
-    }
-}
-
-impl<T, Rt> Server<T, Rt>
+impl<T, Rt> Builder<T, Rt>
 where
     T: Listener,
     Rt: Runtime,
@@ -61,42 +42,30 @@ where
         &mut self.listener
     }
 
-    /// Returns a reference to the HTTP-level configuration.
-    pub fn protocol(&self) -> &Http {
-        &self.protocol
-    }
-
-    /// Returns a mutable reference to the HTTP-level configuration.
-    pub fn protocol_mut(&mut self) -> &mut Http {
-        &mut self.protocol
-    }
-
     /// Sets the instance of `Acceptor` to the server.
-    pub fn accept<A>(self, acceptor: A) -> Server<AcceptWith<T, A>, Rt>
+    pub fn accept<A>(self, acceptor: A) -> Builder<AcceptWith<T, A>, Rt>
     where
         A: Acceptor<T::Conn>,
     {
-        Server {
+        Builder {
             listener: AcceptWith::new(self.listener, acceptor),
-            protocol: self.protocol,
             runtime: self.runtime,
         }
     }
 
     /// Specify the instance of runtime to use spawning the server task.
-    pub fn runtime<Rt2>(self, runtime: Rt2) -> Server<T, Rt2>
+    pub fn runtime<Rt2>(self, runtime: Rt2) -> Builder<T, Rt2>
     where
         Rt2: Runtime,
     {
-        Server {
+        Builder {
             listener: self.listener,
-            protocol: self.protocol,
             runtime: Some(runtime),
         }
     }
 
     /// Start an HTTP server using the specified service factory.
-    pub fn launch<S>(self, make_service: S) -> crate::Result<Serve<Rt>>
+    pub fn launch<S>(self, make_service: S) -> crate::Result<Server<Rt>>
     where
         S: MakeHttpService<T::Conn>,
         Rt: SpawnServer<T, S>,
@@ -111,33 +80,37 @@ where
         runtime.spawn_server(ServerConfig {
             make_service,
             listener: self.listener,
-            protocol: self.protocol,
             shutdown_signal: rx,
         })?;
 
-        Ok(Serve {
+        Ok(Server {
             runtime,
             shutdown_signal: tx,
         })
     }
-
-    /// Start an HTTP server using the specified service factory.
-    pub fn start<S>(self, make_service: S) -> crate::Result<()>
-    where
-        S: MakeHttpService<T::Conn>,
-        Rt: SpawnServer<T, S>,
-    {
-        self.launch(make_service)?.run()
-    }
 }
 
+/// An HTTP server that wraps the server implementation of `hyper`.
 #[derive(Debug)]
-pub struct Serve<Rt: Runtime = tokio::runtime::Runtime> {
+pub struct Server<Rt: Runtime = tokio::runtime::Runtime> {
     runtime: Rt,
     shutdown_signal: oneshot::Sender<()>,
 }
 
-impl<Rt> Serve<Rt>
+impl Server {
+    /// Creates an HTTP server from the specified listener.
+    pub fn bind<B>(bind: B) -> crate::Result<Builder<B::Listener>>
+    where
+        B: Bind,
+    {
+        Ok(Builder {
+            listener: bind.bind()?,
+            runtime: None,
+        })
+    }
+}
+
+impl<Rt> Server<Rt>
 where
     Rt: Runtime,
 {
@@ -158,7 +131,7 @@ where
     }
 }
 
-impl<Rt> std::ops::Deref for Serve<Rt>
+impl<Rt> std::ops::Deref for Server<Rt>
 where
     Rt: Runtime,
 {
@@ -169,7 +142,7 @@ where
     }
 }
 
-impl<Rt> std::ops::DerefMut for Serve<Rt>
+impl<Rt> std::ops::DerefMut for Server<Rt>
 where
     Rt: Runtime,
 {
@@ -220,7 +193,6 @@ impl Runtime for tokio::runtime::current_thread::Runtime {
 pub struct ServerConfig<S, T> {
     make_service: S,
     listener: T,
-    protocol: Http,
     shutdown_signal: oneshot::Receiver<()>,
 }
 
@@ -243,9 +215,8 @@ macro_rules! serve {
             listener: config.listener,
         };
 
-        let protocol = config.protocol.with_executor(executor);
-
-        hyper::server::Builder::new(incoming, protocol) //
+        hyper::server::Server::builder(incoming)
+            .executor(executor)
             .serve(MakeIzanamiService::<$T, $S>::new(config.make_service))
             .with_graceful_shutdown(config.shutdown_signal)
             .map_err(|e| log::error!("server error: {}", e))
