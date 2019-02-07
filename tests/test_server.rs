@@ -43,14 +43,17 @@ fn test_server() -> izanami::Result<()> {
     let mut server = TestServer::new(Echo)?;
 
     let response = server
-        .client()
+        .client() //
         .request(
             Request::get("http://localhost/") //
-                .body(hyper::Body::empty())
-                .unwrap(),
-        )
-        .expect("client error");
+                .body(())?,
+        )?;
     assert_eq!(response.status(), 200);
+
+    let body = server
+        .runtime_mut()
+        .block_on(response.into_body().concat())?;
+    assert_eq!(body, "hello");
 
     Ok(())
 }
