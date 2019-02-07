@@ -1,5 +1,5 @@
 use {
-    crate::{error::BoxedStdError, io::Listener},
+    crate::error::BoxedStdError,
     bytes::Buf,
     futures::{Future, Poll},
     http::{HeaderMap, Request, Response},
@@ -87,16 +87,13 @@ impl Upgrade for RequestBody {
 /// A type representing the context information that can be used from the inside
 /// of `MakeService::make_service`.
 #[derive(Debug)]
-pub struct Context<'a, T: Listener> {
-    conn: &'a T::Conn,
+pub struct Context<'a, T> {
+    conn: &'a T,
     _anchor: PhantomData<std::rc::Rc<()>>,
 }
 
-impl<'a, T> Context<'a, T>
-where
-    T: Listener,
-{
-    pub(crate) fn new(conn: &'a T::Conn) -> Self {
+impl<'a, T> Context<'a, T> {
+    pub(crate) fn new(conn: &'a T) -> Self {
         Self {
             conn,
             _anchor: PhantomData,
@@ -104,23 +101,20 @@ where
     }
 
     /// Returns a reference to the instance of a connection to a peer.
-    pub fn conn(&self) -> &T::Conn {
-        &*self.conn
+    pub fn conn(&self) -> &T {
+        &self.conn
     }
 }
 
-impl<'a, T> std::ops::Deref for Context<'a, T>
-where
-    T: Listener,
-{
-    type Target = T::Conn;
+impl<'a, T> std::ops::Deref for Context<'a, T> {
+    type Target = T;
 
     fn deref(&self) -> &Self::Target {
         self.conn()
     }
 }
 
-pub trait MakeHttpService<T: Listener> {
+pub trait MakeHttpService<T> {
     type ResponseBody: ResponseBody + Send + 'static;
     type Error: Into<BoxedStdError>;
     type Service: HttpService<ResponseBody = Self::ResponseBody, Error = Self::Error>;
@@ -132,7 +126,6 @@ pub trait MakeHttpService<T: Listener> {
 
 impl<S, T, Bd, SvcErr, MkErr, Svc, Fut> MakeHttpService<T> for S
 where
-    T: Listener,
     S: for<'a> MakeService<
         Context<'a, T>, //
         Request<RequestBody>,

@@ -1,6 +1,6 @@
 use {
     crate::{
-        io::Listener,
+        net::Listener,
         server::{Serve, Server, ServerConfig, SpawnServer},
         service::MakeHttpService,
     },
@@ -69,7 +69,7 @@ impl crate::server::Runtime for TestRuntime {
 impl<T, S> SpawnServer<T, S> for TestRuntime
 where
     T: Listener,
-    S: MakeHttpService<T>,
+    S: MakeHttpService<T::Conn>,
     tokio::runtime::Runtime: SpawnServer<T, S>,
 {
     fn spawn_server(&mut self, config: ServerConfig<S, T>) -> crate::Result<()> {
@@ -88,7 +88,7 @@ impl TestServer {
     /// Create a `TestServer` using the specified service factory.
     pub fn new<S>(make_service: S) -> crate::Result<Self>
     where
-        S: MakeHttpService<TestListener> + Send + 'static,
+        S: MakeHttpService<TestStream> + Send + 'static,
         TestRuntime: SpawnServer<TestListener, S>,
     {
         let listener = TestListener::new()?;
@@ -161,18 +161,12 @@ impl TestListener {
 
 impl Listener for TestListener {
     type Conn = TestStream;
-    type Incoming = Incoming;
 
     #[inline]
-    fn incoming(self) -> Incoming {
-        Incoming {
-            inner: Listener::incoming(self.inner),
-        }
-    }
-
-    #[inline]
-    fn remote_addr(conn: &Self::Conn) -> RemoteAddr {
-        TcpListener::remote_addr(&conn.inner)
+    fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
+        self.inner
+            .poll_incoming()
+            .map(|x| x.map(|(conn, addr)| (TestStream { inner: conn }, addr)))
     }
 }
 
@@ -210,25 +204,7 @@ impl AsyncRead for TestStream {
 impl AsyncWrite for TestStream {
     #[inline]
     fn shutdown(&mut self) -> Poll<(), io::Error> {
-        self.inner.shutdown()
-    }
-}
-
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct Incoming {
-    inner: <TcpListener as Listener>::Incoming,
-}
-
-impl Stream for Incoming {
-    type Item = TestStream;
-    type Error = io::Error;
-
-    #[inline]
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.inner
-            .poll()
-            .map(|x| x.map(|opt| opt.map(|inner| TestStream { inner })))
+        AsyncWrite::shutdown(&mut self.inner)
     }
 }
 
