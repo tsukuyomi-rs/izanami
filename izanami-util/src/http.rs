@@ -19,6 +19,42 @@ pub trait HasTrailers {
     }
 }
 
+mod impl_has_trailers {
+    use super::*;
+
+    impl HasTrailers for String {
+        type TrailersError = std::io::Error; // FIXME: replace with `!`
+    }
+
+    impl<'a> HasTrailers for &'a str {
+        type TrailersError = std::io::Error; // FIXME: replace with `!`
+    }
+
+    impl HasTrailers for Vec<u8> {
+        type TrailersError = std::io::Error; // FIXME: replace with `!`
+    }
+
+    impl<'a> HasTrailers for &'a [u8] {
+        type TrailersError = std::io::Error; // FIXME: replace with `!`
+    }
+
+    impl<'a> HasTrailers for std::borrow::Cow<'a, str> {
+        type TrailersError = std::io::Error; // FIXME: replace with `!`
+    }
+
+    impl<'a> HasTrailers for std::borrow::Cow<'a, [u8]> {
+        type TrailersError = std::io::Error; // FIXME: replace with `!`
+    }
+
+    impl HasTrailers for bytes::Bytes {
+        type TrailersError = std::io::Error; // FIXME: replace with `!`
+    }
+
+    impl HasTrailers for bytes::BytesMut {
+        type TrailersError = std::io::Error; // FIXME: replace with `!`
+    }
+}
+
 /// A trait that abstracts the HTTP upgrade.
 ///
 /// Typically, this trait is implemented by the types that represents

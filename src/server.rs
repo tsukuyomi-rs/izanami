@@ -368,14 +368,22 @@ where
     Bd: ResponseBody + Send + 'static,
 {
     type Data = Bd::Item;
-    type Error = Bd::Error;
+    type Error = crate::error::BoxedStdError;
 
     fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
-        self.0.poll_buf()
+        self.0.poll_buf().map_err(Into::into)
+    }
+
+    fn poll_trailers(&mut self) -> Poll<Option<http::HeaderMap>, Self::Error> {
+        self.0.poll_trailers().map_err(Into::into)
     }
 
     fn content_length(&self) -> Option<u64> {
-        self.0.size_hint().upper()
+        let hint = self.0.size_hint();
+        match (hint.lower(), hint.upper()) {
+            (lower, Some(upper)) if lower == upper => Some(upper),
+            _ => None,
+        }
     }
 }
 

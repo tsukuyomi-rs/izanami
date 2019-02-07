@@ -54,6 +54,14 @@ impl SizeHint {
         Self::default()
     }
 
+    #[doc(hidden)]
+    pub fn exact(len: u64) -> Self {
+        Self {
+            lower: len,
+            upper: Some(len),
+        }
+    }
+
     pub fn lower(&self) -> u64 {
         self.lower
     }
@@ -163,6 +171,11 @@ mod impl_buf_stream {
             let bytes = std::mem::replace(self, String::new()).into_bytes();
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
         }
+
+        #[inline]
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::exact(self.len() as u64)
+        }
     }
 
     impl BufStream for Vec<u8> {
@@ -176,6 +189,11 @@ mod impl_buf_stream {
 
             let bytes = std::mem::replace(self, Vec::new());
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
+        }
+
+        #[inline]
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::exact(self.len() as u64)
         }
     }
 
@@ -191,6 +209,11 @@ mod impl_buf_stream {
             let bytes = std::mem::replace(self, "").as_bytes();
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
         }
+
+        #[inline]
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::exact(self.len() as u64)
+        }
     }
 
     impl<'a> BufStream for &'a [u8] {
@@ -204,6 +227,11 @@ mod impl_buf_stream {
 
             let bytes = std::mem::replace(self, &[]);
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
+        }
+
+        #[inline]
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::exact(self.len() as u64)
         }
     }
 
@@ -222,6 +250,11 @@ mod impl_buf_stream {
             };
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
         }
+
+        #[inline]
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::exact(self.len() as u64)
+        }
     }
 
     impl<'a> BufStream for Cow<'a, [u8]> {
@@ -235,6 +268,11 @@ mod impl_buf_stream {
 
             let bytes = std::mem::replace(self, Cow::Borrowed(&[]));
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
+        }
+
+        #[inline]
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::exact(self.len() as u64)
         }
     }
 
@@ -250,6 +288,11 @@ mod impl_buf_stream {
             let bytes = std::mem::replace(self, Default::default());
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
         }
+
+        #[inline]
+        fn size_hint(&self) -> SizeHint {
+            SizeHint::exact(self.len() as u64)
+        }
     }
 
     impl BufStream for bytes::BytesMut {
@@ -264,87 +307,10 @@ mod impl_buf_stream {
             let bytes = std::mem::replace(self, Default::default());
             Ok(Async::Ready(Some(io::Cursor::new(bytes))))
         }
-    }
-}
 
-#[derive(Debug)]
-pub enum Either<L, R> {
-    Left(L),
-    Right(R),
-}
-
-mod impl_either {
-    use super::*;
-    use crate::util::*;
-
-    impl<L, R> BufStream for Either<L, R>
-    where
-        L: BufStream,
-        R: BufStream,
-        L::Error: Into<Box<dyn Error + Send + Sync + 'static>>,
-        R::Error: Into<Box<dyn Error + Send + Sync + 'static>>,
-    {
-        type Item = EitherBuf<L::Item, R::Item>;
-        type Error = Box<dyn Error + Send + Sync + 'static>;
-
-        fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-            match self {
-                Either::Left(l) => l
-                    .poll_buf()
-                    .map_async_opt(EitherBuf::Left)
-                    .map_err(Into::into),
-                Either::Right(r) => r
-                    .poll_buf()
-                    .map_async_opt(EitherBuf::Right)
-                    .map_err(Into::into),
-            }
-        }
-
+        #[inline]
         fn size_hint(&self) -> SizeHint {
-            match self {
-                Either::Left(l) => l.size_hint(),
-                Either::Right(r) => r.size_hint(),
-            }
-        }
-
-        fn consume_hint(&mut self, amount: usize) {
-            match self {
-                Either::Left(l) => l.consume_hint(amount),
-                Either::Right(r) => r.consume_hint(amount),
-            }
-        }
-    }
-
-    #[allow(missing_debug_implementations)]
-    pub enum EitherBuf<L, R> {
-        Left(L),
-        Right(R),
-    }
-
-    impl<L, R> Buf for EitherBuf<L, R>
-    where
-        L: Buf,
-        R: Buf,
-    {
-        fn remaining(&self) -> usize {
-            match self {
-                EitherBuf::Left(l) => l.remaining(),
-                EitherBuf::Right(r) => r.remaining(),
-            }
-        }
-
-        fn bytes(&self) -> &[u8] {
-            match self {
-                EitherBuf::Left(l) => l.bytes(),
-                EitherBuf::Right(r) => r.bytes(),
-            }
-        }
-
-        fn advance(&mut self, cnt: usize) {
-            match self {
-                EitherBuf::Left(l) => l.advance(cnt),
-                EitherBuf::Right(r) => r.advance(cnt),
-            }
+            SizeHint::exact(self.len() as u64)
         }
     }
 }

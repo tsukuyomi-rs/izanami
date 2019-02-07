@@ -279,25 +279,37 @@ where
 pub trait ResponseBody {
     type Item: Buf + Send;
     type Error: Into<BoxedStdError>;
+    type TrailersError: Into<BoxedStdError>;
 
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error>;
+
+    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError>;
 
     fn size_hint(&self) -> SizeHint;
 }
 
 impl<Bd> ResponseBody for Bd
 where
-    Bd: BufStream,
+    Bd: BufStream + HasTrailers,
     Bd::Item: Send,
     Bd::Error: Into<BoxedStdError>,
+    Bd::TrailersError: Into<BoxedStdError>,
 {
     type Item = Bd::Item;
     type Error = Bd::Error;
+    type TrailersError = Bd::TrailersError;
 
+    #[inline]
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         BufStream::poll_buf(self)
     }
 
+    #[inline]
+    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
+        HasTrailers::poll_trailers(self)
+    }
+
+    #[inline]
     fn size_hint(&self) -> SizeHint {
         BufStream::size_hint(self)
     }
