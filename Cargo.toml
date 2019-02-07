@@ -35,8 +35,6 @@ openssl = { version = "0.10", optional = true }
 tempfile = "3"
 tokio-tls = "0.2"
 tokio-openssl = "0.3"
-tokio-rustls = "0.8"
-webpki = "0.18"
 version-sync = "0.7"
 
 [dev-dependencies.cargo-husky]

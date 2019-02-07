@@ -336,6 +336,7 @@ mod openssl {
 #[cfg(feature = "rustls")]
 mod rustls {
     use {
+        ::native_tls::Certificate,
         failure::format_err,
         futures::{Future, Stream},
         http::Request,
@@ -348,9 +349,7 @@ mod rustls {
         },
         izanami::{tls::rustls::TlsAcceptor, Server},
         rustls::{
-            ClientConfig, //
-            ClientSession,
-            KeyLogFile,
+            KeyLogFile, //
             NoClientAuth,
             ServerConfig,
         },
@@ -363,12 +362,10 @@ mod rustls {
             net::{TcpListener, TcpStream}, //
             runtime::current_thread::Runtime,
         },
-        tokio_rustls::{TlsConnector, TlsStream},
-        webpki::{DNSName, DNSNameRef},
+        tokio_tls::TlsStream,
     };
 
     #[test]
-    #[ignore]
     fn tls_server() -> izanami::Result<()> {
         const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
         const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
@@ -405,19 +402,16 @@ mod rustls {
             .runtime(runtime)
             .launch(super::Echo)?;
 
-        let connector = {
-            let mut config = ClientConfig::new();
-            config.set_single_client_cert(certs, priv_key);
-            Arc::new(config).into()
-        };
+        // FIXME: use rustls
+        let connector = ::native_tls::TlsConnector::builder()
+            .add_root_certificate(Certificate::from_pem(CERTIFICATE)?)
+            .build()?
+            .into();
 
         let client = Client::builder() //
             .build(TestConnect {
-                local_addr,
                 connector,
-                domain: DNSNameRef::try_from_ascii_str("localhost")
-                    .map_err(|_| format_err!("invalid DNS name"))?
-                    .to_owned(),
+                local_addr,
             });
 
         let response = serve //
@@ -440,14 +434,14 @@ mod rustls {
         serve.shutdown()
     }
 
+    // FIXME: use rustls
     struct TestConnect {
         local_addr: SocketAddr,
-        connector: TlsConnector,
-        domain: DNSName,
+        connector: tokio_tls::TlsConnector,
     }
 
     impl Connect for TestConnect {
-        type Transport = TlsStream<TcpStream, ClientSession>;
+        type Transport = TlsStream<TcpStream>;
         type Error = io::Error;
         type Future = Box<
             dyn Future<Item = (Self::Transport, Connected), Error = Self::Error> + Send + 'static,
@@ -455,10 +449,13 @@ mod rustls {
 
         fn connect(&self, _: Destination) -> Self::Future {
             let connector = self.connector.clone();
-            let domain = self.domain.clone();
             Box::new(
                 TcpStream::connect(&self.local_addr)
-                    .and_then(move |stream| connector.connect(domain.as_ref(), stream)) //
+                    .and_then(move |stream| {
+                        connector
+                            .connect("localhost", stream)
+                            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+                    }) //
                     .map(|stream| (stream, Connected::new())),
             )
         }
