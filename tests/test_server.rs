@@ -133,7 +133,7 @@ mod uds {
 #[cfg(feature = "native-tls")]
 mod native_tls {
     use {
-        ::native_tls::{Certificate, Identity, TlsConnector},
+        ::native_tls::{Certificate, TlsConnector},
         futures::{Future, Stream},
         http::Request,
         hyper::{
@@ -160,10 +160,7 @@ mod native_tls {
         let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
         let local_addr = listener.local_addr()?;
 
-        let acceptor: TlsAcceptor = {
-            let identity = Identity::from_pkcs12(IDENTITY, "mypass")?;
-            ::native_tls::TlsAcceptor::builder(identity).build()?.into()
-        };
+        let acceptor = TlsAcceptor::from_pkcs12(IDENTITY, "mypass")?;
 
         let runtime = Runtime::new()?;
         let mut serve = Server::bind(listener)?

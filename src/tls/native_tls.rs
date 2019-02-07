@@ -2,15 +2,26 @@
 
 use {
     super::*,
-    ::native_tls::{HandshakeError, TlsStream as RawTlsStream},
+    ::native_tls::{HandshakeError, Identity, TlsStream as RawTlsStream},
     futures::{Async, Poll},
     std::io,
 };
 
+/// A TLS acceptor using `native_tls::TlsAcceptor`.
 #[allow(missing_debug_implementations)]
 #[derive(Clone)]
 pub struct TlsAcceptor {
     inner: ::native_tls::TlsAcceptor,
+}
+
+impl TlsAcceptor {
+    /// Create a `TlsAcceptor` from the specified DER-formatted PKCS#12 archive.
+    pub fn from_pkcs12(der: &[u8], password: &str) -> crate::Result<Self> {
+        let identity = Identity::from_pkcs12(der, password)?;
+        Ok(Self {
+            inner: ::native_tls::TlsAcceptor::new(identity)?,
+        })
+    }
 }
 
 impl From<::native_tls::TlsAcceptor> for TlsAcceptor {
