@@ -8,7 +8,7 @@ use {
             RequestBody,
             ResponseBody,
         },
-        tls::{AcceptWith, Acceptor},
+        tls::Acceptor,
     },
     futures::{Future, Poll, Stream},
     http::{Request, Response},
@@ -20,16 +20,17 @@ use {
     },
 };
 
-///
 #[derive(Debug)]
-pub struct Builder<T, Rt = tokio::runtime::Runtime> {
+pub struct Builder<T, A = crate::tls::NoTls, Rt = tokio::runtime::Runtime> {
     listener: T,
+    acceptor: A,
     runtime: Option<Rt>,
 }
 
-impl<T, Rt> Builder<T, Rt>
+impl<T, A, Rt> Builder<T, A, Rt>
 where
     T: Listener,
+    A: Acceptor<T::Conn>,
     Rt: Runtime,
 {
     /// Returns a reference to the inner listener.
@@ -43,23 +44,25 @@ where
     }
 
     /// Sets the instance of `Acceptor` to the server.
-    pub fn accept<A>(self, acceptor: A) -> Builder<AcceptWith<T, A>, Rt>
+    pub fn accept<A2>(self, acceptor: A2) -> Builder<T, A2, Rt>
     where
-        A: Acceptor<T::Conn>,
+        A2: Acceptor<T::Conn>,
     {
         Builder {
-            listener: AcceptWith::new(self.listener, acceptor),
+            listener: self.listener,
+            acceptor,
             runtime: self.runtime,
         }
     }
 
     /// Specify the instance of runtime to use spawning the server task.
-    pub fn runtime<Rt2>(self, runtime: Rt2) -> Builder<T, Rt2>
+    pub fn runtime<Rt2>(self, runtime: Rt2) -> Builder<T, A, Rt2>
     where
         Rt2: Runtime,
     {
         Builder {
             listener: self.listener,
+            acceptor: self.acceptor,
             runtime: Some(runtime),
         }
     }
@@ -67,8 +70,8 @@ where
     /// Start an HTTP server using the specified service factory.
     pub fn launch<S>(self, make_service: S) -> crate::Result<Server<Rt>>
     where
-        S: MakeHttpService<T::Conn>,
-        Rt: SpawnServer<T, S>,
+        S: MakeHttpService<A::Accepted>,
+        Rt: SpawnServer<S, T, A>,
     {
         let mut runtime = match self.runtime {
             Some(rt) => rt,
@@ -80,6 +83,7 @@ where
         runtime.spawn_server(ServerConfig {
             make_service,
             listener: self.listener,
+            acceptor: self.acceptor,
             shutdown_signal: rx,
         })?;
 
@@ -105,6 +109,7 @@ impl Server {
     {
         Ok(Builder {
             listener: bind.bind()?,
+            acceptor: Default::default(),
             runtime: None,
         })
     }
@@ -190,78 +195,86 @@ impl Runtime for tokio::runtime::current_thread::Runtime {
 
 #[doc(hidden)]
 #[allow(missing_debug_implementations)]
-pub struct ServerConfig<S, T> {
+pub struct ServerConfig<S, T, A = crate::tls::NoTls> {
     make_service: S,
     listener: T,
+    acceptor: A,
     shutdown_signal: oneshot::Receiver<()>,
 }
 
 /// A trait that represents spawning of HTTP server tasks.
-pub trait SpawnServer<T, S>
+pub trait SpawnServer<S, T, A = crate::tls::NoTls>
 where
+    S: MakeHttpService<A::Accepted>,
     T: Listener,
-    S: MakeHttpService<T::Conn>,
+    A: Acceptor<T::Conn>,
 {
-    fn spawn_server(&mut self, config: ServerConfig<S, T>) -> crate::Result<()>;
+    fn spawn_server(&mut self, config: ServerConfig<S, T, A>) -> crate::Result<()>;
 }
 
 /// A helper macro for creating a server task.
 macro_rules! serve {
-    (<$T:ty, $S:ty> $config:expr, $executor:expr) => {{
+    (<$T:ty, $A:ty, $S:ty> $config:expr, $executor:expr) => {{
         let config = $config;
         let executor = $executor;
 
         let incoming = AddrIncoming {
             listener: config.listener,
+            acceptor: config.acceptor,
         };
 
         hyper::server::Server::builder(incoming)
             .executor(executor)
-            .serve(MakeIzanamiService::<$T, $S>::new(config.make_service))
+            .serve(MakeIzanamiService::<$T, $A, $S>::new(config.make_service))
             .with_graceful_shutdown(config.shutdown_signal)
             .map_err(|e| log::error!("server error: {}", e))
     }};
 }
 
-impl<T, S> SpawnServer<T, S> for tokio::runtime::Runtime
+impl<S, T, A> SpawnServer<S, T, A> for tokio::runtime::Runtime
 where
-    T: Listener + Send + 'static,
-    T::Conn: Send + 'static,
-    S: MakeHttpService<T::Conn> + Send + Sync + 'static,
+    S: MakeHttpService<A::Accepted> + Send + Sync + 'static,
     S::Future: Send + 'static,
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
+    T: Listener + Send + 'static,
+    A: Acceptor<T::Conn> + Send + 'static,
+    A::Accepted: Send + 'static,
 {
-    fn spawn_server(&mut self, config: ServerConfig<S, T>) -> crate::Result<()> {
-        self.spawn(serve!(<T, S> config, self.executor()));
+    fn spawn_server(&mut self, config: ServerConfig<S, T, A>) -> crate::Result<()> {
+        self.spawn(serve!(<T, A, S> config, self.executor()));
         Ok(())
     }
 }
 
-impl<T, S> SpawnServer<T, S> for tokio::runtime::current_thread::Runtime
+impl<S, T, A> SpawnServer<S, T, A> for tokio::runtime::current_thread::Runtime
 where
-    T: Listener + Send + 'static,
-    T::Conn: Send + 'static,
-    S: MakeHttpService<T::Conn> + 'static,
+    S: MakeHttpService<A::Accepted> + 'static,
     S::Service: 'static,
     S::Future: 'static,
+    T: Listener + 'static,
+    A: Acceptor<T::Conn> + 'static,
+    A::Accepted: Send + 'static,
 {
-    fn spawn_server(&mut self, config: ServerConfig<S, T>) -> crate::Result<()> {
-        self.spawn(serve!(<T, S> config, tokio::runtime::current_thread::TaskExecutor::current()));
+    fn spawn_server(&mut self, config: ServerConfig<S, T, A>) -> crate::Result<()> {
+        self.spawn(
+            serve!(<T, A, S> config, tokio::runtime::current_thread::TaskExecutor::current()),
+        );
         Ok(())
     }
 }
 
 #[allow(missing_debug_implementations)]
-struct MakeIzanamiService<T, S> {
+struct MakeIzanamiService<T, A, S> {
     make_service: S,
-    _marker: PhantomData<fn(&T)>,
+    _marker: PhantomData<fn(&T, &A)>,
 }
 
-impl<T, S> MakeIzanamiService<T, S>
+impl<T, A, S> MakeIzanamiService<T, A, S>
 where
     T: Listener,
-    S: MakeHttpService<T::Conn>,
+    A: Acceptor<T::Conn>,
+    S: MakeHttpService<A::Accepted>,
 {
     fn new(make_service: S) -> Self {
         Self {
@@ -271,10 +284,12 @@ where
     }
 }
 
-impl<'a, T, S> hyper::service::MakeService<&'a AddrStream<T::Conn>> for MakeIzanamiService<T, S>
+impl<'a, T, A, S> hyper::service::MakeService<&'a AddrStream<A::Accepted>>
+    for MakeIzanamiService<T, A, S>
 where
     T: Listener,
-    S: MakeHttpService<T::Conn>,
+    A: Acceptor<T::Conn>,
+    S: MakeHttpService<A::Accepted>,
 {
     type ReqBody = hyper::Body;
     type ResBody = WrappedBodyStream<S::ResponseBody>;
@@ -283,7 +298,7 @@ where
     type MakeError = S::MakeError;
     type Future = MakeIzanamiServiceFuture<S::Future>;
 
-    fn make_service(&mut self, conn: &'a AddrStream<T::Conn>) -> Self::Future {
+    fn make_service(&mut self, conn: &'a AddrStream<A::Accepted>) -> Self::Future {
         MakeIzanamiServiceFuture {
             inner: self.make_service.make_service(Context::new(&conn.io)),
             remote_addr: Some(conn.remote_addr.clone()),
@@ -388,21 +403,28 @@ where
 }
 
 #[allow(missing_debug_implementations)]
-struct AddrIncoming<T: Listener> {
+struct AddrIncoming<T: Listener, A: Acceptor<T::Conn>> {
     listener: T,
+    acceptor: A,
 }
 
-impl<T> Stream for AddrIncoming<T>
+impl<T, A> Stream for AddrIncoming<T, A>
 where
     T: Listener,
+    A: Acceptor<T::Conn>,
 {
-    type Item = AddrStream<T::Conn>;
+    type Item = AddrStream<A::Accepted>;
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.listener
-            .poll_incoming()
-            .map(|x| x.map(|(io, remote_addr)| Some(AddrStream { io, remote_addr })))
+        self.listener.poll_incoming().map(|x| {
+            x.map(|(io, remote_addr)| {
+                Some(AddrStream {
+                    io: self.acceptor.accept(io),
+                    remote_addr,
+                })
+            })
+        })
     }
 }
 

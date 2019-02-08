@@ -3,6 +3,7 @@ use {
         net::Listener,
         server::{Server, ServerConfig, SpawnServer},
         service::MakeHttpService,
+        tls::Acceptor,
     },
     bytes::Bytes,
     futures::{Future, Poll, Stream},
@@ -66,13 +67,14 @@ impl crate::server::Runtime for TestRuntime {
     }
 }
 
-impl<T, S> SpawnServer<T, S> for TestRuntime
+impl<S, T, A> SpawnServer<S, T, A> for TestRuntime
 where
+    S: MakeHttpService<A::Accepted>,
     T: Listener,
-    S: MakeHttpService<T::Conn>,
-    tokio::runtime::Runtime: SpawnServer<T, S>,
+    A: Acceptor<T::Conn>,
+    tokio::runtime::Runtime: SpawnServer<S, T, A>,
 {
-    fn spawn_server(&mut self, config: ServerConfig<S, T>) -> crate::Result<()> {
+    fn spawn_server(&mut self, config: ServerConfig<S, T, A>) -> crate::Result<()> {
         self.inner.spawn_server(config)
     }
 }
@@ -89,7 +91,7 @@ impl TestServer {
     pub fn new<S>(make_service: S) -> crate::Result<Self>
     where
         S: MakeHttpService<TestStream> + Send + 'static,
-        TestRuntime: SpawnServer<TestListener, S>,
+        TestRuntime: SpawnServer<S, TestListener>,
     {
         let runtime = TestRuntime::create()?;
         let listener = TestListener::new()?;
