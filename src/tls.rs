@@ -5,7 +5,13 @@ pub mod native_tls;
 pub mod openssl;
 pub mod rustls;
 
-use tokio::io::{AsyncRead, AsyncWrite};
+use {
+    crate::{net::Listener, util::MapAsyncExt},
+    futures::Poll,
+    izanami_util::RemoteAddr,
+    std::io,
+    tokio::io::{AsyncRead, AsyncWrite},
+};
 
 /// A trait that represents the conversion of asynchronous I/Os.
 ///
@@ -42,4 +48,36 @@ where
     }
 
     AcceptFn(accept)
+}
+
+/// A wrapper for `Listener` that modifies the I/O returned from the incoming stream
+/// using the specified `Acceptor`.
+#[derive(Debug)]
+pub struct AcceptWith<T, A> {
+    listener: T,
+    acceptor: A,
+}
+
+impl<T, A> AcceptWith<T, A>
+where
+    T: Listener,
+    A: Acceptor<T::Conn>,
+{
+    pub(crate) fn new(listener: T, acceptor: A) -> Self {
+        Self { listener, acceptor }
+    }
+}
+
+impl<T, A> Listener for AcceptWith<T, A>
+where
+    T: Listener,
+    A: Acceptor<T::Conn>,
+{
+    type Conn = A::Accepted;
+
+    fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
+        self.listener
+            .poll_incoming()
+            .map_async(|(io, addr)| (self.acceptor.accept(io), addr))
+    }
 }

@@ -1,22 +1,11 @@
 //! Abstraction around low-level network I/O.
 
 use {
-    crate::tls::Acceptor,
     futures::Poll,
     izanami_util::RemoteAddr,
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };
-
-trait MapAsyncExt<T, E> {
-    fn map_async<U>(self, op: impl FnOnce(T) -> U) -> Poll<U, E>;
-}
-
-impl<T, E> MapAsyncExt<T, E> for Poll<T, E> {
-    fn map_async<U>(self, op: impl FnOnce(T) -> U) -> Poll<U, E> {
-        self.map(|x| x.map(op))
-    }
-}
 
 /// A trait representing the conversion to an I/O object bound to the specified address.
 pub trait Bind {
@@ -45,41 +34,10 @@ pub trait Listener {
     fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error>;
 }
 
-/// A wrapper for `Listener` that modifies the I/O returned from the incoming stream
-/// using the specified `Acceptor`.
-#[derive(Debug)]
-pub struct AcceptWith<T, A> {
-    listener: T,
-    acceptor: A,
-}
-
-impl<T, A> AcceptWith<T, A>
-where
-    T: Listener,
-    A: Acceptor<T::Conn>,
-{
-    pub(crate) fn new(listener: T, acceptor: A) -> Self {
-        Self { listener, acceptor }
-    }
-}
-
-impl<T, A> Listener for AcceptWith<T, A>
-where
-    T: Listener,
-    A: Acceptor<T::Conn>,
-{
-    type Conn = A::Accepted;
-
-    fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
-        self.listener
-            .poll_incoming()
-            .map_async(|(io, addr)| (self.acceptor.accept(io), addr))
-    }
-}
-
 pub mod tcp {
     use {
         super::{sleep_on_errors::SleepOnErrors, *},
+        crate::util::MapAsyncExt,
         std::{net::SocketAddr, time::Duration},
         tokio::net::{TcpListener, TcpStream},
     };
@@ -197,6 +155,7 @@ pub mod tcp {
 pub mod unix {
     use {
         super::{sleep_on_errors::SleepOnErrors, *},
+        crate::util::MapAsyncExt,
         std::{
             os::unix::net::SocketAddr,
             path::{Path, PathBuf},

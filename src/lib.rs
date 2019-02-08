@@ -11,6 +11,8 @@
 #![forbid(clippy::unimplemented)]
 
 mod error;
+mod util;
+
 pub mod net;
 pub mod server;
 pub mod service;
