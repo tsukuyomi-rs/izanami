@@ -13,7 +13,7 @@ use {
     futures::{Future, Poll, Stream},
     http::{Request, Response},
     izanami_util::RemoteAddr,
-    std::{io, marker::PhantomData},
+    std::io,
     tokio::{
         io::{AsyncRead, AsyncWrite},
         sync::oneshot,
@@ -214,7 +214,7 @@ where
 
 /// A helper macro for creating a server task.
 macro_rules! serve {
-    (<$T:ty, $A:ty, $S:ty> $config:expr, $executor:expr) => {{
+    ($config:expr, $executor:expr) => {{
         let config = $config;
         let executor = $executor;
 
@@ -222,10 +222,21 @@ macro_rules! serve {
             listener: config.listener,
             acceptor: config.acceptor,
         };
+        let make_service = config.make_service;
 
         hyper::server::Server::builder(incoming)
             .executor(executor)
-            .serve(MakeIzanamiService::<$T, $A, $S>::new(config.make_service))
+            .serve(hyper::service::make_service_fn(
+                move |conn: &AddrStream<_>| {
+                    let remote_addr = conn.remote_addr.clone();
+                    make_service
+                        .make_service(Context::new(&conn.io))
+                        .map(move |service| IzanamiService {
+                            service,
+                            remote_addr,
+                        })
+                },
+            ))
             .with_graceful_shutdown(config.shutdown_signal)
             .map_err(|e| log::error!("server error: {}", e))
     }};
@@ -242,7 +253,7 @@ where
     A::Accepted: Send + 'static,
 {
     fn spawn_server(&mut self, config: ServerConfig<S, T, A>) -> crate::Result<()> {
-        self.spawn(serve!(<T, A, S> config, self.executor()));
+        self.spawn(serve!(config, self.executor()));
         Ok(())
     }
 }
@@ -257,78 +268,9 @@ where
     A::Accepted: Send + 'static,
 {
     fn spawn_server(&mut self, config: ServerConfig<S, T, A>) -> crate::Result<()> {
-        self.spawn(
-            serve!(<T, A, S> config, tokio::runtime::current_thread::TaskExecutor::current()),
-        );
+        let executor = tokio::runtime::current_thread::TaskExecutor::current();
+        self.spawn(serve!(config, executor));
         Ok(())
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct MakeIzanamiService<T, A, S> {
-    make_service: S,
-    _marker: PhantomData<fn(&T, &A)>,
-}
-
-impl<T, A, S> MakeIzanamiService<T, A, S>
-where
-    T: Listener,
-    A: Acceptor<T::Conn>,
-    S: MakeHttpService<A::Accepted>,
-{
-    fn new(make_service: S) -> Self {
-        Self {
-            make_service,
-            _marker: PhantomData,
-        }
-    }
-}
-
-impl<'a, T, A, S> hyper::service::MakeService<&'a AddrStream<A::Accepted>>
-    for MakeIzanamiService<T, A, S>
-where
-    T: Listener,
-    A: Acceptor<T::Conn>,
-    S: MakeHttpService<A::Accepted>,
-{
-    type ReqBody = hyper::Body;
-    type ResBody = WrappedBodyStream<S::ResponseBody>;
-    type Error = S::Error;
-    type Service = IzanamiService<S::Service>;
-    type MakeError = S::MakeError;
-    type Future = MakeIzanamiServiceFuture<S::Future>;
-
-    fn make_service(&mut self, conn: &'a AddrStream<A::Accepted>) -> Self::Future {
-        MakeIzanamiServiceFuture {
-            inner: self.make_service.make_service(Context::new(&conn.io)),
-            remote_addr: Some(conn.remote_addr.clone()),
-        }
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct MakeIzanamiServiceFuture<Fut> {
-    inner: Fut,
-    remote_addr: Option<RemoteAddr>,
-}
-
-impl<Fut> Future for MakeIzanamiServiceFuture<Fut>
-where
-    Fut: Future,
-{
-    type Item = IzanamiService<Fut::Item>;
-    type Error = Fut::Error;
-
-    #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        Ok(IzanamiService {
-            service: futures::try_ready!(self.inner.poll()),
-            remote_addr: self
-                .remote_addr
-                .take()
-                .expect("the future has already been polled."),
-        }
-        .into())
     }
 }
 
@@ -343,7 +285,7 @@ where
     S: HttpService,
 {
     type ReqBody = hyper::Body;
-    type ResBody = WrappedBodyStream<S::ResponseBody>;
+    type ResBody = InnerBody<S::ResponseBody>;
     type Error = S::Error;
     type Future = LiftedHttpServiceFuture<S::Future>;
 
@@ -364,21 +306,21 @@ where
     Fut: Future<Item = Response<Bd>>,
     Bd: ResponseBody + Send + 'static,
 {
-    type Item = Response<WrappedBodyStream<Bd>>;
+    type Item = Response<InnerBody<Bd>>;
     type Error = Fut::Error;
 
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.0
             .poll()
-            .map(|x| x.map(|response| response.map(WrappedBodyStream)))
+            .map(|x| x.map(|response| response.map(InnerBody)))
     }
 }
 
 #[allow(missing_debug_implementations)]
-struct WrappedBodyStream<Bd>(Bd);
+struct InnerBody<Bd>(Bd);
 
-impl<Bd> hyper::body::Payload for WrappedBodyStream<Bd>
+impl<Bd> hyper::body::Payload for InnerBody<Bd>
 where
     Bd: ResponseBody + Send + 'static,
 {

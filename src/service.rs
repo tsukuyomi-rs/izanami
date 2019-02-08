@@ -222,7 +222,7 @@ pub trait MakeHttpService<T> {
     type MakeError: Into<BoxedStdError>;
     type Future: Future<Item = Self::Service, Error = Self::MakeError>;
 
-    fn make_service(&mut self, cx: Context<'_, T>) -> Self::Future;
+    fn make_service(&self, cx: Context<'_, T>) -> Self::Future;
 }
 
 impl<S, T, Bd, SvcErr, MkErr, Svc, Fut> MakeHttpService<T> for S
@@ -248,7 +248,7 @@ where
     type MakeError = MkErr;
     type Future = Fut;
 
-    fn make_service(&mut self, cx: Context<'_, T>) -> Self::Future {
+    fn make_service(&self, cx: Context<'_, T>) -> Self::Future {
         MakeService::make_service(self, cx)
     }
 }
