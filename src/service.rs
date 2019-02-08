@@ -8,6 +8,7 @@ use {
     izanami_util::{
         buf_stream::{BufStream, SizeHint},
         http::{HasTrailers, Upgrade},
+        RemoteAddr,
     },
     std::{io, marker::PhantomData},
     tokio::io::{AsyncRead, AsyncWrite},
@@ -185,50 +186,42 @@ impl AsyncWrite for Upgraded {
 
 // ==== Context ====
 
-/// A type representing the context information that can be used from the inside
-/// of `MakeService::make_service`.
+/// Context values passed from the server when creating the service.
+///
+/// Currently, there is nothing available from the value of this type.
 #[derive(Debug)]
-pub struct Context<'a, T> {
-    conn: &'a T,
+pub struct Context<'a> {
+    remote_addr: &'a RemoteAddr,
     _anchor: PhantomData<std::rc::Rc<()>>,
 }
 
-impl<'a, T> Context<'a, T> {
-    pub(crate) fn new(conn: &'a T) -> Self {
+impl<'a> Context<'a> {
+    pub(crate) fn new(remote_addr: &'a RemoteAddr) -> Self {
         Self {
-            conn,
+            remote_addr,
             _anchor: PhantomData,
         }
     }
 
-    /// Returns a reference to the instance of a connection to a peer.
-    pub fn conn(&self) -> &T {
-        &self.conn
+    pub fn remote_addr(&self) -> &RemoteAddr {
+        &*self.remote_addr
     }
 }
 
-impl<'a, T> std::ops::Deref for Context<'a, T> {
-    type Target = T;
-
-    fn deref(&self) -> &Self::Target {
-        self.conn()
-    }
-}
-
-pub trait MakeHttpService<T> {
+pub trait MakeHttpService {
     type ResponseBody: ResponseBody + Send + 'static;
     type Error: Into<BoxedStdError>;
     type Service: HttpService<ResponseBody = Self::ResponseBody, Error = Self::Error>;
     type MakeError: Into<BoxedStdError>;
     type Future: Future<Item = Self::Service, Error = Self::MakeError>;
 
-    fn make_service(&self, cx: Context<'_, T>) -> Self::Future;
+    fn make_service(&self, cx: &mut Context<'_>) -> Self::Future;
 }
 
-impl<S, T, Bd, SvcErr, MkErr, Svc, Fut> MakeHttpService<T> for S
+impl<S, Bd, SvcErr, MkErr, Svc, Fut> MakeHttpService for S
 where
-    S: for<'a> MakeService<
-        Context<'a, T>, //
+    S: for<'cx, 'srv> MakeService<
+        &'cx mut Context<'srv>, //
         Request<RequestBody>,
         Response = Response<Bd>,
         Error = SvcErr,
@@ -248,7 +241,7 @@ where
     type MakeError = MkErr;
     type Future = Fut;
 
-    fn make_service(&self, cx: Context<'_, T>) -> Self::Future {
+    fn make_service(&self, cx: &mut Context<'_>) -> Self::Future {
         MakeService::make_service(self, cx)
     }
 }

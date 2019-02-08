@@ -70,7 +70,7 @@ where
     /// Start an HTTP server using the specified service factory.
     pub fn launch<S>(self, make_service: S) -> crate::Result<Server<Rt>>
     where
-        S: MakeHttpService<A::Accepted>,
+        S: MakeHttpService,
         Rt: SpawnServer<S, T, A>,
     {
         let mut runtime = match self.runtime {
@@ -205,7 +205,7 @@ pub struct ServerConfig<S, T, A = crate::tls::NoTls> {
 /// A trait that represents spawning of HTTP server tasks.
 pub trait SpawnServer<S, T, A = crate::tls::NoTls>
 where
-    S: MakeHttpService<A::Accepted>,
+    S: MakeHttpService,
     T: Listener,
     A: Acceptor<T::Conn>,
 {
@@ -230,7 +230,7 @@ macro_rules! serve {
                 move |conn: &AddrStream<_>| {
                     let remote_addr = conn.remote_addr.clone();
                     make_service
-                        .make_service(Context::new(&conn.io))
+                        .make_service(&mut Context::new(&remote_addr))
                         .map(move |service| IzanamiService {
                             service,
                             remote_addr,
@@ -244,7 +244,7 @@ macro_rules! serve {
 
 impl<S, T, A> SpawnServer<S, T, A> for tokio::runtime::Runtime
 where
-    S: MakeHttpService<A::Accepted> + Send + Sync + 'static,
+    S: MakeHttpService + Send + Sync + 'static,
     S::Future: Send + 'static,
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
@@ -260,7 +260,7 @@ where
 
 impl<S, T, A> SpawnServer<S, T, A> for tokio::runtime::current_thread::Runtime
 where
-    S: MakeHttpService<A::Accepted> + 'static,
+    S: MakeHttpService + 'static,
     S::Service: 'static,
     S::Future: 'static,
     T: Listener + 'static,

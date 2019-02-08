@@ -69,7 +69,7 @@ impl crate::server::Runtime for TestRuntime {
 
 impl<S, T, A> SpawnServer<S, T, A> for TestRuntime
 where
-    S: MakeHttpService<A::Accepted>,
+    S: MakeHttpService,
     T: Listener,
     A: Acceptor<T::Conn>,
     tokio::runtime::Runtime: SpawnServer<S, T, A>,
@@ -90,7 +90,7 @@ impl TestServer {
     /// Create a `TestServer` using the specified service factory.
     pub fn new<S>(make_service: S) -> crate::Result<Self>
     where
-        S: MakeHttpService<TestStream> + Send + 'static,
+        S: MakeHttpService + Send + 'static,
         TestRuntime: SpawnServer<S, TestListener>,
     {
         let runtime = TestRuntime::create()?;
