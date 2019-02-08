@@ -144,6 +144,10 @@ where
             }),
         }
     }
+
+    fn is_tls(&self) -> bool {
+        true
+    }
 }
 
 #[allow(missing_debug_implementations)]

@@ -44,6 +44,10 @@ where
             }),
         }
     }
+
+    fn is_tls(&self) -> bool {
+        true
+    }
 }
 
 #[derive(Debug)]

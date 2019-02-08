@@ -9,25 +9,33 @@ use {
 
 /// A trait representing the conversion to an I/O object bound to the specified address.
 pub trait Bind {
+    /// The type of established connection.
+    type Conn: AsyncRead + AsyncWrite;
+
     /// The type of listener returned from `bind`.
-    type Listener: Listener;
+    type Listener: Listener<Conn = Self::Conn>;
 
     /// Create an I/O object bound to the specified address.
-    fn bind(self) -> crate::Result<Self::Listener>;
+    fn bind(&self) -> crate::Result<Self::Listener>;
 }
 
-impl<T: Listener> Bind for T {
-    type Listener = Self;
+impl<F, T> Bind for F
+where
+    F: Fn() -> crate::Result<T>,
+    T: Listener,
+{
+    type Conn = T::Conn;
+    type Listener = T;
 
     #[inline]
-    fn bind(self) -> crate::Result<Self::Listener> {
-        Ok(self)
+    fn bind(&self) -> crate::Result<Self::Listener> {
+        (*self)()
     }
 }
 
 /// A trait abstracting I/O objects that listens for incoming connections.
 pub trait Listener {
-    /// The type of established connection returned from `Incoming`.
+    /// The type of established connection returned from `poll_incoming`.
     type Conn: AsyncRead + AsyncWrite;
 
     /// Acquires a connection to the peer.
@@ -62,8 +70,7 @@ pub mod tcp {
     }
 
     impl AddrIncoming {
-        pub(crate) fn bind(addr: &SocketAddr) -> io::Result<Self> {
-            let listener = TcpListener::bind(addr)?;
+        fn new(listener: TcpListener) -> io::Result<Self> {
             let local_addr = listener.local_addr()?;
             Ok(Self {
                 listener: SleepOnErrors::new(listener),
@@ -71,6 +78,17 @@ pub mod tcp {
                 tcp_keepalive_timeout: None,
                 tcp_nodelay: false,
             })
+        }
+
+        pub(crate) fn bind(addr: &SocketAddr) -> io::Result<Self> {
+            Self::new(TcpListener::bind(addr)?)
+        }
+
+        pub(crate) fn from_std(listener: std::net::TcpListener) -> io::Result<Self> {
+            Self::new(TcpListener::from_std(
+                listener,
+                &tokio::reactor::Handle::default(),
+            )?)
         }
 
         #[inline]
@@ -119,34 +137,48 @@ pub mod tcp {
     }
 
     impl Bind for SocketAddr {
+        type Conn = TcpStream;
         type Listener = AddrIncoming;
 
-        fn bind(self) -> crate::Result<Self::Listener> {
-            (&self).bind()
+        fn bind(&self) -> crate::Result<Self::Listener> {
+            AddrIncoming::bind(self).map_err(Into::into)
         }
     }
 
     impl<'a> Bind for &'a SocketAddr {
+        type Conn = TcpStream;
         type Listener = AddrIncoming;
 
-        fn bind(self) -> crate::Result<Self::Listener> {
+        fn bind(&self) -> crate::Result<Self::Listener> {
             AddrIncoming::bind(self).map_err(Into::into)
         }
     }
 
     impl<'a> Bind for &'a str {
+        type Conn = TcpStream;
         type Listener = AddrIncoming;
 
-        fn bind(self) -> crate::Result<Self::Listener> {
+        fn bind(&self) -> crate::Result<Self::Listener> {
             self.parse::<SocketAddr>()?.bind()
         }
     }
 
     impl Bind for String {
+        type Conn = TcpStream;
         type Listener = AddrIncoming;
 
-        fn bind(self) -> crate::Result<Self::Listener> {
-            self.as_str().bind()
+        fn bind(&self) -> crate::Result<Self::Listener> {
+            self.parse::<SocketAddr>()?.bind()
+        }
+    }
+
+    impl Bind for std::net::TcpListener {
+        type Conn = TcpStream;
+        type Listener = AddrIncoming;
+
+        fn bind(&self) -> crate::Result<Self::Listener> {
+            let listener = self.try_clone()?;
+            Ok(AddrIncoming::from_std(listener)?)
         }
     }
 }
@@ -182,13 +214,23 @@ pub mod unix {
     }
 
     impl AddrIncoming {
-        pub(crate) fn bind(sock_path: &Path) -> io::Result<Self> {
-            let listener = UnixListener::bind(sock_path)?;
+        fn new(listener: UnixListener) -> io::Result<Self> {
             let local_addr = listener.local_addr()?;
             Ok(Self {
                 listener: SleepOnErrors::new(listener),
                 local_addr,
             })
+        }
+
+        pub(crate) fn bind(sock_path: &Path) -> io::Result<Self> {
+            Self::new(UnixListener::bind(sock_path)?)
+        }
+
+        pub(crate) fn from_std(listener: std::os::unix::net::UnixListener) -> io::Result<Self> {
+            Self::new(UnixListener::from_std(
+                listener,
+                &tokio::reactor::Handle::default(),
+            )?)
         }
 
         #[inline]
@@ -213,26 +255,39 @@ pub mod unix {
     }
 
     impl Bind for PathBuf {
+        type Conn = UnixStream;
         type Listener = AddrIncoming;
 
-        fn bind(self) -> crate::Result<Self::Listener> {
-            self.as_path().bind()
+        fn bind(&self) -> crate::Result<Self::Listener> {
+            AddrIncoming::bind(&self).map_err(Into::into)
         }
     }
 
     impl<'a> Bind for &'a PathBuf {
+        type Conn = UnixStream;
         type Listener = AddrIncoming;
 
-        fn bind(self) -> crate::Result<Self::Listener> {
-            self.as_path().bind()
+        fn bind(&self) -> crate::Result<Self::Listener> {
+            AddrIncoming::bind(&self).map_err(Into::into)
         }
     }
 
     impl<'a> Bind for &'a Path {
+        type Conn = UnixStream;
         type Listener = AddrIncoming;
 
-        fn bind(self) -> crate::Result<Self::Listener> {
+        fn bind(&self) -> crate::Result<Self::Listener> {
             AddrIncoming::bind(&self).map_err(Into::into)
+        }
+    }
+
+    impl Bind for std::os::unix::net::UnixListener {
+        type Conn = UnixStream;
+        type Listener = AddrIncoming;
+
+        fn bind(&self) -> crate::Result<Self::Listener> {
+            let listener = self.try_clone()?;
+            Ok(AddrIncoming::from_std(listener)?)
         }
     }
 }

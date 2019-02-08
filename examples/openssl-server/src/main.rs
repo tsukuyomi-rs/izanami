@@ -1,7 +1,7 @@
 use {
     echo_service::Echo,
     http::Response,
-    izanami::tls::openssl::SslAcceptor,
+    izanami::{tls::openssl::SslAcceptor, Http, Server},
     openssl::{pkey::PKey, rsa::Rsa, x509::X509},
 };
 
@@ -17,6 +17,8 @@ fn main() -> izanami::Result<()> {
         })? //
         .build();
 
+    let mut server = Server::default()?;
+
     let acceptor = {
         let cert = X509::from_pem(CERTIFICATE)?;
         let pkey = PKey::from_rsa(Rsa::private_key_from_pem(PRIVATE_KEY)?)?;
@@ -24,9 +26,10 @@ fn main() -> izanami::Result<()> {
             .alpn_protocols(vec!["h2", "http/1.1"])
             .build(&cert, &pkey)?
     };
+    server.start(
+        Http::bind("127.0.0.1:4000") //
+            .serve_with(acceptor, move || echo.clone()),
+    )?;
 
-    izanami::Server::bind("127.0.0.1:4000")? //
-        .accept(acceptor)
-        .launch(echo)?
-        .run()
+    server.run()
 }

@@ -8,6 +8,7 @@ use {
 };
 
 #[allow(missing_debug_implementations)]
+#[derive(Clone)]
 pub struct TlsAcceptor {
     config: Arc<ServerConfig>,
 }
@@ -37,6 +38,10 @@ where
             is_shutdown: false,
             session: ServerSession::new(&self.config),
         }
+    }
+
+    fn is_tls(&self) -> bool {
+        true
     }
 }
 
