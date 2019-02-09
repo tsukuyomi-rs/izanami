@@ -1,7 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::{http::Http, server::Server, tls::native_tls::TlsAcceptor},
+    izanami::{http::Http, server::Server, tls::native_tls::NativeTls},
 };
 
 const IDENTITY: &[u8] = include_bytes!("../../../test/identity.pfx");
@@ -17,10 +17,10 @@ fn main() -> izanami::Result<()> {
 
     let mut server = Server::default()?;
 
-    let acceptor = TlsAcceptor::from_pkcs12(IDENTITY, "mypass")?;
+    let native_tls = NativeTls::from_pkcs12(IDENTITY, "mypass")?;
     server.start(
         Http::bind("127.0.0.1:4000") //
-            .serve_with(acceptor, move || echo.clone()),
+            .serve_with(native_tls, move || echo.clone()),
     )?;
 
     server.run()

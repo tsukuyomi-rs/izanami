@@ -2,67 +2,87 @@
 
 use {
     super::*,
-    ::native_tls::{HandshakeError, Identity, TlsStream as RawTlsStream},
+    ::native_tls::{
+        HandshakeError, //
+        Identity,
+        TlsAcceptor,
+        TlsStream,
+    },
     futures::{Async, Poll},
     std::io,
 };
 
-/// A TLS acceptor using `native_tls::TlsAcceptor`.
+/// A TLS configuration using `native_tls`.
 #[allow(missing_debug_implementations)]
-#[derive(Clone)]
-pub struct TlsAcceptor {
-    inner: ::native_tls::TlsAcceptor,
+pub struct NativeTls {
+    acceptor: TlsAcceptor,
 }
 
-impl TlsAcceptor {
+impl NativeTls {
     /// Create a `TlsAcceptor` from the specified DER-formatted PKCS#12 archive.
     pub fn from_pkcs12(der: &[u8], password: &str) -> crate::Result<Self> {
         let identity = Identity::from_pkcs12(der, password)?;
         Ok(Self {
-            inner: ::native_tls::TlsAcceptor::new(identity)?,
+            acceptor: TlsAcceptor::new(identity)?,
         })
     }
 }
 
-impl From<::native_tls::TlsAcceptor> for TlsAcceptor {
-    fn from(inner: ::native_tls::TlsAcceptor) -> Self {
-        Self { inner }
+impl From<TlsAcceptor> for NativeTls {
+    fn from(acceptor: TlsAcceptor) -> Self {
+        Self { acceptor }
     }
 }
 
-impl<T> Acceptor<T> for TlsAcceptor
+impl<T> Tls<T> for NativeTls
 where
     T: AsyncRead + AsyncWrite,
 {
-    type Accepted = TlsStream<T>;
+    type Wrapped = NativeTlsStream<T>;
+    type Wrapper = NativeTlsWrapper;
 
     #[inline]
-    fn accept(&self, io: T) -> Self::Accepted {
-        TlsStream {
+    fn wrapper(&self, _: TlsConfig) -> crate::Result<Self::Wrapper> {
+        Ok(NativeTlsWrapper {
+            acceptor: self.acceptor.clone(),
+        })
+    }
+}
+
+#[allow(missing_debug_implementations)]
+pub struct NativeTlsWrapper {
+    acceptor: TlsAcceptor,
+}
+
+impl<T> TlsWrapper<T> for NativeTlsWrapper
+where
+    T: AsyncRead + AsyncWrite,
+{
+    type Wrapped = NativeTlsStream<T>;
+
+    #[inline]
+    fn wrap(&self, io: T) -> Self::Wrapped {
+        NativeTlsStream {
             state: State::MidHandshake(MidHandshake {
-                inner: Some(self.inner.accept(io)),
+                inner: Some(self.acceptor.accept(io)),
             }),
         }
-    }
-
-    fn is_tls(&self) -> bool {
-        true
     }
 }
 
 #[derive(Debug)]
-pub struct TlsStream<S> {
+pub struct NativeTlsStream<S> {
     state: State<S>,
 }
 
 #[derive(Debug)]
 enum State<S> {
     MidHandshake(MidHandshake<S>),
-    Ready(RawTlsStream<S>),
+    Ready(TlsStream<S>),
     Gone,
 }
 
-impl<S> TlsStream<S>
+impl<S> NativeTlsStream<S>
 where
     S: AsyncRead + AsyncWrite,
 {
@@ -88,7 +108,7 @@ where
 
     fn with_handshake<T>(
         &mut self,
-        f: impl FnOnce(&mut RawTlsStream<S>) -> io::Result<T>,
+        f: impl FnOnce(&mut TlsStream<S>) -> io::Result<T>,
     ) -> io::Result<T> {
         loop {
             self.state = match &mut self.state {
@@ -100,7 +120,7 @@ where
     }
 }
 
-impl<S> io::Read for TlsStream<S>
+impl<S> io::Read for NativeTlsStream<S>
 where
     S: AsyncRead + AsyncWrite,
 {
@@ -109,7 +129,7 @@ where
     }
 }
 
-impl<S> io::Write for TlsStream<S>
+impl<S> io::Write for NativeTlsStream<S>
 where
     S: AsyncRead + AsyncWrite,
 {
@@ -126,9 +146,9 @@ where
     }
 }
 
-impl<S> AsyncRead for TlsStream<S> where S: AsyncRead + AsyncWrite {}
+impl<S> AsyncRead for NativeTlsStream<S> where S: AsyncRead + AsyncWrite {}
 
-impl<S> AsyncWrite for TlsStream<S>
+impl<S> AsyncWrite for NativeTlsStream<S>
 where
     S: AsyncRead + AsyncWrite,
 {
@@ -149,14 +169,14 @@ where
 
 #[derive(Debug)]
 struct MidHandshake<S> {
-    inner: Option<Result<RawTlsStream<S>, HandshakeError<S>>>,
+    inner: Option<Result<TlsStream<S>, HandshakeError<S>>>,
 }
 
 impl<S> MidHandshake<S>
 where
     S: AsyncRead + AsyncWrite,
 {
-    fn try_handshake(&mut self) -> io::Result<RawTlsStream<S>> {
+    fn try_handshake(&mut self) -> io::Result<TlsStream<S>> {
         match self.inner.take().expect("unexpected condition") {
             Ok(io) => Ok(io),
             Err(HandshakeError::Failure(err)) => Err(io::Error::new(io::ErrorKind::Other, err)),

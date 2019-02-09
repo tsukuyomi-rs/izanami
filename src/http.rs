@@ -3,7 +3,7 @@ use {
     crate::{
         net::{Bind, Listener},
         server::{NewTask, NewTaskConfig},
-        tls::{Acceptor, NoTls},
+        tls::{NoTls, Tls, TlsConfig, TlsWrapper},
     },
     bytes::{Buf, BufMut, Bytes},
     futures::{Future, Poll, Stream},
@@ -48,43 +48,45 @@ impl<B: Bind> Http<B> {
     }
 
     /// Spawn an HTTP server task onto the server with the specified TLS acceptor.
-    pub fn serve_with<F, A, S>(self, acceptor: A, service_factory: F) -> NewHttpTask<F, B, A>
+    pub fn serve_with<F, T, S>(self, tls: T, service_factory: F) -> NewHttpTask<F, B, T>
     where
         F: Fn() -> S,
         S: MakeHttpService,
-        A: Acceptor<B::Conn>,
+        T: Tls<B::Conn>,
     {
         let Self { bind, protocol, .. } = self;
         NewHttpTask {
             service_factory,
-            bind,
-            acceptor,
             protocol,
+            bind,
+            tls,
         }
     }
 }
 
 #[derive(Debug)]
-pub struct NewHttpTask<F, B, A = NoTls> {
+pub struct NewHttpTask<F, B, T = NoTls> {
     service_factory: F,
-    bind: B,
-    acceptor: A,
     protocol: hyper::server::conn::Http,
+    bind: B,
+    tls: T,
 }
 
-impl<F, B, A, S, Rt> NewTask<Rt> for NewHttpTask<F, B, A>
+impl<F, S, B, T, Rt> NewTask<Rt> for NewHttpTask<F, B, T>
 where
     F: Fn() -> S,
     S: MakeHttpService,
     B: Bind,
-    A: Acceptor<B::Conn>,
-    Rt: SpawnHttp<S, B::Listener, A>,
+    T: Tls<B::Conn>,
+    Rt: SpawnHttp<S, B::Listener, T::Wrapper>,
 {
     fn new_task(&self, rt: &mut Rt, config: NewTaskConfig) -> crate::Result<()> {
         let cx = SpawnHttpContext {
             make_service: (self.service_factory)(),
             listener: self.bind.bind()?,
-            acceptor: self.acceptor.clone(),
+            tls_wrapper: self.tls.wrapper(TlsConfig {
+                alpn_protocols: vec!["h2".into(), "http/1.1".into()],
+            })?,
             protocol: self.protocol.clone(),
             shutdown_signal: config.shutdown_signal,
         };
@@ -95,22 +97,22 @@ where
 
 #[doc(hidden)]
 #[allow(missing_debug_implementations)]
-pub struct SpawnHttpContext<S, T, A = crate::tls::NoTls> {
+pub struct SpawnHttpContext<S, T, W = crate::tls::NoTls> {
     make_service: S,
     listener: T,
-    acceptor: A,
+    tls_wrapper: W,
     protocol: hyper::server::conn::Http,
     shutdown_signal: oneshot::Receiver<()>,
 }
 
 /// A trait that represents spawning of HTTP server tasks.
-pub trait SpawnHttp<S, T, A = crate::tls::NoTls>
+pub trait SpawnHttp<S, T, W = crate::tls::NoTls>
 where
     S: MakeHttpService,
     T: Listener,
-    A: Acceptor<T::Conn>,
+    W: TlsWrapper<T::Conn>,
 {
-    fn spawn_http(&mut self, cx: SpawnHttpContext<S, T, A>);
+    fn spawn_http(&mut self, cx: SpawnHttpContext<S, T, W>);
 }
 
 /// A helper macro for creating a server task.
@@ -121,7 +123,7 @@ macro_rules! serve {
 
         let incoming = AddrIncoming {
             listener: cx.listener,
-            acceptor: cx.acceptor,
+            tls_wrapper: cx.tls_wrapper,
         };
         let make_service = cx.make_service;
 
@@ -143,31 +145,31 @@ macro_rules! serve {
     }};
 }
 
-impl<S, T, A> SpawnHttp<S, T, A> for tokio::runtime::Runtime
+impl<S, T, W> SpawnHttp<S, T, W> for tokio::runtime::Runtime
 where
     S: MakeHttpService + Send + Sync + 'static,
     S::Future: Send + 'static,
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
     T: Listener + Send + 'static,
-    A: Acceptor<T::Conn> + Send + 'static,
-    A::Accepted: Send + 'static,
+    W: TlsWrapper<T::Conn> + Send + 'static,
+    W::Wrapped: Send + 'static,
 {
-    fn spawn_http(&mut self, cx: SpawnHttpContext<S, T, A>) {
+    fn spawn_http(&mut self, cx: SpawnHttpContext<S, T, W>) {
         self.spawn(serve!(cx, self.executor()));
     }
 }
 
-impl<S, T, A> SpawnHttp<S, T, A> for tokio::runtime::current_thread::Runtime
+impl<S, T, W> SpawnHttp<S, T, W> for tokio::runtime::current_thread::Runtime
 where
     S: MakeHttpService + 'static,
     S::Service: 'static,
     S::Future: 'static,
     T: Listener + 'static,
-    A: Acceptor<T::Conn> + 'static,
-    A::Accepted: Send + 'static,
+    W: TlsWrapper<T::Conn> + 'static,
+    W::Wrapped: Send + 'static,
 {
-    fn spawn_http(&mut self, cx: SpawnHttpContext<S, T, A>) {
+    fn spawn_http(&mut self, cx: SpawnHttpContext<S, T, W>) {
         let executor = tokio::runtime::current_thread::TaskExecutor::current();
         self.spawn(serve!(cx, executor));
     }
@@ -244,24 +246,24 @@ where
 }
 
 #[allow(missing_debug_implementations)]
-struct AddrIncoming<T: Listener, A: Acceptor<T::Conn>> {
+struct AddrIncoming<T: Listener, W: TlsWrapper<T::Conn>> {
     listener: T,
-    acceptor: A,
+    tls_wrapper: W,
 }
 
-impl<T, A> Stream for AddrIncoming<T, A>
+impl<T, W> Stream for AddrIncoming<T, W>
 where
     T: Listener,
-    A: Acceptor<T::Conn>,
+    W: TlsWrapper<T::Conn>,
 {
-    type Item = AddrStream<A::Accepted>;
+    type Item = AddrStream<W::Wrapped>;
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.listener.poll_incoming().map(|x| {
             x.map(|(io, remote_addr)| {
                 Some(AddrStream {
-                    io: self.acceptor.accept(io),
+                    io: self.tls_wrapper.wrap(io),
                     remote_addr,
                 })
             })

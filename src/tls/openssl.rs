@@ -1,152 +1,156 @@
 #![cfg(feature = "openssl")]
 
 use {
-    ::openssl::{
-        pkey::{HasPrivate, PKeyRef},
+    super::{Tls, TlsConfig, TlsWrapper},
+    futures::{Async, Poll},
+    openssl::{
+        pkey::{HasPrivate, PKey},
         ssl::{
             AlpnError, //
             ErrorCode,
             HandshakeError,
             MidHandshakeSslStream,
             ShutdownResult,
+            SslAcceptor,
+            SslAcceptorBuilder,
             SslMethod,
             SslStream as RawSslStream,
         },
-        x509::X509Ref,
+        x509::X509,
     },
-    futures::{Async, Poll},
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
-#[derive(Debug, Default)]
-pub struct SslAcceptorBuilder {
-    alpn_protocols: Vec<Vec<u8>>,
-    _priv: (),
+trait NewSslAcceptorBuilder {
+    fn new_builder(&self) -> crate::Result<SslAcceptorBuilder>;
 }
 
-impl SslAcceptorBuilder {
-    pub fn alpn_protocols<T>(self, protos: impl IntoIterator<Item = T>) -> Self
+impl<F> NewSslAcceptorBuilder for F
+where
+    F: Fn() -> crate::Result<SslAcceptorBuilder>,
+{
+    fn new_builder(&self) -> crate::Result<SslAcceptorBuilder> {
+        (*self)()
+    }
+}
+
+/// A SSL/TLS configuration using OpenSSL.
+#[allow(missing_debug_implementations)]
+pub struct Ssl {
+    new_builder: Box<dyn NewSslAcceptorBuilder + Send + Sync + 'static>,
+}
+
+impl Ssl {
+    /// Create a new `Ssl` using the specified function.
+    pub fn new<F>(new_builder: F) -> Self
     where
-        T: Into<Vec<u8>>,
+        F: Fn() -> crate::Result<SslAcceptorBuilder> + Send + Sync + 'static,
     {
         Self {
-            alpn_protocols: protos.into_iter().map(Into::into).collect(),
-            ..self
+            new_builder: Box::new(new_builder),
         }
     }
 
-    pub fn build(
-        self,
-        certificate: &X509Ref,
-        private_key: &PKeyRef<impl HasPrivate>,
-    ) -> crate::Result<SslAcceptor> {
-        let mut builder = openssl::ssl::SslAcceptor::mozilla_modern(SslMethod::tls())?;
-        builder.set_certificate(certificate)?;
-        builder.set_private_key(private_key)?;
-
-        if !self.alpn_protocols.is_empty() {
-            let mut protocols = Vec::new();
-            for proto in &self.alpn_protocols {
-                if !proto.is_ascii() {
-                    return Err(failure::format_err!("ALPN protocol must be ASCII").into());
-                }
-                if proto.len() > 255 {
-                    return Err(failure::format_err!(
-                        "the length of ALPN protocol must be less than 256"
-                    )
-                    .into());
-                }
-                protocols.push(proto.len() as u8);
-                protocols.extend_from_slice(&*proto);
-            }
-            builder.set_alpn_protos(&*protocols)?;
-
-            let protocols = self.alpn_protocols;
-            builder.set_alpn_select_callback(move |_, protos| {
-                WireFormat { bytes: protos }
-                    .find(|&proto| protocols.iter().any(|p| *p == proto))
-                    .ok_or_else(|| AlpnError::NOACK)
-            });
-        }
-
-        Ok(SslAcceptor {
-            inner: builder.build(),
+    /// Create a new `Ssl` with the specified certificate and private key.
+    pub fn single_cert(cert: X509, pkey: PKey<impl HasPrivate + Send + Sync + 'static>) -> Self {
+        Self::new(move || {
+            let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
+            builder.set_certificate(&cert)?;
+            builder.set_private_key(&pkey)?;
+            Ok(builder)
         })
     }
 }
 
-#[allow(missing_debug_implementations)]
-struct WireFormat<'a> {
-    bytes: &'a [u8],
-}
-
-impl<'a> Iterator for WireFormat<'a> {
-    type Item = &'a [u8];
-
-    fn next(&mut self) -> Option<Self::Item> {
-        match self.bytes.split_at(1) {
-            (b"", ..) => None,
-            (len, remains) => {
-                let len = usize::from(len[0]);
-                if remains.len() < len {
-                    return None;
-                }
-                let (item, bytes) = remains.split_at(len);
-                self.bytes = bytes;
-                Some(item)
-            }
-        }
-    }
-}
-
-#[allow(missing_debug_implementations)]
-#[derive(Clone)]
-pub struct SslAcceptor {
-    inner: openssl::ssl::SslAcceptor,
-}
-
-impl SslAcceptor {
-    pub fn new(
-        certificate: &X509Ref,
-        private_key: &PKeyRef<impl HasPrivate>,
-    ) -> crate::Result<Self> {
-        SslAcceptorBuilder::default().build(certificate, private_key)
-    }
-
-    pub fn builder() -> SslAcceptorBuilder {
-        SslAcceptorBuilder::default()
-    }
-
-    pub fn get_ref(&self) -> &openssl::ssl::SslAcceptor {
-        &self.inner
-    }
-}
-
-impl From<openssl::ssl::SslAcceptor> for SslAcceptor {
-    fn from(inner: openssl::ssl::SslAcceptor) -> Self {
-        Self { inner }
-    }
-}
-
-impl<T> super::Acceptor<T> for SslAcceptor
+impl<T> Tls<T> for Ssl
 where
     T: AsyncRead + AsyncWrite,
 {
-    type Accepted = SslStream<T>;
+    type Wrapped = SslStream<T>;
+    type Wrapper = SslWrapper;
 
     #[inline]
-    fn accept(&self, io: T) -> Self::Accepted {
+    fn wrapper(&self, config: TlsConfig) -> crate::Result<Self::Wrapper> {
+        let mut builder = self.new_builder.new_builder()?;
+
+        if !config.alpn_protocols.is_empty() {
+            let wired = wire_format::to_vec(&config.alpn_protocols)?;
+            builder.set_alpn_protos(&*wired)?;
+
+            let server_protos = config.alpn_protocols;
+            builder.set_alpn_select_callback(move |_, client_protos| {
+                select_alpn_proto(wire_format::iter(client_protos), &server_protos)
+                    .ok_or_else(|| AlpnError::NOACK)
+            });
+        }
+
+        Ok(SslWrapper {
+            acceptor: builder.build(),
+        })
+    }
+}
+
+fn select_alpn_proto<'c>(
+    client_protos: impl IntoIterator<Item = &'c [u8]>,
+    server_protos: &[String],
+) -> Option<&'c [u8]> {
+    client_protos
+        .into_iter()
+        .find(|&proto| server_protos.iter().any(|p| p.as_bytes() == proto))
+}
+
+#[test]
+fn test_select_alpn_proto() {
+    assert_eq!(
+        select_alpn_proto(
+            vec![b"h2".as_ref(), b"http/1.1".as_ref()],
+            &["h2".into(), "http/1.1".into()]
+        ),
+        Some(b"h2".as_ref())
+    );
+
+    assert_eq!(
+        select_alpn_proto(vec![b"h2".as_ref(), b"http/1.1".as_ref()], &["h2".into()]),
+        Some(b"h2".as_ref())
+    );
+
+    assert_eq!(
+        select_alpn_proto(
+            vec![b"h2".as_ref(), b"http/1.1".as_ref()],
+            &["http/1.1".into()]
+        ),
+        Some(b"http/1.1".as_ref())
+    );
+
+    assert_eq!(
+        select_alpn_proto(
+            vec![b"spdy/1".as_ref(), b"http/1.1".as_ref()],
+            &["h2".into()]
+        ),
+        None
+    );
+}
+
+#[allow(missing_debug_implementations)]
+pub struct SslWrapper {
+    acceptor: SslAcceptor,
+}
+
+impl<T> TlsWrapper<T> for SslWrapper
+where
+    T: AsyncRead + AsyncWrite,
+{
+    type Wrapped = SslStream<T>;
+
+    #[inline]
+    fn wrap(&self, io: T) -> Self::Wrapped {
         SslStream {
             state: State::MidHandshake(MidHandshake::Start {
-                acceptor: self.clone(),
+                acceptor: self.acceptor.clone(),
                 io,
             }),
         }
-    }
-
-    fn is_tls(&self) -> bool {
-        true
     }
 }
 
@@ -292,7 +296,7 @@ where
 {
     fn try_handshake(&mut self) -> io::Result<Option<RawSslStream<T>>> {
         match std::mem::replace(self, MidHandshake::Done) {
-            MidHandshake::Start { acceptor, io } => match acceptor.inner.accept(io) {
+            MidHandshake::Start { acceptor, io } => match acceptor.accept(io) {
                 Ok(io) => Ok(Some(io)),
                 Err(HandshakeError::WouldBlock(s)) => {
                     *self = MidHandshake::Handshake(s);
@@ -326,5 +330,82 @@ where
             MidHandshake::Handshake(s) => s.get_mut().shutdown(),
             MidHandshake::Done => Err(io::ErrorKind::Other.into()),
         }
+    }
+}
+
+mod wire_format {
+    pub(super) fn to_vec<T>(protos: impl IntoIterator<Item = T>) -> crate::Result<Vec<u8>>
+    where
+        T: AsRef<str>,
+    {
+        let mut wired = Vec::new();
+        for proto in protos {
+            let proto = proto.as_ref();
+            if !proto.is_ascii() {
+                return Err(failure::format_err!("ALPN protocol must be ASCII").into());
+            }
+            if proto.len() > 255 {
+                return Err(failure::format_err!(
+                    "the length of ALPN protocol must be less than 256"
+                )
+                .into());
+            }
+            wired.push(proto.len() as u8);
+            wired.extend_from_slice(proto.as_bytes());
+        }
+
+        Ok(wired)
+    }
+
+    pub(super) fn iter(bytes: &[u8]) -> Iter<'_> {
+        Iter { bytes }
+    }
+
+    #[allow(missing_debug_implementations)]
+    pub(super) struct Iter<'a> {
+        bytes: &'a [u8],
+    }
+
+    impl<'a> Iterator for Iter<'a> {
+        type Item = &'a [u8];
+
+        fn next(&mut self) -> Option<Self::Item> {
+            if self.bytes.is_empty() {
+                return None;
+            }
+            match self.bytes.split_at(1) {
+                (b"", ..) => None,
+                (n, remains) => {
+                    let len = usize::from(n[0]);
+                    if remains.len() < len {
+                        return None;
+                    }
+                    let (item, bytes) = remains.split_at(len);
+                    self.bytes = bytes;
+                    Some(item)
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn iter_empty() {
+        let input: &[u8] = b"";
+        assert_eq!(iter(input).count(), 0);
+    }
+
+    #[test]
+    fn iter_single() {
+        let input: &[u8] = b"\x02h2";
+        assert_eq!(iter(input).collect::<Vec<_>>(), vec![b"h2".as_ref()]);
+    }
+
+    #[test]
+    fn iter_list() {
+        let input: &[u8] = b"\x06spdy/1\x02h2\x08http/1.1";
+        assert_eq!(
+            iter(input).collect::<Vec<_>>(),
+            vec![b"spdy/1".as_ref(), b"h2".as_ref(), b"http/1.1".as_ref()]
+        );
     }
 }

@@ -1,3 +1,5 @@
+#![allow(clippy::redundant_closure)]
+
 use {
     http::{Request, Response},
     izanami_service::{MakeService, Service},
@@ -57,7 +59,6 @@ mod tcp {
         tokio::net::TcpStream,
     };
 
-    #[allow(clippy::redundant_closure)]
     #[test]
     fn tcp_server() -> izanami::Result<()> {
         let mut server = Server::current_thread()?;
@@ -130,7 +131,6 @@ mod unix {
         tokio::net::UnixStream,
     };
 
-    #[allow(clippy::redundant_closure)]
     #[test]
     fn unix_server() -> izanami::Result<()> {
         let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
@@ -201,7 +201,7 @@ mod native_tls {
             },
             Body,
         },
-        izanami::{http::Http, tls::native_tls::TlsAcceptor, Server},
+        izanami::{http::Http, tls::native_tls::NativeTls, Server},
         std::{
             io,
             net::{SocketAddr, TcpListener},
@@ -219,10 +219,10 @@ mod native_tls {
 
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let local_addr = listener.local_addr()?;
-        let acceptor = TlsAcceptor::from_pkcs12(IDENTITY, "mypass")?;
+        let native_tls = NativeTls::from_pkcs12(IDENTITY, "mypass")?;
         server.start(
             Http::bind(listener) //
-                .serve_with(acceptor, || super::Echo::default()),
+                .serve_with(native_tls, || super::Echo::default()),
         )?;
 
         let client = Client::builder() //
@@ -299,10 +299,9 @@ mod openssl {
             },
             Body,
         },
-        izanami::{http::Http, tls::openssl::SslAcceptor, Server},
+        izanami::{http::Http, tls::openssl::Ssl, Server},
         openssl::{
             pkey::PKey,
-            rsa::Rsa,
             ssl::{SslConnector, SslMethod, SslVerifyMode},
             x509::X509,
         },
@@ -314,28 +313,31 @@ mod openssl {
         tokio_openssl::{SslConnectorExt, SslStream},
     };
 
+    const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
+    const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
+
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
-        const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
-
-        let cert = X509::from_pem(CERTIFICATE)?;
-        let pkey = PKey::from_rsa(Rsa::private_key_from_pem(PRIVATE_KEY)?)?;
-
         let mut server = Server::current_thread()?;
 
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let local_addr = listener.local_addr()?;
-        let acceptor = SslAcceptor::new(&cert, &pkey)?;
+
+        let cert = X509::from_pem(CERTIFICATE)?;
+        let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
+        let ssl = Ssl::single_cert(cert, pkey);
+
         server.start(
             Http::bind(listener) //
-                .serve_with(acceptor, || super::Echo::default()),
+                .serve_with(ssl, || super::Echo::default()),
         )?;
 
         let client = Client::builder() //
             .build(TestConnect {
                 local_addr,
                 connector: {
+                    let cert = X509::from_pem(CERTIFICATE)?;
+                    let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
                     let mut builder = SslConnector::builder(SslMethod::tls())?;
                     builder.set_verify(SslVerifyMode::NONE);
                     builder.set_certificate(&cert)?;
@@ -401,7 +403,6 @@ mod openssl {
 mod rustls {
     use {
         ::native_tls::Certificate,
-        failure::format_err,
         futures::{Future, Stream},
         http::Request,
         hyper::{
@@ -411,15 +412,13 @@ mod rustls {
             },
             Body,
         },
-        izanami::{http::Http, tls::rustls::TlsAcceptor, Server},
-        rustls::{
-            KeyLogFile, //
-            NoClientAuth,
-            ServerConfig,
+        izanami::{
+            http::Http, //
+            tls::rustls::Rustls,
+            Server,
         },
-        std::sync::Arc,
         std::{
-            io::{self, BufReader},
+            io,
             net::{SocketAddr, TcpListener},
         },
         tokio::net::TcpStream,
@@ -431,35 +430,15 @@ mod rustls {
         const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
         const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
 
-        let certs = {
-            let mut reader = BufReader::new(io::Cursor::new(CERTIFICATE));
-            rustls::internal::pemfile::certs(&mut reader)
-                .map_err(|_| format_err!("failed to read certificate file"))?
-        };
-
-        let priv_key = {
-            let mut reader = BufReader::new(io::Cursor::new(PRIVATE_KEY));
-            let rsa_keys = rustls::internal::pemfile::rsa_private_keys(&mut reader)
-                .map_err(|_| format_err!("failed to read private key file as RSA"))?;
-            rsa_keys
-                .into_iter()
-                .next()
-                .ok_or_else(|| format_err!("invalid private key"))?
-        };
-
         let mut server = Server::current_thread()?;
 
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let local_addr = listener.local_addr()?;
-        let acceptor: TlsAcceptor = {
-            let mut config = ServerConfig::new(NoClientAuth::new());
-            config.key_log = Arc::new(KeyLogFile::new());
-            config.set_single_cert(certs.clone(), priv_key.clone())?;
-            config.into()
-        };
+        let rustls = Rustls::no_client_auth() //
+            .single_cert(CERTIFICATE, PRIVATE_KEY)?;
         server.start(
             Http::bind(listener) //
-                .serve_with(acceptor, || super::Echo::default()),
+                .serve_with(rustls, || super::Echo::default()),
         )?;
 
         // FIXME: use rustls

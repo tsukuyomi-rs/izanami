@@ -1,8 +1,8 @@
 use {
     echo_service::Echo,
     http::Response,
-    izanami::{tls::openssl::SslAcceptor, Http, Server},
-    openssl::{pkey::PKey, rsa::Rsa, x509::X509},
+    izanami::{tls::openssl::Ssl, Http, Server},
+    openssl::{pkey::PKey, x509::X509},
 };
 
 const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
@@ -19,16 +19,13 @@ fn main() -> izanami::Result<()> {
 
     let mut server = Server::default()?;
 
-    let acceptor = {
-        let cert = X509::from_pem(CERTIFICATE)?;
-        let pkey = PKey::from_rsa(Rsa::private_key_from_pem(PRIVATE_KEY)?)?;
-        SslAcceptor::builder() //
-            .alpn_protocols(vec!["h2", "http/1.1"])
-            .build(&cert, &pkey)?
-    };
+    let cert = X509::from_pem(CERTIFICATE)?;
+    let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
+    let ssl = Ssl::single_cert(cert, pkey);
+
     server.start(
         Http::bind("127.0.0.1:4000") //
-            .serve_with(acceptor, move || echo.clone()),
+            .serve_with(ssl, move || echo.clone()),
     )?;
 
     server.run()
