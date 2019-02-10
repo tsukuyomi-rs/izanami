@@ -86,6 +86,14 @@ pub struct Echo<Bd = ()> {
     inner: Arc<Inner<Bd>>,
 }
 
+impl<Bd> Clone for Echo<Bd> {
+    fn clone(&self) -> Self {
+        Self {
+            inner: self.inner.clone(),
+        }
+    }
+}
+
 impl<Bd> Echo<Bd> {
     pub fn builder() -> Builder<Bd> {
         Builder::default()

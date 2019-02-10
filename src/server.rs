@@ -1,117 +1,27 @@
-use {
-    crate::{
-        net::{Bind, Listener},
-        service::{
-            Context, //
-            HttpService,
-            MakeHttpService,
-            RequestBody,
-            ResponseBody,
-        },
-        tls::Acceptor,
-    },
-    futures::{Future, Poll, Stream},
-    http::{Request, Response},
-    izanami_util::RemoteAddr,
-    std::io,
-    tokio::{
-        io::{AsyncRead, AsyncWrite},
-        sync::oneshot,
-    },
-};
+use {futures::Future, std::fmt, tokio::sync::oneshot};
 
+/// A type that executes server tasks.
+///
+/// This type consists of a Tokio runtime that drives server tasks
+/// and handles to control the spawned tasks.
 #[derive(Debug)]
-pub struct Builder<T, A = crate::tls::NoTls, Rt = tokio::runtime::Runtime> {
-    listener: T,
-    acceptor: A,
-    runtime: Option<Rt>,
-}
-
-impl<T, A, Rt> Builder<T, A, Rt>
+pub struct Server<Rt = tokio::runtime::Runtime>
 where
-    T: Listener,
-    A: Acceptor<T::Conn>,
     Rt: Runtime,
 {
-    /// Returns a reference to the inner listener.
-    pub fn listener(&self) -> &T {
-        &self.listener
-    }
-
-    /// Returns a mutable reference to the inner listener.
-    pub fn listener_mut(&mut self) -> &mut T {
-        &mut self.listener
-    }
-
-    /// Sets the instance of `Acceptor` to the server.
-    pub fn accept<A2>(self, acceptor: A2) -> Builder<T, A2, Rt>
-    where
-        A2: Acceptor<T::Conn>,
-    {
-        Builder {
-            listener: self.listener,
-            acceptor,
-            runtime: self.runtime,
-        }
-    }
-
-    /// Specify the instance of runtime to use spawning the server task.
-    pub fn runtime<Rt2>(self, runtime: Rt2) -> Builder<T, A, Rt2>
-    where
-        Rt2: Runtime,
-    {
-        Builder {
-            listener: self.listener,
-            acceptor: self.acceptor,
-            runtime: Some(runtime),
-        }
-    }
-
-    /// Start an HTTP server using the specified service factory.
-    pub fn launch<S>(self, make_service: S) -> crate::Result<Server<Rt>>
-    where
-        S: MakeHttpService,
-        Rt: SpawnServer<S, T, A>,
-    {
-        let mut runtime = match self.runtime {
-            Some(rt) => rt,
-            None => Rt::create()?,
-        };
-
-        let (tx, rx) = oneshot::channel();
-
-        runtime.spawn_server(ServerConfig {
-            make_service,
-            listener: self.listener,
-            acceptor: self.acceptor,
-            shutdown_signal: rx,
-        })?;
-
-        Ok(Server {
-            runtime,
-            shutdown_signal: tx,
-        })
-    }
-}
-
-/// An HTTP server that wraps the server implementation of `hyper`.
-#[derive(Debug)]
-pub struct Server<Rt: Runtime = tokio::runtime::Runtime> {
     runtime: Rt,
-    shutdown_signal: oneshot::Sender<()>,
+    handles: Vec<ServeHandle<Rt>>,
 }
 
 impl Server {
-    /// Creates an HTTP server from the specified listener.
-    pub fn bind<B>(bind: B) -> crate::Result<Builder<B::Listener>>
-    where
-        B: Bind,
-    {
-        Ok(Builder {
-            listener: bind.bind()?,
-            acceptor: Default::default(),
-            runtime: None,
-        })
+    /// Create a new `Server` using the default Tokio runtime.
+    pub fn default() -> crate::Result<Server<tokio::runtime::Runtime>> {
+        Ok(Server::new(tokio::runtime::Runtime::new()?))
+    }
+
+    /// Create a new `Server` using the single-threaded Tokio runtime.
+    pub fn current_thread() -> crate::Result<Server<tokio::runtime::current_thread::Runtime>> {
+        Ok(Server::new(tokio::runtime::current_thread::Runtime::new()?))
     }
 }
 
@@ -119,304 +29,101 @@ impl<Rt> Server<Rt>
 where
     Rt: Runtime,
 {
-    /// Wait for completion of all tasks executing on the runtime
-    /// without sending shutdown signal.
-    pub fn run(self) -> crate::Result<()> {
-        self.runtime.shutdown_on_idle()
+    /// Create a new `Server` using the specified runtime.
+    pub fn new(runtime: Rt) -> Self {
+        Self {
+            runtime,
+            handles: vec![],
+        }
     }
 
-    /// Send a shutdown signal to the server task and wait for
-    /// completion of all tasks executing on the runtime.
-    pub fn shutdown(self) -> crate::Result<()> {
-        self.shutdown_signal
-            .send(())
-            .expect("failed to send shutdown signal");
-        self.runtime.shutdown_on_idle()?;
+    /// Start a server task onto this server.
+    pub fn start<T>(&mut self, new_task: T) -> crate::Result<()>
+    where
+        T: NewTask<Rt> + 'static,
+    {
+        let (tx, rx) = oneshot::channel();
+        new_task.new_task(
+            &mut self.runtime,
+            NewTaskConfig {
+                shutdown_signal: rx,
+            },
+        )?;
+        self.handles.push(ServeHandle {
+            new_task: Box::new(new_task),
+            shutdown_signal: tx,
+        });
+        Ok(())
+    }
+
+    #[doc(hidden)]
+    pub fn runtime(&mut self) -> &mut Rt {
+        &mut self.runtime
+    }
+
+    /// Send shutdown signal to the background server tasks.
+    pub fn shutdown(&mut self) {
+        for handle in self.handles.drain(..) {
+            if let Err(()) = handle.shutdown_signal.send(()) {
+                log::trace!("the background task has already finished.");
+            }
+        }
+    }
+
+    pub fn run(self) -> crate::Result<()> {
+        self.runtime.shutdown_on_idle();
         Ok(())
     }
 }
 
-impl<Rt> std::ops::Deref for Server<Rt>
-where
-    Rt: Runtime,
-{
-    type Target = Rt;
+#[derive(Debug)]
+pub struct NewTaskConfig {
+    pub(crate) shutdown_signal: oneshot::Receiver<()>,
+}
 
-    fn deref(&self) -> &Self::Target {
-        &self.runtime
+/// A trait representing the factory of tasks used within `Server`.
+pub trait NewTask<Rt: ?Sized> {
+    fn new_task(&self, rt: &mut Rt, config: NewTaskConfig) -> crate::Result<()>;
+}
+
+impl<F, Rt: ?Sized> NewTask<Rt> for F
+where
+    F: Fn(&mut Rt, NewTaskConfig) -> crate::Result<()>,
+{
+    fn new_task(&self, rt: &mut Rt, config: NewTaskConfig) -> crate::Result<()> {
+        (*self)(rt, config)
     }
 }
 
-impl<Rt> std::ops::DerefMut for Server<Rt>
+/// The handle for managing a spawned HTTP server task.
+struct ServeHandle<Rt: Runtime> {
+    #[allow(dead_code)]
+    new_task: Box<dyn NewTask<Rt> + 'static>,
+    shutdown_signal: oneshot::Sender<()>,
+}
+
+impl<Rt> fmt::Debug for ServeHandle<Rt>
 where
     Rt: Runtime,
 {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut self.runtime
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ServeHandle").finish()
     }
 }
 
 /// A trait abstracting the runtime that executes asynchronous tasks.
 pub trait Runtime {
-    /// Create an instance of this runtime.
-    ///
-    /// This function is called by `Server` when the instance
-    /// of runtime is not given explicitly.
-    fn create() -> crate::Result<Self>
-    where
-        Self: Sized;
-
-    /// Wait for completion of background tasks executing on
-    /// this runtime.
-    fn shutdown_on_idle(self) -> crate::Result<()>;
+    fn shutdown_on_idle(self);
 }
 
 impl Runtime for tokio::runtime::Runtime {
-    fn create() -> crate::Result<Self> {
-        Ok(Self::new()?)
-    }
-
-    fn shutdown_on_idle(self) -> crate::Result<()> {
+    fn shutdown_on_idle(self) {
         self.shutdown_on_idle().wait().unwrap();
-        Ok(())
     }
 }
 
 impl Runtime for tokio::runtime::current_thread::Runtime {
-    fn create() -> crate::Result<Self> {
-        Ok(Self::new()?)
-    }
-
-    fn shutdown_on_idle(mut self) -> crate::Result<()> {
+    fn shutdown_on_idle(mut self) {
         self.run().unwrap();
-        Ok(())
-    }
-}
-
-#[doc(hidden)]
-#[allow(missing_debug_implementations)]
-pub struct ServerConfig<S, T, A = crate::tls::NoTls> {
-    make_service: S,
-    listener: T,
-    acceptor: A,
-    shutdown_signal: oneshot::Receiver<()>,
-}
-
-/// A trait that represents spawning of HTTP server tasks.
-pub trait SpawnServer<S, T, A = crate::tls::NoTls>
-where
-    S: MakeHttpService,
-    T: Listener,
-    A: Acceptor<T::Conn>,
-{
-    fn spawn_server(&mut self, config: ServerConfig<S, T, A>) -> crate::Result<()>;
-}
-
-/// A helper macro for creating a server task.
-macro_rules! serve {
-    ($config:expr, $executor:expr) => {{
-        let config = $config;
-        let executor = $executor;
-
-        let incoming = AddrIncoming {
-            listener: config.listener,
-            acceptor: config.acceptor,
-        };
-        let make_service = config.make_service;
-
-        hyper::server::Server::builder(incoming)
-            .executor(executor)
-            .serve(hyper::service::make_service_fn(
-                move |conn: &AddrStream<_>| {
-                    let remote_addr = conn.remote_addr.clone();
-                    make_service
-                        .make_service(&mut Context::new(&remote_addr))
-                        .map(move |service| IzanamiService {
-                            service,
-                            remote_addr,
-                        })
-                },
-            ))
-            .with_graceful_shutdown(config.shutdown_signal)
-            .map_err(|e| log::error!("server error: {}", e))
-    }};
-}
-
-impl<S, T, A> SpawnServer<S, T, A> for tokio::runtime::Runtime
-where
-    S: MakeHttpService + Send + Sync + 'static,
-    S::Future: Send + 'static,
-    S::Service: Send + 'static,
-    <S::Service as HttpService>::Future: Send + 'static,
-    T: Listener + Send + 'static,
-    A: Acceptor<T::Conn> + Send + 'static,
-    A::Accepted: Send + 'static,
-{
-    fn spawn_server(&mut self, config: ServerConfig<S, T, A>) -> crate::Result<()> {
-        self.spawn(serve!(config, self.executor()));
-        Ok(())
-    }
-}
-
-impl<S, T, A> SpawnServer<S, T, A> for tokio::runtime::current_thread::Runtime
-where
-    S: MakeHttpService + 'static,
-    S::Service: 'static,
-    S::Future: 'static,
-    T: Listener + 'static,
-    A: Acceptor<T::Conn> + 'static,
-    A::Accepted: Send + 'static,
-{
-    fn spawn_server(&mut self, config: ServerConfig<S, T, A>) -> crate::Result<()> {
-        let executor = tokio::runtime::current_thread::TaskExecutor::current();
-        self.spawn(serve!(config, executor));
-        Ok(())
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct IzanamiService<S> {
-    service: S,
-    remote_addr: RemoteAddr,
-}
-
-impl<S> hyper::service::Service for IzanamiService<S>
-where
-    S: HttpService,
-{
-    type ReqBody = hyper::Body;
-    type ResBody = InnerBody<S::ResponseBody>;
-    type Error = S::Error;
-    type Future = LiftedHttpServiceFuture<S::Future>;
-
-    #[inline]
-    fn call(&mut self, request: Request<hyper::Body>) -> Self::Future {
-        let mut request = request.map(RequestBody::from_hyp);
-        request.extensions_mut().insert(self.remote_addr.clone());
-
-        LiftedHttpServiceFuture(self.service.call(request))
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct LiftedHttpServiceFuture<Fut>(Fut);
-
-impl<Fut, Bd> Future for LiftedHttpServiceFuture<Fut>
-where
-    Fut: Future<Item = Response<Bd>>,
-    Bd: ResponseBody + Send + 'static,
-{
-    type Item = Response<InnerBody<Bd>>;
-    type Error = Fut::Error;
-
-    #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0
-            .poll()
-            .map(|x| x.map(|response| response.map(InnerBody)))
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct InnerBody<Bd>(Bd);
-
-impl<Bd> hyper::body::Payload for InnerBody<Bd>
-where
-    Bd: ResponseBody + Send + 'static,
-{
-    type Data = Bd::Item;
-    type Error = crate::error::BoxedStdError;
-
-    fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
-        self.0.poll_buf().map_err(Into::into)
-    }
-
-    fn poll_trailers(&mut self) -> Poll<Option<http::HeaderMap>, Self::Error> {
-        self.0.poll_trailers().map_err(Into::into)
-    }
-
-    fn content_length(&self) -> Option<u64> {
-        let hint = self.0.size_hint();
-        match (hint.lower(), hint.upper()) {
-            (lower, Some(upper)) if lower == upper => Some(upper),
-            _ => None,
-        }
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct AddrIncoming<T: Listener, A: Acceptor<T::Conn>> {
-    listener: T,
-    acceptor: A,
-}
-
-impl<T, A> Stream for AddrIncoming<T, A>
-where
-    T: Listener,
-    A: Acceptor<T::Conn>,
-{
-    type Item = AddrStream<A::Accepted>;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.listener.poll_incoming().map(|x| {
-            x.map(|(io, remote_addr)| {
-                Some(AddrStream {
-                    io: self.acceptor.accept(io),
-                    remote_addr,
-                })
-            })
-        })
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct AddrStream<T> {
-    io: T,
-    remote_addr: RemoteAddr,
-}
-
-impl<T> io::Read for AddrStream<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    #[inline]
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        self.io.read(dst)
-    }
-}
-
-impl<T> io::Write for AddrStream<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    #[inline]
-    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.io.write(src)
-    }
-
-    #[inline]
-    fn flush(&mut self) -> io::Result<()> {
-        self.io.flush()
-    }
-}
-
-impl<T> AsyncRead for AddrStream<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    #[inline]
-    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [u8]) -> bool {
-        self.io.prepare_uninitialized_buffer(buf)
-    }
-}
-
-impl<T> AsyncWrite for AddrStream<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    #[inline]
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        self.io.shutdown()
     }
 }

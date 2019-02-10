@@ -1,4 +1,9 @@
-use {echo_service::Echo, http::Response};
+use {
+    echo_service::Echo, //
+    http::Response,
+    izanami::{Http, Server},
+    std::path::Path,
+};
 
 #[cfg(unix)]
 fn main() -> izanami::Result<()> {
@@ -10,10 +15,12 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    let sock_path = std::path::Path::new("/tmp/echo-service.sock");
-    izanami::Server::bind(sock_path)? //
-        .launch(echo)?
-        .run()
+    let mut server = Server::default()?;
+    server.start(
+        Http::bind(Path::new("/tmp/echo-service.sock")) //
+            .serve(move || echo.clone()),
+    )?;
+    server.run()
 }
 
 #[cfg(not(unix))]
