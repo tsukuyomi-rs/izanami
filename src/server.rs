@@ -91,7 +91,7 @@ where
         )
     }
 
-    pub fn run(self) -> crate::Result<()> {
+    pub fn start(self) -> crate::Result<()> {
         self.runtime.shutdown_on_idle();
         Ok(())
     }
