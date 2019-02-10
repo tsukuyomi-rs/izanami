@@ -2,7 +2,7 @@ use {
     crate::error::BoxedStdError,
     crate::{
         net::{Bind, Listener},
-        server::{NewTask, NewTaskConfig},
+        server::{Task, TaskConfig},
         tls::{NoTls, Tls, TlsConfig, TlsWrapper},
     },
     bytes::{Buf, BufMut, Bytes},
@@ -16,118 +16,85 @@ use {
         RemoteAddr,
     },
     std::{io, marker::PhantomData},
-    tokio::{
-        io::{AsyncRead, AsyncWrite},
-        sync::oneshot,
-    },
+    tokio::io::{AsyncRead, AsyncWrite},
 };
 
 /// A builder for configuring an HTTP server task.
 #[derive(Debug)]
-pub struct Http<B: Bind> {
+pub struct Http<B, T = NoTls> {
     bind: B,
+    tls: T,
     protocol: hyper::server::conn::Http,
 }
 
-impl<B: Bind> Http<B> {
+impl<B> Http<B>
+where
+    B: Bind,
+{
     /// Creates a `Http` to configure a task of serving HTTP services.
-    pub fn bind(bind: B) -> Self {
-        Self {
+    pub fn bind(bind: B) -> Http<B> {
+        Http {
             bind,
+            tls: NoTls::default(),
             protocol: hyper::server::conn::Http::new(),
+        }
+    }
+}
+
+impl<B, T> Http<B, T>
+where
+    B: Bind,
+    T: Tls<B::Conn>,
+{
+    pub fn with_tls<T2>(self, tls: T2) -> Http<B, T2>
+    where
+        T2: Tls<B::Conn>,
+    {
+        Http {
+            bind: self.bind,
+            tls,
+            protocol: self.protocol,
         }
     }
 
     /// Spawn an HTTP server task onto the server.
-    pub fn serve<F, S>(self, service_factory: F) -> NewHttpTask<F, B>
+    pub fn serve<S>(self, make_service: S) -> crate::Result<HttpTask<S, B::Listener, T::Wrapper>>
     where
-        F: Fn() -> S,
         S: MakeHttpService,
     {
-        self.serve_with(NoTls::default(), service_factory)
-    }
-
-    /// Spawn an HTTP server task onto the server with the specified TLS acceptor.
-    pub fn serve_with<F, T, S>(self, tls: T, service_factory: F) -> NewHttpTask<F, B, T>
-    where
-        F: Fn() -> S,
-        S: MakeHttpService,
-        T: Tls<B::Conn>,
-    {
-        let Self { bind, protocol, .. } = self;
-        NewHttpTask {
-            service_factory,
-            protocol,
-            bind,
-            tls,
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct NewHttpTask<F, B, T = NoTls> {
-    service_factory: F,
-    protocol: hyper::server::conn::Http,
-    bind: B,
-    tls: T,
-}
-
-impl<F, S, B, T, Rt> NewTask<Rt> for NewHttpTask<F, B, T>
-where
-    F: Fn() -> S,
-    S: MakeHttpService,
-    B: Bind,
-    T: Tls<B::Conn>,
-    Rt: SpawnHttp<S, B::Listener, T::Wrapper>,
-{
-    fn new_task(&self, rt: &mut Rt, config: NewTaskConfig) -> crate::Result<()> {
-        let cx = SpawnHttpContext {
-            make_service: (self.service_factory)(),
+        Ok(HttpTask {
+            make_service,
             listener: self.bind.bind()?,
             tls_wrapper: self.tls.wrapper(TlsConfig {
                 alpn_protocols: vec!["h2".into(), "http/1.1".into()],
             })?,
-            protocol: self.protocol.clone(),
-            shutdown_signal: config.shutdown_signal,
-        };
-        rt.spawn_http(cx);
-        Ok(())
+            protocol: self.protocol,
+        })
     }
 }
 
-#[doc(hidden)]
 #[allow(missing_debug_implementations)]
-pub struct SpawnHttpContext<S, T, W = crate::tls::NoTls> {
+pub struct HttpTask<S, T, W = crate::tls::NoTls> {
     make_service: S,
     listener: T,
     tls_wrapper: W,
     protocol: hyper::server::conn::Http,
-    shutdown_signal: oneshot::Receiver<()>,
-}
-
-/// A trait that represents spawning of HTTP server tasks.
-pub trait SpawnHttp<S, T, W = crate::tls::NoTls>
-where
-    S: MakeHttpService,
-    T: Listener,
-    W: TlsWrapper<T::Conn>,
-{
-    fn spawn_http(&mut self, cx: SpawnHttpContext<S, T, W>);
 }
 
 /// A helper macro for creating a server task.
 macro_rules! serve {
-    ($cx:expr, $executor:expr) => {{
-        let cx = $cx;
+    ($self:expr, $config:expr, $executor:expr) => {{
+        let self_ = $self;
+        let config = $config;
         let executor = $executor;
 
         let incoming = AddrIncoming {
-            listener: cx.listener,
-            tls_wrapper: cx.tls_wrapper,
+            listener: self_.listener,
+            tls_wrapper: self_.tls_wrapper,
         };
-        let make_service = cx.make_service;
+        let make_service = self_.make_service;
 
-        hyper::server::Builder::new(incoming, cx.protocol)
+        hyper::server::Builder::new(incoming, self_.protocol)
             .executor(executor)
             .serve(hyper::service::make_service_fn(
                 move |conn: &AddrStream<_>| {
@@ -140,12 +107,18 @@ macro_rules! serve {
                         })
                 },
             ))
-            .with_graceful_shutdown(cx.shutdown_signal)
-            .map_err(|e| log::error!("server error: {}", e))
+            .with_graceful_shutdown(config.rx_shutdown)
+            .then({
+                let tx_complete = config.tx_complete;
+                move |result| {
+                    let _ = tx_complete.send(result.map_err(Into::into));
+                    Ok(())
+                }
+            })
     }};
 }
 
-impl<S, T, W> SpawnHttp<S, T, W> for tokio::runtime::Runtime
+impl<S, T, W> Task<tokio::runtime::Runtime> for HttpTask<S, T, W>
 where
     S: MakeHttpService + Send + Sync + 'static,
     S::Future: Send + 'static,
@@ -155,12 +128,12 @@ where
     W: TlsWrapper<T::Conn> + Send + 'static,
     W::Wrapped: Send + 'static,
 {
-    fn spawn_http(&mut self, cx: SpawnHttpContext<S, T, W>) {
-        self.spawn(serve!(cx, self.executor()));
+    fn spawn(self, rt: &mut tokio::runtime::Runtime, config: TaskConfig) {
+        rt.spawn(serve!(self, config, rt.executor()));
     }
 }
 
-impl<S, T, W> SpawnHttp<S, T, W> for tokio::runtime::current_thread::Runtime
+impl<S, T, W> Task<tokio::runtime::current_thread::Runtime> for HttpTask<S, T, W>
 where
     S: MakeHttpService + 'static,
     S::Service: 'static,
@@ -169,9 +142,9 @@ where
     W: TlsWrapper<T::Conn> + 'static,
     W::Wrapped: Send + 'static,
 {
-    fn spawn_http(&mut self, cx: SpawnHttpContext<S, T, W>) {
+    fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime, config: TaskConfig) {
         let executor = tokio::runtime::current_thread::TaskExecutor::current();
-        self.spawn(serve!(cx, executor));
+        rt.spawn(serve!(self, config, executor));
     }
 }
 

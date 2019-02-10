@@ -18,10 +18,11 @@ fn main() -> izanami::Result<()> {
     let mut server = Server::default()?;
 
     let native_tls = NativeTls::from_pkcs12(IDENTITY, "mypass")?;
-    server.start(
+    server.spawn(
         Http::bind("127.0.0.1:4000") //
-            .serve_with(native_tls, move || echo.clone()),
-    )?;
+            .with_tls(native_tls)
+            .serve(echo)?,
+    );
 
     server.run()
 }

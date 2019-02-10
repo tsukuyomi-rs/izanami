@@ -65,10 +65,10 @@ mod tcp {
 
         let listener = StdTcpListener::bind("127.0.0.1:0")?;
         let local_addr = listener.local_addr()?;
-        server.start(
+        server.spawn(
             Http::bind(listener) //
-                .serve(|| super::Echo::default()),
-        )?;
+                .serve(super::Echo::default())?,
+        );
 
         let client = Client::builder() //
             .build(TestConnect { local_addr });
@@ -86,10 +86,7 @@ mod tcp {
         let body = server.runtime().block_on(response.into_body().concat2())?;
         assert_eq!(body.into_bytes(), "hello");
 
-        drop(client);
-        server.shutdown();
-
-        server.runtime().run()?;
+        server.shutdown()?;
         Ok(())
     }
 
@@ -138,10 +135,10 @@ mod unix {
 
         let mut server = Server::current_thread()?;
 
-        server.start(
+        server.spawn(
             Http::bind(sock_path.clone()) //
-                .serve(|| super::Echo::default()),
-        )?;
+                .serve(super::Echo::default())?,
+        );
 
         let client = Client::builder() //
             .build(TestConnect {
@@ -161,10 +158,7 @@ mod unix {
         let body = server.runtime().block_on(response.into_body().concat2())?;
         assert_eq!(body.into_bytes(), "hello");
 
-        drop(client);
-        server.shutdown();
-
-        server.runtime().run()?;
+        server.shutdown()?;
         Ok(())
     }
 
@@ -220,10 +214,11 @@ mod native_tls {
         let listener = TcpListener::bind("127.0.0.1:0")?;
         let local_addr = listener.local_addr()?;
         let native_tls = NativeTls::from_pkcs12(IDENTITY, "mypass")?;
-        server.start(
+        server.spawn(
             Http::bind(listener) //
-                .serve_with(native_tls, || super::Echo::default()),
-        )?;
+                .with_tls(native_tls)
+                .serve(super::Echo::default())?,
+        );
 
         let client = Client::builder() //
             .build(TestConnect {
@@ -253,10 +248,7 @@ mod native_tls {
             )?;
         assert_eq!(body.into_bytes(), "hello");
 
-        drop(client);
-        server.shutdown();
-
-        server.runtime().run()?;
+        server.shutdown()?;
         Ok(())
     }
 
@@ -327,10 +319,11 @@ mod openssl {
         let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
         let ssl = Ssl::single_cert(cert, pkey);
 
-        server.start(
+        server.spawn(
             Http::bind(listener) //
-                .serve_with(ssl, || super::Echo::default()),
-        )?;
+                .with_tls(ssl)
+                .serve(super::Echo::default())?,
+        );
 
         let client = Client::builder() //
             .build(TestConnect {
@@ -365,10 +358,7 @@ mod openssl {
             )?;
         assert_eq!(body.into_bytes(), "hello");
 
-        drop(client);
-        server.shutdown();
-
-        server.runtime().run()?;
+        server.shutdown()?;
         Ok(())
     }
 
@@ -436,10 +426,11 @@ mod rustls {
         let local_addr = listener.local_addr()?;
         let rustls = Rustls::no_client_auth() //
             .single_cert(CERTIFICATE, PRIVATE_KEY)?;
-        server.start(
+        server.spawn(
             Http::bind(listener) //
-                .serve_with(rustls, || super::Echo::default()),
-        )?;
+                .with_tls(rustls)
+                .serve(super::Echo::default())?,
+        );
 
         // FIXME: use rustls
         let client = Client::builder() //
@@ -470,10 +461,7 @@ mod rustls {
             )?;
         assert_eq!(body.into_bytes(), "hello");
 
-        drop(client);
-        server.shutdown();
-
-        server.runtime().run()?;
+        server.shutdown()?;
         Ok(())
     }
 

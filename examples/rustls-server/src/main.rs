@@ -20,10 +20,11 @@ fn main() -> izanami::Result<()> {
 
     let rustls = Rustls::no_client_auth() //
         .single_cert(CERTIFICATE, PRIVATE_KEY)?;
-    server.start(
+    server.spawn(
         Http::bind("127.0.0.1:4000") //
-            .serve_with(rustls, move || echo.clone()),
-    )?;
+            .with_tls(rustls)
+            .serve(echo)?,
+    );
 
     server.run()
 }

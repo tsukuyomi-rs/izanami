@@ -23,10 +23,11 @@ fn main() -> izanami::Result<()> {
     let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
     let ssl = Ssl::single_cert(cert, pkey);
 
-    server.start(
+    server.spawn(
         Http::bind("127.0.0.1:4000") //
-            .serve_with(ssl, move || echo.clone()),
-    )?;
+            .with_tls(ssl)
+            .serve(echo)?,
+    );
 
     server.run()
 }

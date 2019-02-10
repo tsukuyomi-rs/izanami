@@ -16,10 +16,10 @@ fn main() -> izanami::Result<()> {
         .build();
 
     let mut server = Server::default()?;
-    server.start(
+    server.spawn(
         Http::bind(Path::new("/tmp/echo-service.sock")) //
-            .serve(move || echo.clone()),
-    )?;
+            .serve(echo)?,
+    );
     server.run()
 }
 

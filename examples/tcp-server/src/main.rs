@@ -14,9 +14,9 @@ fn main() -> izanami::Result<()> {
         .build();
 
     let mut server = Server::default()?;
-    server.start(
+    server.spawn(
         Http::bind("127.0.0.1:5000") //
-            .serve(move || echo.clone()),
-    )?;
+            .serve(echo)?,
+    );
     server.run()
 }
