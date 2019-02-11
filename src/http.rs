@@ -2,7 +2,7 @@ use {
     crate::error::BoxedStdError,
     crate::{
         net::{Bind, Listener},
-        system::{System, Task, TaskConfig},
+        system::{notify, CurrentThread, Spawn, System},
         tls::{NoTls, Tls, TlsConfig, TlsWrapper},
     },
     bytes::{Buf, BufMut, Bytes},
@@ -104,9 +104,9 @@ pub struct HttpTask<S, T, W, Sig> {
 
 /// A helper macro for creating a server task.
 macro_rules! serve {
-    ($self:expr, $config:expr, $executor:expr) => {{
+    ($self:expr, $tx_notify:expr, $executor:expr) => {{
         let self_ = $self;
-        let config = $config;
+        let tx_notify = $tx_notify;
         let executor = $executor;
 
         let incoming = AddrIncoming {
@@ -132,17 +132,14 @@ macro_rules! serve {
                 Some(sig) => futures::future::Either::A(sig.map_err(|_| ())),
                 None => futures::future::Either::B(futures::future::empty::<(), ()>()),
             })
-            .then({
-                let tx_complete = config.tx_complete;
-                move |result| {
-                    let _ = tx_complete.send(result.map_err(Into::into));
-                    Ok(())
-                }
+            .then(move |result| {
+                tx_notify.send(result.map_err(Into::into));
+                Ok(())
             })
     }};
 }
 
-impl<S, T, W, Sig> Task<tokio::runtime::Runtime> for HttpTask<S, T, W, Sig>
+impl<S, T, W, Sig> Spawn for HttpTask<S, T, W, Sig>
 where
     S: MakeHttpService + Send + Sync + 'static,
     S::Future: Send + 'static,
@@ -153,13 +150,17 @@ where
     W::Wrapped: Send + 'static,
     Sig: Future<Item = ()> + Send + 'static,
 {
-    fn spawn(self, sys: &mut System<'_, tokio::runtime::Runtime>, config: TaskConfig) {
-        let executor = sys.executor();
-        (**sys).spawn(serve!(self, config, executor));
+    type Output = crate::Result<()>;
+
+    fn spawn(self, sys: &mut System<'_>) -> notify::Receiver<Self::Output> {
+        let executor = sys.runtime().executor();
+        let (tx_notify, rx_notify) = notify::pair();
+        sys.runtime().spawn(serve!(self, tx_notify, executor));
+        rx_notify
     }
 }
 
-impl<S, T, W, Sig> Task<tokio::runtime::current_thread::Runtime> for HttpTask<S, T, W, Sig>
+impl<S, T, W, Sig> Spawn<CurrentThread> for HttpTask<S, T, W, Sig>
 where
     S: MakeHttpService + 'static,
     S::Service: 'static,
@@ -169,13 +170,13 @@ where
     W::Wrapped: Send + 'static,
     Sig: Future<Item = ()> + 'static,
 {
-    fn spawn(
-        self,
-        sys: &mut System<'_, tokio::runtime::current_thread::Runtime>,
-        config: TaskConfig,
-    ) {
-        let executor = tokio::runtime::current_thread::TaskExecutor::current();
-        (**sys).spawn(serve!(self, config, executor));
+    type Output = crate::Result<()>;
+
+    fn spawn(self, sys: &mut System<'_, CurrentThread>) -> notify::Receiver<Self::Output> {
+        let executor = sys.runtime().executor();
+        let (tx_notify, rx_notify) = notify::pair();
+        sys.runtime().spawn(serve!(self, tx_notify, executor));
+        rx_notify
     }
 }
 

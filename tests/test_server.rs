@@ -51,7 +51,7 @@ mod tcp {
             },
             Body,
         },
-        izanami::http::Http, //
+        izanami::{Http, System}, //
         std::{
             io,
             net::{SocketAddr, TcpListener as StdTcpListener},
@@ -61,7 +61,7 @@ mod tcp {
 
     #[test]
     fn tcp_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
+        System::with_local(|sys| {
             let listener = StdTcpListener::bind("127.0.0.1:0")?;
             let local_addr = listener.local_addr()?;
 
@@ -125,7 +125,7 @@ mod unix {
             },
             Body,
         },
-        izanami::http::Http, //
+        izanami::{Http, System}, //
         std::{io, path::PathBuf},
         tempfile::Builder,
         tokio::{net::UnixStream, sync::oneshot},
@@ -133,7 +133,7 @@ mod unix {
 
     #[test]
     fn unix_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
+        System::with_local(|sys| {
             let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
             let sock_path = sock_tempdir.path().join("connect.sock");
 
@@ -200,7 +200,7 @@ mod native_tls {
             },
             Body,
         },
-        izanami::{http::Http, tls::native_tls::NativeTls},
+        izanami::{tls::native_tls::NativeTls, Http, System},
         std::{
             io,
             net::{SocketAddr, TcpListener},
@@ -211,7 +211,7 @@ mod native_tls {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
+        System::with_local(|sys| {
             const IDENTITY: &[u8] = include_bytes!("../test/identity.pfx");
             const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
 
@@ -297,7 +297,7 @@ mod openssl {
             },
             Body,
         },
-        izanami::{http::Http, tls::openssl::Ssl},
+        izanami::{tls::openssl::Ssl, Http, System},
         openssl::{
             pkey::PKey,
             ssl::{SslConnector, SslMethod, SslVerifyMode},
@@ -316,7 +316,7 @@ mod openssl {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
+        System::with_local(|sys| {
             let listener = TcpListener::bind("127.0.0.1:0")?;
             let local_addr = listener.local_addr()?;
 
@@ -408,10 +408,7 @@ mod rustls {
             },
             Body,
         },
-        izanami::{
-            http::Http, //
-            tls::rustls::Rustls,
-        },
+        izanami::{tls::rustls::Rustls, Http, System},
         std::{
             io,
             net::{SocketAddr, TcpListener},
@@ -422,7 +419,7 @@ mod rustls {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
+        System::with_local(|sys| {
             const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
             const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
 

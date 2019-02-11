@@ -1,14 +1,14 @@
 use {
     echo_service::Echo,
     http::Response,
-    izanami::{tls::rustls::Rustls, Http},
+    izanami::{tls::rustls::Rustls, Http, System},
 };
 
 const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
 const PRIVATE_KEY: &[u8] = include_bytes!("../../../test/server-key.pem");
 
 fn main() -> izanami::Result<()> {
-    izanami::system::default(|sys| {
+    System::with_default(|sys| {
         let echo = Echo::builder()
             .add_route("/", |_cx| {
                 Response::builder() //

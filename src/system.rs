@@ -1,143 +1,276 @@
-use {futures::Future, std::marker::PhantomData, tokio::sync::oneshot};
+//! The system for driving asynchronous computations.
 
-pub fn default<T>(f: impl FnOnce(&mut System<'_>) -> crate::Result<T>) -> crate::Result<T> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    with_fn(runtime, f)
-}
+use {futures::Future, std::marker::PhantomData};
 
-pub fn current_thread<T>(
-    f: impl FnOnce(&mut System<'_, tokio::runtime::current_thread::Runtime>) -> crate::Result<T>,
-) -> crate::Result<T> {
-    let runtime = tokio::runtime::current_thread::Runtime::new()?;
-    with_fn(runtime, f)
-}
-
-fn with_fn<Rt, T>(
-    mut runtime: Rt,
-    f: impl FnOnce(&mut System<'_, Rt>) -> crate::Result<T>,
-) -> crate::Result<T>
+/// A system that drives asynchronous computations.
+#[derive(Debug)]
+pub struct System<'s, Rt = DefaultRuntime>
 where
     Rt: Runtime,
 {
-    let ret = f(&mut System {
-        runtime: &mut runtime,
-    })?;
-    runtime.shutdown_on_idle();
-    Ok(ret)
+    runtime: &'s mut Rt,
+    _anchor: PhantomData<std::rc::Rc<()>>,
 }
 
-/// A type that executes server tasks.
-///
-/// This type consists of a Tokio runtime that drives server tasks
-/// and handles to control the spawned tasks.
-#[derive(Debug)]
-pub struct System<'rt, Rt: Runtime = tokio::runtime::Runtime> {
-    runtime: &'rt mut Rt,
-}
-
-impl<'rt, Rt: Runtime> System<'rt, Rt> {
-    /// Start a server task onto this server.
-    pub fn spawn<T>(&mut self, task: T) -> Handle<'rt, Rt>
+impl<'s> System<'s> {
+    /// Run the specified function onto the system using the default runtime.
+    pub fn with_default<F, T>(f: F) -> crate::Result<T>
     where
-        T: Task<Rt>,
+        F: FnOnce(&mut System<'_>) -> crate::Result<T>,
     {
-        let (tx_complete, rx_complete) = oneshot::channel();
-        task.spawn(self, TaskConfig { tx_complete });
+        System::with_runtime(
+            DefaultRuntime {
+                inner: tokio::runtime::Runtime::new()?,
+            },
+            f,
+        )
+    }
+}
+
+impl<'s> System<'s, CurrentThread> {
+    /// Run the specified function onto the system using the single-threaded runtime.
+    pub fn with_local<T>(
+        f: impl FnOnce(&mut System<'_, CurrentThread>) -> crate::Result<T>,
+    ) -> crate::Result<T> {
+        System::with_runtime(
+            CurrentThread {
+                inner: tokio::runtime::current_thread::Runtime::new()?,
+            },
+            f,
+        )
+    }
+}
+
+impl<'s, Rt> System<'s, Rt>
+where
+    Rt: Runtime,
+{
+    fn with_runtime<F, T>(mut runtime: Rt, f: F) -> crate::Result<T>
+    where
+        F: FnOnce(&mut System<'_, Rt>) -> crate::Result<T>,
+    {
+        let ret = f(&mut System {
+            runtime: &mut runtime,
+            _anchor: PhantomData,
+        })?;
+        runtime.shutdown_on_idle();
+        Ok(ret)
+    }
+
+    /// Spawn the specified future onto this system
+    /// and returns an `Handle` associated with it.
+    pub fn spawn<F>(&mut self, future: F) -> Handle<'s, Rt, F::Output>
+    where
+        F: Spawn<Rt>,
+    {
         Handle {
-            rx_complete,
+            rx_complete: future.spawn(self),
             _marker: PhantomData,
         }
     }
-}
 
-impl<'a, Rt> std::ops::Deref for System<'a, Rt>
-where
-    Rt: Runtime,
-{
-    type Target = Rt;
-
-    #[inline]
-    fn deref(&self) -> &Self::Target {
-        &*self.runtime
+    /// Run the specified future onto this system and await its result.
+    pub fn block_on<F>(&mut self, future: F) -> F::Output
+    where
+        F: BlockOn<Rt>,
+    {
+        future.block_on(self)
     }
-}
 
-impl<'a, Rt> std::ops::DerefMut for System<'a, Rt>
-where
-    Rt: Runtime,
-{
-    #[inline]
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        &mut *self.runtime
+    pub(crate) fn runtime(&mut self) -> &mut Rt {
+        &mut self.runtime
     }
 }
 
 /// The handle for managing a spawned task.
 #[derive(Debug)]
-pub struct Handle<'rt, Rt: Runtime> {
-    rx_complete: oneshot::Receiver<crate::Result<()>>,
+pub struct Handle<'rt, Rt: Runtime, T> {
+    rx_complete: notify::Receiver<T>,
     _marker: PhantomData<fn(&mut System<'rt, Rt>)>,
 }
 
-impl<'rt, Rt> Handle<'rt, Rt>
+impl<'rt, Rt, T> Handle<'rt, Rt, T>
 where
     Rt: Runtime,
 {
-    /// Wait for completion of the associated task and returns its result.
-    pub fn wait_complete(self, sys: &mut System<'rt, Rt>) -> crate::Result<()> {
-        sys.block_on(
-            self.rx_complete //
-                .then(|result| result.expect("recv error")),
-        )
+    /// Wait for the completion of associated task and returns its result.
+    pub fn wait_complete(self, sys: &mut System<'rt, Rt>) -> T
+    where
+        notify::Receiver<T>: BlockOn<Rt, Output = Result<T, ()>>,
+    {
+        sys.block_on(self.rx_complete) //
+            .unwrap_or_else(|_| panic!("failed to receive completion signal"))
     }
 }
 
-/// A trait abstracting the runtime that executes asynchronous tasks.
-pub trait Runtime {
-    fn block_on<F>(&mut self, future: F) -> Result<F::Item, F::Error>
-    where
-        F: Future + Send + 'static,
-        F::Item: Send + 'static,
-        F::Error: Send + 'static;
+// ==== Runtime ====
 
+/// Trait that abstracts the runtime for executing asynchronous tasks.
+pub trait Runtime {
     fn shutdown_on_idle(self);
 }
 
-impl Runtime for tokio::runtime::Runtime {
-    fn block_on<F>(&mut self, future: F) -> Result<F::Item, F::Error>
-    where
-        F: Future + Send + 'static,
-        F::Item: Send + 'static,
-        F::Error: Send + 'static,
-    {
-        self.block_on(future)
+#[derive(Debug)]
+pub struct DefaultRuntime {
+    inner: tokio::runtime::Runtime,
+}
+
+impl DefaultRuntime {
+    pub(crate) fn executor(&self) -> tokio::runtime::TaskExecutor {
+        self.inner.executor()
     }
 
+    pub(crate) fn spawn<F>(&mut self, future: F)
+    where
+        F: Future<Item = (), Error = ()> + Send + 'static,
+    {
+        self.inner.spawn(future);
+    }
+}
+
+impl Runtime for DefaultRuntime {
     fn shutdown_on_idle(self) {
-        self.shutdown_on_idle().wait().unwrap();
+        self.inner.shutdown_on_idle().wait().unwrap();
     }
-}
-
-impl Runtime for tokio::runtime::current_thread::Runtime {
-    fn block_on<F>(&mut self, future: F) -> Result<F::Item, F::Error>
-    where
-        F: Future + Send + 'static,
-        F::Item: Send + 'static,
-        F::Error: Send + 'static,
-    {
-        self.block_on(future)
-    }
-
-    fn shutdown_on_idle(mut self) {
-        self.run().unwrap();
-    }
-}
-
-pub trait Task<Rt: Runtime> {
-    fn spawn(self, sys: &mut System<'_, Rt>, config: TaskConfig);
 }
 
 #[derive(Debug)]
-pub struct TaskConfig {
-    pub(crate) tx_complete: oneshot::Sender<crate::Result<()>>,
+pub struct CurrentThread {
+    inner: tokio::runtime::current_thread::Runtime,
+}
+
+impl CurrentThread {
+    pub(crate) fn executor(&self) -> tokio::runtime::current_thread::TaskExecutor {
+        tokio::runtime::current_thread::TaskExecutor::current()
+    }
+
+    pub(crate) fn spawn<F>(&mut self, future: F)
+    where
+        F: Future<Item = (), Error = ()> + 'static,
+    {
+        self.inner.spawn(future);
+    }
+}
+
+impl Runtime for CurrentThread {
+    fn shutdown_on_idle(mut self) {
+        self.inner.run().unwrap();
+    }
+}
+
+/// Trait representing the ability to run a future.
+pub trait BlockOn<Rt: Runtime = DefaultRuntime> {
+    type Output;
+
+    /// Run the provided future onto this runtime until it completes.
+    fn block_on(self, sys: &mut System<'_, Rt>) -> Self::Output;
+}
+
+impl<F> BlockOn<DefaultRuntime> for F
+where
+    F: Future + Send + 'static,
+    F::Item: Send + 'static,
+    F::Error: Send + 'static,
+{
+    type Output = Result<F::Item, F::Error>;
+
+    fn block_on(self, sys: &mut System<'_, DefaultRuntime>) -> Self::Output {
+        sys.runtime.inner.block_on(self)
+    }
+}
+
+impl<F> BlockOn<CurrentThread> for F
+where
+    F: Future,
+{
+    type Output = Result<F::Item, F::Error>;
+
+    fn block_on(self, sys: &mut System<'_, CurrentThread>) -> Self::Output {
+        sys.runtime.inner.block_on(self)
+    }
+}
+
+/// Trait representing the value to be spawned onto `System`.
+///
+/// The role of this trait is similar to `Future`, but it explicitly
+/// specifies the type of runtime to be spawned.
+pub trait Spawn<Rt: Runtime = DefaultRuntime> {
+    /// The output type which will be returned when the spawned task completes.
+    type Output;
+
+    /// Spawned itself onto the specified system.
+    fn spawn(self, sys: &mut System<'_, Rt>) -> notify::Receiver<Self::Output>;
+}
+
+impl<F> Spawn<DefaultRuntime> for F
+where
+    F: Future + Send + 'static,
+    F::Item: Send + 'static,
+    F::Error: Send + 'static,
+{
+    type Output = Result<F::Item, F::Error>;
+
+    fn spawn(self, sys: &mut System<'_, DefaultRuntime>) -> notify::Receiver<Self::Output> {
+        let (tx, rx) = notify::pair();
+        sys.runtime.spawn(self.then(move |result| {
+            tx.send(result);
+            Ok(())
+        }));
+        rx
+    }
+}
+
+impl<F> Spawn<CurrentThread> for F
+where
+    F: Future + 'static,
+{
+    type Output = Result<F::Item, F::Error>;
+
+    fn spawn(self, sys: &mut System<'_, CurrentThread>) -> notify::Receiver<Self::Output> {
+        let (tx, rx) = notify::pair();
+        sys.runtime.spawn(self.then(move |result| {
+            tx.send(result);
+            Ok(())
+        }));
+        rx
+    }
+}
+
+#[doc(hidden)]
+pub mod notify {
+    use {
+        futures::{Future, Poll},
+        tokio::sync::oneshot,
+    };
+
+    pub(crate) fn pair<T>() -> (Sender<T>, Receiver<T>) {
+        let (tx, rx) = oneshot::channel();
+        (Sender { inner: tx }, Receiver { inner: rx })
+    }
+
+    #[derive(Debug)]
+    pub(crate) struct Sender<T> {
+        inner: oneshot::Sender<T>,
+    }
+
+    impl<T> Sender<T> {
+        pub(crate) fn send(self, value: T) {
+            let _ = self.inner.send(value);
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct Receiver<T> {
+        inner: oneshot::Receiver<T>,
+    }
+
+    impl<T> Future for Receiver<T> {
+        type Item = T;
+        type Error = ();
+
+        #[inline]
+        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+            self.inner.poll().map_err(|_| ())
+        }
+    }
 }

@@ -1,13 +1,13 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::Http,
+    izanami::{Http, System},
     std::path::Path,
 };
 
 #[cfg(unix)]
 fn main() -> izanami::Result<()> {
-    izanami::system::default(|sys| {
+    System::with_default(|sys| {
         let echo = Echo::builder()
             .add_route("/", |_cx| {
                 Response::builder() //

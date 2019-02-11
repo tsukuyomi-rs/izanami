@@ -1,7 +1,7 @@
 use {
     echo_service::Echo,
     http::Response,
-    izanami::{tls::openssl::Ssl, Http},
+    izanami::{tls::openssl::Ssl, Http, System},
     openssl::{pkey::PKey, x509::X509},
 };
 
@@ -9,7 +9,7 @@ const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
 const PRIVATE_KEY: &[u8] = include_bytes!("../../../test/server-key.pem");
 
 fn main() -> izanami::Result<()> {
-    izanami::system::default(move |sys| {
+    System::with_default(|sys| {
         let echo = Echo::builder()
             .add_route("/", |_cx| {
                 Response::builder() //
