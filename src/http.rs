@@ -21,10 +21,11 @@ use {
 
 /// A builder for configuring an HTTP server task.
 #[derive(Debug)]
-pub struct Http<B, T = NoTls> {
+pub struct Http<B, T = NoTls, Sig = futures::future::Empty<(), ()>> {
     bind: B,
     tls: T,
     protocol: hyper::server::conn::Http,
+    shutdown_signal: Option<Sig>,
 }
 
 impl<B> Http<B>
@@ -37,16 +38,18 @@ where
             bind,
             tls: NoTls::default(),
             protocol: hyper::server::conn::Http::new(),
+            shutdown_signal: None,
         }
     }
 }
 
-impl<B, T> Http<B, T>
+impl<B, T, Sig> Http<B, T, Sig>
 where
     B: Bind,
     T: Tls<B::Conn>,
+    Sig: Future<Item = ()>,
 {
-    pub fn with_tls<T2>(self, tls: T2) -> Http<B, T2>
+    pub fn with_tls<T2>(self, tls: T2) -> Http<B, T2, Sig>
     where
         T2: Tls<B::Conn>,
     {
@@ -54,11 +57,27 @@ where
             bind: self.bind,
             tls,
             protocol: self.protocol,
+            shutdown_signal: self.shutdown_signal,
+        }
+    }
+
+    pub fn with_graceful_shutdown<Sig2>(self, shutdown_signal: Sig2) -> Http<B, T, Sig2>
+    where
+        Sig2: Future<Item = ()>,
+    {
+        Http {
+            bind: self.bind,
+            tls: self.tls,
+            protocol: self.protocol,
+            shutdown_signal: Some(shutdown_signal),
         }
     }
 
     /// Spawn an HTTP server task onto the server.
-    pub fn serve<S>(self, make_service: S) -> crate::Result<HttpTask<S, B::Listener, T::Wrapper>>
+    pub fn serve<S>(
+        self,
+        make_service: S,
+    ) -> crate::Result<HttpTask<S, B::Listener, T::Wrapper, Sig>>
     where
         S: MakeHttpService,
     {
@@ -69,16 +88,18 @@ where
                 alpn_protocols: vec!["h2".into(), "http/1.1".into()],
             })?,
             protocol: self.protocol,
+            shutdown_signal: self.shutdown_signal,
         })
     }
 }
 
 #[allow(missing_debug_implementations)]
-pub struct HttpTask<S, T, W = crate::tls::NoTls> {
+pub struct HttpTask<S, T, W, Sig> {
     make_service: S,
     listener: T,
     tls_wrapper: W,
     protocol: hyper::server::conn::Http,
+    shutdown_signal: Option<Sig>,
 }
 
 /// A helper macro for creating a server task.
@@ -107,7 +128,10 @@ macro_rules! serve {
                         })
                 },
             ))
-            .with_graceful_shutdown(config.rx_shutdown)
+            .with_graceful_shutdown(match self_.shutdown_signal {
+                Some(sig) => futures::future::Either::A(sig.map_err(|_| ())),
+                None => futures::future::Either::B(futures::future::empty::<(), ()>()),
+            })
             .then({
                 let tx_complete = config.tx_complete;
                 move |result| {
@@ -118,7 +142,7 @@ macro_rules! serve {
     }};
 }
 
-impl<S, T, W> Task<tokio::runtime::Runtime> for HttpTask<S, T, W>
+impl<S, T, W, Sig> Task<tokio::runtime::Runtime> for HttpTask<S, T, W, Sig>
 where
     S: MakeHttpService + Send + Sync + 'static,
     S::Future: Send + 'static,
@@ -127,6 +151,7 @@ where
     T: Listener + Send + 'static,
     W: TlsWrapper<T::Conn> + Send + 'static,
     W::Wrapped: Send + 'static,
+    Sig: Future<Item = ()> + Send + 'static,
 {
     fn spawn(self, sys: &mut System<'_, tokio::runtime::Runtime>, config: TaskConfig) {
         let executor = sys.executor();
@@ -134,7 +159,7 @@ where
     }
 }
 
-impl<S, T, W> Task<tokio::runtime::current_thread::Runtime> for HttpTask<S, T, W>
+impl<S, T, W, Sig> Task<tokio::runtime::current_thread::Runtime> for HttpTask<S, T, W, Sig>
 where
     S: MakeHttpService + 'static,
     S::Service: 'static,
@@ -142,6 +167,7 @@ where
     T: Listener + 'static,
     W: TlsWrapper<T::Conn> + 'static,
     W::Wrapped: Send + 'static,
+    Sig: Future<Item = ()> + 'static,
 {
     fn spawn(
         self,

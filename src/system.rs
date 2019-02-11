@@ -1,8 +1,4 @@
-use {
-    futures::{Async, Future, Poll},
-    std::marker::PhantomData,
-    tokio::sync::oneshot,
-};
+use {futures::Future, std::marker::PhantomData, tokio::sync::oneshot};
 
 pub fn default<T>(f: impl FnOnce(&mut System<'_>) -> crate::Result<T>) -> crate::Result<T> {
     let runtime = tokio::runtime::Runtime::new()?;
@@ -45,21 +41,9 @@ impl<'rt, Rt: Runtime> System<'rt, Rt> {
     where
         T: Task<Rt>,
     {
-        let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let (tx_complete, rx_complete) = oneshot::channel();
-
-        task.spawn(
-            self,
-            TaskConfig {
-                rx_shutdown: ShutdownSignal {
-                    inner: Some(rx_shutdown),
-                },
-                tx_complete,
-            },
-        );
-
+        task.spawn(self, TaskConfig { tx_complete });
         Handle {
-            tx_shutdown: Some(tx_shutdown),
             rx_complete,
             _marker: PhantomData,
         }
@@ -91,7 +75,6 @@ where
 /// The handle for managing a spawned task.
 #[derive(Debug)]
 pub struct Handle<'rt, Rt: Runtime> {
-    tx_shutdown: Option<oneshot::Sender<()>>,
     rx_complete: oneshot::Receiver<crate::Result<()>>,
     _marker: PhantomData<fn(&mut System<'rt, Rt>)>,
 }
@@ -100,13 +83,6 @@ impl<'rt, Rt> Handle<'rt, Rt>
 where
     Rt: Runtime,
 {
-    /// Send a shutdown signal to the associated task.
-    pub fn shutdown(&mut self) {
-        if let Some(tx) = self.tx_shutdown.take() {
-            let _ = tx.send(());
-        }
-    }
-
     /// Wait for completion of the associated task and returns its result.
     pub fn wait_complete(self, sys: &mut System<'rt, Rt>) -> crate::Result<()> {
         sys.block_on(
@@ -163,35 +139,5 @@ pub trait Task<Rt: Runtime> {
 
 #[derive(Debug)]
 pub struct TaskConfig {
-    pub(crate) rx_shutdown: ShutdownSignal,
     pub(crate) tx_complete: oneshot::Sender<crate::Result<()>>,
-}
-
-#[derive(Debug)]
-pub(crate) struct ShutdownSignal {
-    inner: Option<oneshot::Receiver<()>>,
-}
-
-impl Future for ShutdownSignal {
-    type Item = ();
-    type Error = ();
-
-    #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        if self.inner.is_none() {
-            return Ok(Async::NotReady);
-        }
-        match self.inner.as_mut().unwrap().poll() {
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-            Ok(Async::Ready(())) => {
-                log::trace!("receive a shutdown signal from sender");
-                Ok(Async::Ready(()))
-            }
-            Err(..) => {
-                log::trace!("switch to infinity run");
-                let _ = self.inner.take();
-                Ok(Async::NotReady)
-            }
-        }
-    }
 }

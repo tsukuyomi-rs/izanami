@@ -56,7 +56,7 @@ mod tcp {
             io,
             net::{SocketAddr, TcpListener as StdTcpListener},
         },
-        tokio::net::TcpStream,
+        tokio::{net::TcpStream, sync::oneshot},
     };
 
     #[test]
@@ -65,10 +65,12 @@ mod tcp {
             let listener = StdTcpListener::bind("127.0.0.1:0")?;
             let local_addr = listener.local_addr()?;
 
+            let (tx_shutdown, rx_shutdown) = oneshot::channel();
             let http_server = Http::bind(listener) //
+                .with_graceful_shutdown(rx_shutdown)
                 .serve(super::Echo::default())?;
 
-            let mut handle = sys.spawn(http_server);
+            let handle = sys.spawn(http_server);
 
             let client = Client::builder() //
                 .build(TestConnect { local_addr });
@@ -84,7 +86,7 @@ mod tcp {
             let body = sys.block_on(response.into_body().concat2())?;
             assert_eq!(body.into_bytes(), "hello");
 
-            handle.shutdown();
+            let _ = tx_shutdown.send(());
             handle.wait_complete(sys)?;
 
             Ok(())
@@ -126,7 +128,7 @@ mod unix {
         izanami::http::Http, //
         std::{io, path::PathBuf},
         tempfile::Builder,
-        tokio::net::UnixStream,
+        tokio::{net::UnixStream, sync::oneshot},
     };
 
     #[test]
@@ -135,10 +137,12 @@ mod unix {
             let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
             let sock_path = sock_tempdir.path().join("connect.sock");
 
+            let (tx_shutdown, rx_shutdown) = oneshot::channel();
             let http_server = Http::bind(sock_path.clone()) //
+                .with_graceful_shutdown(rx_shutdown)
                 .serve(super::Echo::default())?;
 
-            let mut handle = sys.spawn(http_server);
+            let handle = sys.spawn(http_server);
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -156,7 +160,7 @@ mod unix {
             let body = sys.block_on(response.into_body().concat2())?;
             assert_eq!(body.into_bytes(), "hello");
 
-            handle.shutdown();
+            let _ = tx_shutdown.send(());
             handle.wait_complete(sys)?;
 
             Ok(())
@@ -201,7 +205,7 @@ mod native_tls {
             io,
             net::{SocketAddr, TcpListener},
         },
-        tokio::net::TcpStream,
+        tokio::{net::TcpStream, sync::oneshot},
         tokio_tls::TlsStream,
     };
 
@@ -214,11 +218,14 @@ mod native_tls {
             let listener = TcpListener::bind("127.0.0.1:0")?;
             let local_addr = listener.local_addr()?;
             let native_tls = NativeTls::from_pkcs12(IDENTITY, "mypass")?;
+
+            let (tx_shutdown, rx_shutdown) = oneshot::channel();
             let http_server = Http::bind(listener) //
+                .with_graceful_shutdown(rx_shutdown)
                 .with_tls(native_tls)
                 .serve(super::Echo::default())?;
 
-            let mut handle = sys.spawn(http_server);
+            let handle = sys.spawn(http_server);
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -244,7 +251,7 @@ mod native_tls {
             )?;
             assert_eq!(body.into_bytes(), "hello");
 
-            handle.shutdown();
+            let _ = tx_shutdown.send(());
             handle.wait_complete(sys)?;
 
             Ok(())
@@ -300,7 +307,7 @@ mod openssl {
             io,
             net::{SocketAddr, TcpListener},
         },
-        tokio::net::TcpStream,
+        tokio::{net::TcpStream, sync::oneshot},
         tokio_openssl::{SslConnectorExt, SslStream},
     };
 
@@ -316,11 +323,14 @@ mod openssl {
             let cert = X509::from_pem(CERTIFICATE)?;
             let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
             let ssl = Ssl::single_cert(cert, pkey);
+
+            let (tx_shutdown, rx_shutdown) = oneshot::channel();
             let http_server = Http::bind(listener) //
+                .with_graceful_shutdown(rx_shutdown)
                 .with_tls(ssl)
                 .serve(super::Echo::default())?;
 
-            let mut handle = sys.spawn(http_server);
+            let handle = sys.spawn(http_server);
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -351,7 +361,7 @@ mod openssl {
             )?;
             assert_eq!(body.into_bytes(), "hello");
 
-            handle.shutdown();
+            let _ = tx_shutdown.send(());
             handle.wait_complete(sys)?;
 
             Ok(())
@@ -406,7 +416,7 @@ mod rustls {
             io,
             net::{SocketAddr, TcpListener},
         },
-        tokio::net::TcpStream,
+        tokio::{net::TcpStream, sync::oneshot},
         tokio_tls::TlsStream,
     };
 
@@ -420,11 +430,14 @@ mod rustls {
             let local_addr = listener.local_addr()?;
             let rustls = Rustls::no_client_auth() //
                 .single_cert(CERTIFICATE, PRIVATE_KEY)?;
+
+            let (tx_shutdown, rx_shutdown) = oneshot::channel();
             let http_server = Http::bind(listener) //
+                .with_graceful_shutdown(rx_shutdown)
                 .with_tls(rustls)
                 .serve(super::Echo::default())?;
 
-            let mut handle = sys.spawn(http_server);
+            let handle = sys.spawn(http_server);
 
             // FIXME: use rustls
             let client = Client::builder() //
@@ -451,7 +464,7 @@ mod rustls {
             )?;
             assert_eq!(body.into_bytes(), "hello");
 
-            handle.shutdown();
+            let _ = tx_shutdown.send(());
             handle.wait_complete(sys)?;
 
             Ok(())
