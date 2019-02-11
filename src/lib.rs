@@ -15,12 +15,11 @@ mod util;
 
 pub mod http;
 pub mod net;
-pub mod server;
+pub mod system;
 pub mod tls;
 
 #[doc(inline)]
 pub use crate::{
     error::{Error, Result},
     http::Http,
-    server::Server,
 };

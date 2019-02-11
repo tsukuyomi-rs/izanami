@@ -2,7 +2,7 @@ use {
     crate::error::BoxedStdError,
     crate::{
         net::{Bind, Listener},
-        server::{Task, TaskConfig},
+        system::{System, Task, TaskConfig},
         tls::{NoTls, Tls, TlsConfig, TlsWrapper},
     },
     bytes::{Buf, BufMut, Bytes},
@@ -128,8 +128,9 @@ where
     W: TlsWrapper<T::Conn> + Send + 'static,
     W::Wrapped: Send + 'static,
 {
-    fn spawn(self, rt: &mut tokio::runtime::Runtime, config: TaskConfig) {
-        rt.spawn(serve!(self, config, rt.executor()));
+    fn spawn(self, sys: &mut System<'_, tokio::runtime::Runtime>, config: TaskConfig) {
+        let executor = sys.executor();
+        (**sys).spawn(serve!(self, config, executor));
     }
 }
 
@@ -142,9 +143,13 @@ where
     W: TlsWrapper<T::Conn> + 'static,
     W::Wrapped: Send + 'static,
 {
-    fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime, config: TaskConfig) {
+    fn spawn(
+        self,
+        sys: &mut System<'_, tokio::runtime::current_thread::Runtime>,
+        config: TaskConfig,
+    ) {
         let executor = tokio::runtime::current_thread::TaskExecutor::current();
-        rt.spawn(serve!(self, config, executor));
+        (**sys).spawn(serve!(self, config, executor));
     }
 }
 

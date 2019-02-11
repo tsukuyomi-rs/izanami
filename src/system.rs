@@ -1,47 +1,47 @@
 use {
     futures::{Async, Future, Poll},
+    std::marker::PhantomData,
     tokio::sync::oneshot,
 };
+
+pub fn default<T>(f: impl FnOnce(&mut System<'_>) -> crate::Result<T>) -> crate::Result<T> {
+    let runtime = tokio::runtime::Runtime::new()?;
+    with_fn(runtime, f)
+}
+
+pub fn current_thread<T>(
+    f: impl FnOnce(&mut System<'_, tokio::runtime::current_thread::Runtime>) -> crate::Result<T>,
+) -> crate::Result<T> {
+    let runtime = tokio::runtime::current_thread::Runtime::new()?;
+    with_fn(runtime, f)
+}
+
+fn with_fn<Rt, T>(
+    mut runtime: Rt,
+    f: impl FnOnce(&mut System<'_, Rt>) -> crate::Result<T>,
+) -> crate::Result<T>
+where
+    Rt: Runtime,
+{
+    let ret = f(&mut System {
+        runtime: &mut runtime,
+    })?;
+    runtime.shutdown_on_idle();
+    Ok(ret)
+}
 
 /// A type that executes server tasks.
 ///
 /// This type consists of a Tokio runtime that drives server tasks
 /// and handles to control the spawned tasks.
 #[derive(Debug)]
-pub struct Server<Rt = tokio::runtime::Runtime>
-where
-    Rt: Runtime,
-{
-    runtime: Rt,
-    serve_handles: Vec<Handle>,
+pub struct System<'rt, Rt: Runtime = tokio::runtime::Runtime> {
+    runtime: &'rt mut Rt,
 }
 
-impl Server {
-    /// Create a new `Server` using the default Tokio runtime.
-    pub fn default() -> crate::Result<Server<tokio::runtime::Runtime>> {
-        Ok(Server::new(tokio::runtime::Runtime::new()?))
-    }
-
-    /// Create a new `Server` using the single-threaded Tokio runtime.
-    pub fn current_thread() -> crate::Result<Server<tokio::runtime::current_thread::Runtime>> {
-        Ok(Server::new(tokio::runtime::current_thread::Runtime::new()?))
-    }
-}
-
-impl<Rt> Server<Rt>
-where
-    Rt: Runtime,
-{
-    /// Create a new `Server` using the specified runtime.
-    pub fn new(runtime: Rt) -> Self {
-        Self {
-            runtime,
-            serve_handles: vec![],
-        }
-    }
-
+impl<'rt, Rt: Runtime> System<'rt, Rt> {
     /// Start a server task onto this server.
-    pub fn spawn<T>(&mut self, task: T)
+    pub fn spawn<T>(&mut self, task: T) -> Handle<'rt, Rt>
     where
         T: Task<Rt>,
     {
@@ -49,7 +49,7 @@ where
         let (tx_complete, rx_complete) = oneshot::channel();
 
         task.spawn(
-            &mut self.runtime,
+            self,
             TaskConfig {
                 rx_shutdown: ShutdownSignal {
                     inner: Some(rx_shutdown),
@@ -58,50 +58,62 @@ where
             },
         );
 
-        self.serve_handles.push(Handle {
-            tx_shutdown,
+        Handle {
+            tx_shutdown: Some(tx_shutdown),
             rx_complete,
-        });
-    }
-
-    #[doc(hidden)]
-    pub fn runtime(&mut self) -> &mut Rt {
-        &mut self.runtime
-    }
-
-    /// Send a shutdown signal to the background tasks.
-    pub fn shutdown(&mut self) -> crate::Result<()> {
-        let mut complete_signals = vec![];
-        for handle in self.serve_handles.drain(..) {
-            let _ = handle.tx_shutdown.send(());
-            complete_signals.push(handle.rx_complete);
+            _marker: PhantomData,
         }
-
-        self.runtime.block_on(
-            futures::future::join_all(complete_signals) //
-                .then(|result| match result {
-                    Ok(results) => {
-                        for result in results {
-                            result?;
-                        }
-                        Ok(())
-                    }
-                    Err(..) => Err(failure::format_err!("recv error").into()),
-                }),
-        )
-    }
-
-    pub fn start(self) -> crate::Result<()> {
-        self.runtime.shutdown_on_idle();
-        Ok(())
     }
 }
 
-/// The handle for managing a spawned server task.
+impl<'a, Rt> std::ops::Deref for System<'a, Rt>
+where
+    Rt: Runtime,
+{
+    type Target = Rt;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &*self.runtime
+    }
+}
+
+impl<'a, Rt> std::ops::DerefMut for System<'a, Rt>
+where
+    Rt: Runtime,
+{
+    #[inline]
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut *self.runtime
+    }
+}
+
+/// The handle for managing a spawned task.
 #[derive(Debug)]
-struct Handle {
-    tx_shutdown: oneshot::Sender<()>,
+pub struct Handle<'rt, Rt: Runtime> {
+    tx_shutdown: Option<oneshot::Sender<()>>,
     rx_complete: oneshot::Receiver<crate::Result<()>>,
+    _marker: PhantomData<fn(&mut System<'rt, Rt>)>,
+}
+
+impl<'rt, Rt> Handle<'rt, Rt>
+where
+    Rt: Runtime,
+{
+    /// Send a shutdown signal to the associated task.
+    pub fn shutdown(&mut self) {
+        if let Some(tx) = self.tx_shutdown.take() {
+            let _ = tx.send(());
+        }
+    }
+
+    /// Wait for completion of the associated task and returns its result.
+    pub fn wait_complete(self, sys: &mut System<'rt, Rt>) -> crate::Result<()> {
+        sys.block_on(
+            self.rx_complete //
+                .then(|result| result.expect("recv error")),
+        )
+    }
 }
 
 /// A trait abstracting the runtime that executes asynchronous tasks.
@@ -145,8 +157,8 @@ impl Runtime for tokio::runtime::current_thread::Runtime {
     }
 }
 
-pub trait Task<Rt: ?Sized> {
-    fn spawn(self, rt: &mut Rt, config: TaskConfig);
+pub trait Task<Rt: Runtime> {
+    fn spawn(self, sys: &mut System<'_, Rt>, config: TaskConfig);
 }
 
 #[derive(Debug)]

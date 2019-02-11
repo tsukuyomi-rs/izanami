@@ -1,28 +1,28 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::{http::Http, server::Server, tls::native_tls::NativeTls},
+    izanami::{tls::native_tls::NativeTls, Http},
 };
 
 const IDENTITY: &[u8] = include_bytes!("../../../test/identity.pfx");
 
 fn main() -> izanami::Result<()> {
-    let echo = Echo::builder()
-        .add_route("/", |_| {
-            Response::builder() //
-                .body("Hello")
-                .unwrap()
-        })?
-        .build();
+    izanami::system::default(|sys| {
+        let echo = Echo::builder()
+            .add_route("/", |_| {
+                Response::builder() //
+                    .body("Hello")
+                    .unwrap()
+            })?
+            .build();
 
-    let mut server = Server::default()?;
+        let native_tls = NativeTls::from_pkcs12(IDENTITY, "mypass")?;
+        sys.spawn(
+            Http::bind("127.0.0.1:4000") //
+                .with_tls(native_tls)
+                .serve(echo)?,
+        );
 
-    let native_tls = NativeTls::from_pkcs12(IDENTITY, "mypass")?;
-    server.spawn(
-        Http::bind("127.0.0.1:4000") //
-            .with_tls(native_tls)
-            .serve(echo)?,
-    );
-
-    server.run()
+        Ok(())
+    })
 }
