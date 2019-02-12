@@ -1,10 +1,7 @@
 use {
-    super::{
-        server::Server,
-        service::{
-            imp::{ResponseBody, TestService},
-            MakeTestService, MockRequestBody,
-        },
+    super::service::{
+        imp::{ResponseBody, TestService},
+        MakeTestService, MockRequestBody,
     },
     bytes::{Buf, Bytes},
     futures::{Async, Future, Poll},
@@ -14,17 +11,16 @@ use {
 
 /// A type that simulates an established connection with a client.
 #[derive(Debug)]
-pub struct Client<'s, S: MakeTestService> {
-    server: &'s mut Server<S>,
+pub struct Client<S: MakeTestService> {
     service: S::Service,
 }
 
-impl<'s, S> Client<'s, S>
+impl<S> Client<S>
 where
     S: MakeTestService,
 {
-    pub(crate) fn new(server: &'s mut Server<S>, service: S::Service) -> Self {
-        Client { server, service }
+    pub(crate) fn new(service: S::Service) -> Self {
+        Client { service }
     }
 
     /// Return a reference to the inner value of `S::Service`.

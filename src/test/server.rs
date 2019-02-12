@@ -43,9 +43,9 @@ where
     }
 
     /// Create a `Client` associated with this server.
-    pub fn client(&mut self) -> impl Future<Item = Client<'_, S>, Error = S::MakeError> {
+    pub fn client(&mut self) -> impl Future<Item = Client<S>, Error = S::MakeError> {
         self.make_service
             .make_service(super::service::TestContext::new())
-            .map(move |service| Client::new(self, service))
+            .map(Client::new)
     }
 }

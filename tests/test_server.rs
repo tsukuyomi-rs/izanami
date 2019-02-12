@@ -51,7 +51,6 @@ mod tcp {
             },
             Body,
         },
-        izanami::System, //
         std::{
             io,
             net::{SocketAddr, TcpListener as StdTcpListener},
@@ -61,15 +60,16 @@ mod tcp {
 
     #[test]
     fn tcp_server() -> izanami::Result<()> {
-        System::with_local(|sys| {
+        izanami::system::run_local(|sys| {
             let listener = StdTcpListener::bind("127.0.0.1:0")?;
             let local_addr = listener.local_addr()?;
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = izanami::http::server(|| super::Echo::default())
-                .with_graceful_shutdown(rx_shutdown)
-                .bind(listener)
-                .start(sys);
+            let handle = sys.spawn(
+                izanami::http::server(|| super::Echo::default())
+                    .with_graceful_shutdown(rx_shutdown)
+                    .bind(listener),
+            );
 
             let client = Client::builder() //
                 .build(TestConnect { local_addr });
@@ -124,7 +124,6 @@ mod unix {
             },
             Body,
         },
-        izanami::System, //
         std::{io, path::PathBuf},
         tempfile::Builder,
         tokio::{net::UnixStream, sync::oneshot},
@@ -132,15 +131,16 @@ mod unix {
 
     #[test]
     fn unix_server() -> izanami::Result<()> {
-        System::with_local(|sys| {
+        izanami::system::run_local(|sys| {
             let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
             let sock_path = sock_tempdir.path().join("connect.sock");
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = izanami::http::server(|| super::Echo::default())
-                .with_graceful_shutdown(rx_shutdown)
-                .bind(sock_path.clone())
-                .start(sys);
+            let handle = sys.spawn(
+                izanami::http::server(|| super::Echo::default())
+                    .with_graceful_shutdown(rx_shutdown)
+                    .bind(sock_path.clone()),
+            );
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -198,7 +198,6 @@ mod native_tls {
             },
             Body,
         },
-        izanami::System,
         std::{
             io,
             net::{SocketAddr, TcpListener},
@@ -209,7 +208,7 @@ mod native_tls {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        System::with_local(|sys| {
+        izanami::system::run_local(|sys| {
             const IDENTITY: &[u8] = include_bytes!("../test/identity.pfx");
             const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
 
@@ -221,10 +220,11 @@ mod native_tls {
             };
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = izanami::http::server(|| super::Echo::default())
-                .with_graceful_shutdown(rx_shutdown)
-                .bind_tls(listener, native_tls)
-                .start(sys);
+            let handle = sys.spawn(
+                izanami::http::server(|| super::Echo::default())
+                    .with_graceful_shutdown(rx_shutdown)
+                    .bind_tls(listener, native_tls),
+            );
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -296,7 +296,6 @@ mod openssl {
             },
             Body,
         },
-        izanami::System,
         openssl::{
             pkey::PKey,
             ssl::{
@@ -320,7 +319,7 @@ mod openssl {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        System::with_local(|sys| {
+        izanami::system::run_local(|sys| {
             let listener = TcpListener::bind("127.0.0.1:0")?;
             let local_addr = listener.local_addr()?;
 
@@ -335,10 +334,11 @@ mod openssl {
             };
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = izanami::http::server(|| super::Echo::default())
-                .with_graceful_shutdown(rx_shutdown)
-                .bind_tls(listener, ssl)
-                .start(sys);
+            let handle = sys.spawn(
+                izanami::http::server(|| super::Echo::default())
+                    .with_graceful_shutdown(rx_shutdown)
+                    .bind_tls(listener, ssl),
+            );
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -417,7 +417,6 @@ mod rustls {
             },
             Body,
         },
-        izanami::System,
         std::{
             io,
             net::{SocketAddr, TcpListener},
@@ -428,7 +427,7 @@ mod rustls {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        System::with_local(|sys| {
+        izanami::system::run_local(|sys| {
             const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
             const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
 
@@ -460,10 +459,11 @@ mod rustls {
             };
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = izanami::http::server(|| super::Echo::default())
-                .with_graceful_shutdown(rx_shutdown)
-                .bind_tls(listener, rustls)
-                .start(sys);
+            let handle = sys.spawn(
+                izanami::http::server(|| super::Echo::default())
+                    .with_graceful_shutdown(rx_shutdown)
+                    .bind_tls(listener, rustls),
+            );
 
             // FIXME: use rustls
             let client = Client::builder() //

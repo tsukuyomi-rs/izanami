@@ -1,12 +1,12 @@
 use {
     echo_service::Echo,
     http::{Request, Response},
-    izanami::{test::Server, System},
+    izanami::test::Server,
 };
 
 #[test]
 fn test_empty_routes() -> izanami::Result<()> {
-    System::with_local(|sys| {
+    izanami::system::run_local(|sys| {
         let mut server = Server::new(
             Echo::builder() //
                 .build(),
@@ -27,7 +27,7 @@ fn test_empty_routes() -> izanami::Result<()> {
 
 #[test]
 fn test_single_route() -> izanami::Result<()> {
-    System::with_local(|sys| {
+    izanami::system::run_local(|sys| {
         let mut server = Server::new(
             Echo::builder() //
                 .add_route("/", |_| {
@@ -57,7 +57,7 @@ fn test_single_route() -> izanami::Result<()> {
 
 #[test]
 fn test_capture_param() -> izanami::Result<()> {
-    System::with_local(|sys| {
+    izanami::system::run_local(|sys| {
         let mut server = Server::new(
             Echo::builder() //
                 .add_route("/([0-9]+)", |cx| {

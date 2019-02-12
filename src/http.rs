@@ -2,7 +2,7 @@ use {
     crate::error::BoxedStdError,
     crate::{
         net::{Bind, Listener},
-        system::{notify, CurrentThread, Spawn, System},
+        system::{notify, CurrentThread, DefaultRuntime, Spawn},
         tls::{NoTls, TlsConfig, TlsWrapper},
     },
     bytes::{Buf, BufMut, Bytes},
@@ -97,27 +97,14 @@ pub struct ServerTask<F, Sig, B, T = NoTls> {
     tls: T,
 }
 
-impl<F, Sig, B, T> ServerTask<F, Sig, B, T> {
-    pub fn start<'s, Rt>(
-        self,
-        sys: &mut System<'s, Rt>,
-    ) -> crate::system::Handle<'s, Rt, <Self as Spawn<Rt>>::Output>
-    where
-        Rt: crate::system::Runtime,
-        Self: Spawn<Rt>,
-    {
-        sys.spawn(self)
-    }
-}
-
 /// A helper macro for creating a server task.
 macro_rules! spawn_inner {
-    ($self:expr, $sys:expr) => {{
+    ($self:expr, $runtime:expr) => {{
         let self_ = $self;
-        let sys = $sys;
+        let runtime = $runtime;
         let result = (move || -> crate::Result<_> {
             let (tx_notify, rx_notify) = notify::pair();
-            let executor = sys.runtime().executor();
+            let executor = runtime.executor();
 
             let shutdown_signal = match self_.shutdown_signal {
                 Some(sig) => futures::future::Either::A(sig.map_err(|_| ())),
@@ -133,7 +120,7 @@ macro_rules! spawn_inner {
                 tls_wrapper,
             };
             let make_service = (self_.service_factory)();
-            sys.runtime().spawn(
+            runtime.spawn(
                 hyper::Server::builder(incoming)
                     .executor(executor)
                     .serve(hyper::service::make_service_fn(
@@ -180,8 +167,8 @@ where
 {
     type Output = crate::Result<()>;
 
-    fn spawn(self, sys: &mut System<'_>) -> notify::Receiver<Self::Output> {
-        spawn_inner!(self, sys)
+    fn spawn(self, rt: &mut DefaultRuntime) -> notify::Receiver<Self::Output> {
+        spawn_inner!(self, rt)
     }
 }
 
@@ -200,8 +187,8 @@ where
 {
     type Output = crate::Result<()>;
 
-    fn spawn(self, sys: &mut System<'_, CurrentThread>) -> notify::Receiver<Self::Output> {
-        spawn_inner!(self, sys)
+    fn spawn(self, rt: &mut CurrentThread) -> notify::Receiver<Self::Output> {
+        spawn_inner!(self, rt)
     }
 }
 

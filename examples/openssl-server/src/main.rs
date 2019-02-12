@@ -1,7 +1,6 @@
 use {
     echo_service::Echo,
     http::Response,
-    izanami::System,
     openssl::{
         pkey::PKey,
         ssl::{SslAcceptor, SslMethod},
@@ -13,7 +12,7 @@ const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
 const PRIVATE_KEY: &[u8] = include_bytes!("../../../test/server-key.pem");
 
 fn main() -> izanami::Result<()> {
-    System::with_default(|sys| {
+    izanami::system::run(|sys| {
         let echo = Echo::builder()
             .add_route("/", |_cx| {
                 Response::builder() //
@@ -32,9 +31,10 @@ fn main() -> izanami::Result<()> {
             builder
         };
 
-        izanami::http::server(move || echo.clone()) //
-            .bind_tls("127.0.0.1:4000", ssl)
-            .start(sys);
+        sys.spawn(
+            izanami::http::server(move || echo.clone()) //
+                .bind_tls("127.0.0.1:4000", ssl),
+        );
 
         Ok(())
     })

@@ -18,7 +18,7 @@
 //! # };
 //!
 //! # fn test_echo() -> izanami::Result<()> {
-//! # izanami::System::with_local(|sys| {
+//! # izanami::system::run_local(|sys| {
 //! // the target service factory to be tested.
 //! let make_service = {
 //!     struct Echo(());

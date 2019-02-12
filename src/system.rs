@@ -2,69 +2,60 @@
 
 use {futures::Future, std::marker::PhantomData};
 
+/// Run the specified function onto the system using the default runtime.
+pub fn run<F, T>(f: F) -> crate::Result<T>
+where
+    F: FnOnce(&mut System<'_>) -> crate::Result<T>,
+{
+    let mut sys = System::new(DefaultRuntime {
+        inner: tokio::runtime::Runtime::new()?,
+    });
+    let ret = f(&mut sys)?;
+    sys.runtime.inner.shutdown_on_idle().wait().unwrap();
+    Ok(ret)
+}
+
+/// Run the specified function onto the system using the single-threaded runtime.
+pub fn run_local<F, T>(f: F) -> crate::Result<T>
+where
+    F: FnOnce(&mut System<'_, CurrentThread>) -> crate::Result<T>,
+{
+    let mut sys = System::new(CurrentThread {
+        inner: tokio::runtime::current_thread::Runtime::new()?,
+    });
+    let ret = f(&mut sys)?;
+    sys.runtime.inner.run().unwrap();
+    Ok(ret)
+}
+
 /// A system that drives asynchronous computations.
 #[derive(Debug)]
 pub struct System<'s, Rt = DefaultRuntime>
 where
     Rt: Runtime,
 {
-    runtime: &'s mut Rt,
-    _anchor: PhantomData<std::rc::Rc<()>>,
-}
-
-impl<'s> System<'s> {
-    /// Run the specified function onto the system using the default runtime.
-    pub fn with_default<F, T>(f: F) -> crate::Result<T>
-    where
-        F: FnOnce(&mut System<'_>) -> crate::Result<T>,
-    {
-        System::with_runtime(
-            DefaultRuntime {
-                inner: tokio::runtime::Runtime::new()?,
-            },
-            f,
-        )
-    }
-}
-
-impl<'s> System<'s, CurrentThread> {
-    /// Run the specified function onto the system using the single-threaded runtime.
-    pub fn with_local<T>(
-        f: impl FnOnce(&mut System<'_, CurrentThread>) -> crate::Result<T>,
-    ) -> crate::Result<T> {
-        System::with_runtime(
-            CurrentThread {
-                inner: tokio::runtime::current_thread::Runtime::new()?,
-            },
-            f,
-        )
-    }
+    runtime: Rt,
+    _anchor: PhantomData<&'s std::rc::Rc<()>>,
 }
 
 impl<'s, Rt> System<'s, Rt>
 where
     Rt: Runtime,
 {
-    fn with_runtime<F, T>(mut runtime: Rt, f: F) -> crate::Result<T>
-    where
-        F: FnOnce(&mut System<'_, Rt>) -> crate::Result<T>,
-    {
-        let ret = f(&mut System {
-            runtime: &mut runtime,
+    pub fn new(runtime: Rt) -> Self {
+        Self {
+            runtime,
             _anchor: PhantomData,
-        })?;
-        runtime.shutdown_on_idle();
-        Ok(ret)
+        }
     }
 
-    /// Spawn the specified future onto this system
-    /// and returns an `Handle` associated with it.
+    /// Spawn the specified future onto this system and returns the associated `Handle`.
     pub fn spawn<F>(&mut self, future: F) -> Handle<'s, Rt, F::Output>
     where
         F: Spawn<Rt>,
     {
         Handle {
-            rx_complete: future.spawn(self),
+            rx_complete: future.spawn(&mut self.runtime),
             _marker: PhantomData,
         }
     }
@@ -74,11 +65,7 @@ where
     where
         F: BlockOn<Rt>,
     {
-        future.block_on(self)
-    }
-
-    pub(crate) fn runtime(&mut self) -> &mut Rt {
-        &mut self.runtime
+        future.block_on(&mut self.runtime)
     }
 }
 
@@ -106,9 +93,7 @@ where
 // ==== Runtime ====
 
 /// Trait that abstracts the runtime for executing asynchronous tasks.
-pub trait Runtime {
-    fn shutdown_on_idle(self);
-}
+pub trait Runtime {}
 
 #[derive(Debug)]
 pub struct DefaultRuntime {
@@ -120,19 +105,24 @@ impl DefaultRuntime {
         self.inner.executor()
     }
 
-    pub(crate) fn spawn<F>(&mut self, future: F)
+    pub fn spawn<F>(&mut self, future: F)
     where
         F: Future<Item = (), Error = ()> + Send + 'static,
     {
         self.inner.spawn(future);
     }
-}
 
-impl Runtime for DefaultRuntime {
-    fn shutdown_on_idle(self) {
-        self.inner.shutdown_on_idle().wait().unwrap();
+    pub fn block_on<F>(&mut self, future: F) -> Result<F::Item, F::Error>
+    where
+        F: Future + Send + 'static,
+        F::Item: Send + 'static,
+        F::Error: Send + 'static,
+    {
+        self.inner.block_on(future)
     }
 }
+
+impl Runtime for DefaultRuntime {}
 
 #[derive(Debug)]
 pub struct CurrentThread {
@@ -144,26 +134,29 @@ impl CurrentThread {
         tokio::runtime::current_thread::TaskExecutor::current()
     }
 
-    pub(crate) fn spawn<F>(&mut self, future: F)
+    pub fn spawn<F>(&mut self, future: F)
     where
         F: Future<Item = (), Error = ()> + 'static,
     {
         self.inner.spawn(future);
     }
-}
 
-impl Runtime for CurrentThread {
-    fn shutdown_on_idle(mut self) {
-        self.inner.run().unwrap();
+    pub fn block_on<F>(&mut self, future: F) -> Result<F::Item, F::Error>
+    where
+        F: Future,
+    {
+        self.inner.block_on(future)
     }
 }
+
+impl Runtime for CurrentThread {}
 
 /// Trait representing the ability to run a future.
 pub trait BlockOn<Rt: Runtime = DefaultRuntime> {
     type Output;
 
     /// Run the provided future onto this runtime until it completes.
-    fn block_on(self, sys: &mut System<'_, Rt>) -> Self::Output;
+    fn block_on(self, rt: &mut Rt) -> Self::Output;
 }
 
 impl<F> BlockOn<DefaultRuntime> for F
@@ -174,8 +167,8 @@ where
 {
     type Output = Result<F::Item, F::Error>;
 
-    fn block_on(self, sys: &mut System<'_, DefaultRuntime>) -> Self::Output {
-        sys.runtime.inner.block_on(self)
+    fn block_on(self, rt: &mut DefaultRuntime) -> Self::Output {
+        rt.block_on(self)
     }
 }
 
@@ -185,8 +178,8 @@ where
 {
     type Output = Result<F::Item, F::Error>;
 
-    fn block_on(self, sys: &mut System<'_, CurrentThread>) -> Self::Output {
-        sys.runtime.inner.block_on(self)
+    fn block_on(self, rt: &mut CurrentThread) -> Self::Output {
+        rt.block_on(self)
     }
 }
 
@@ -199,7 +192,7 @@ pub trait Spawn<Rt: Runtime = DefaultRuntime> {
     type Output;
 
     /// Spawned itself onto the specified system.
-    fn spawn(self, sys: &mut System<'_, Rt>) -> notify::Receiver<Self::Output>;
+    fn spawn(self, rt: &mut Rt) -> notify::Receiver<Self::Output>;
 }
 
 impl<F> Spawn<DefaultRuntime> for F
@@ -210,9 +203,9 @@ where
 {
     type Output = Result<F::Item, F::Error>;
 
-    fn spawn(self, sys: &mut System<'_, DefaultRuntime>) -> notify::Receiver<Self::Output> {
+    fn spawn(self, rt: &mut DefaultRuntime) -> notify::Receiver<Self::Output> {
         let (tx, rx) = notify::pair();
-        sys.runtime.spawn(self.then(move |result| {
+        rt.spawn(self.then(move |result| {
             tx.send(result);
             Ok(())
         }));
@@ -226,9 +219,9 @@ where
 {
     type Output = Result<F::Item, F::Error>;
 
-    fn spawn(self, sys: &mut System<'_, CurrentThread>) -> notify::Receiver<Self::Output> {
+    fn spawn(self, rt: &mut CurrentThread) -> notify::Receiver<Self::Output> {
         let (tx, rx) = notify::pair();
-        sys.runtime.spawn(self.then(move |result| {
+        rt.spawn(self.then(move |result| {
             tx.send(result);
             Ok(())
         }));
