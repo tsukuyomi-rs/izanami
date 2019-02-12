@@ -380,4 +380,111 @@ mod sleep_on_errors {
             _ => false,
         }
     }
+
+    #[cfg(test)]
+    mod tests {
+        use {super::*, tokio::util::FutureExt};
+
+        type DummyConnection = io::Cursor<Vec<u8>>;
+
+        struct DummyListener {
+            inner: std::collections::VecDeque<io::Result<DummyConnection>>,
+        }
+
+        impl Listener for DummyListener {
+            type Conn = DummyConnection;
+
+            fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
+                let conn = self.inner.pop_front().expect("queue is empty")?;
+                let addr = RemoteAddr::unknown();
+                Ok((conn, addr).into())
+            }
+        }
+
+        #[test]
+        fn ignore_connection_errors() -> io::Result<()> {
+            let listener = DummyListener {
+                inner: vec![
+                    Err(io::ErrorKind::ConnectionAborted.into()),
+                    Err(io::ErrorKind::ConnectionRefused.into()),
+                    Err(io::ErrorKind::ConnectionReset.into()),
+                    Ok(io::Cursor::new(vec![])),
+                ]
+                .into_iter()
+                .collect(),
+            };
+
+            let mut listener = SleepOnErrors::new(listener);
+            listener.set_sleep_on_errors(Some(Duration::from_micros(1)));
+
+            let mut rt = tokio::runtime::current_thread::Runtime::new()?;
+
+            let result = rt.block_on(
+                futures::future::poll_fn({
+                    let listener = &mut listener;
+                    move || listener.poll_incoming()
+                })
+                .timeout(Duration::from_millis(1)),
+            );
+            assert!(result.is_ok());
+
+            Ok(())
+        }
+
+        #[test]
+        fn sleep_on_errors() -> io::Result<()> {
+            let listener = DummyListener {
+                inner: vec![
+                    Err(io::Error::new(io::ErrorKind::Other, "Too many open files")),
+                    Ok(io::Cursor::new(vec![])),
+                ]
+                .into_iter()
+                .collect(),
+            };
+
+            let mut listener = SleepOnErrors::new(listener);
+            listener.set_sleep_on_errors(Some(Duration::from_micros(1)));
+
+            let mut rt = tokio::runtime::current_thread::Runtime::new()?;
+
+            let result = rt.block_on(
+                futures::future::poll_fn({
+                    let listener = &mut listener;
+                    move || listener.poll_incoming()
+                })
+                .timeout(Duration::from_millis(1)),
+            );
+            assert!(result.is_ok());
+
+            Ok(())
+        }
+
+        #[test]
+        fn abort_on_errors() -> io::Result<()> {
+            let listener = DummyListener {
+                inner: vec![
+                    Err(io::Error::new(io::ErrorKind::Other, "Too many open files")),
+                    Ok(io::Cursor::new(vec![])),
+                ]
+                .into_iter()
+                .collect(),
+            };
+
+            let mut listener = SleepOnErrors::new(listener);
+            listener.set_sleep_on_errors(None);
+
+            let mut rt = tokio::runtime::current_thread::Runtime::new()?;
+
+            let result = rt.block_on(
+                futures::future::poll_fn({
+                    let listener = &mut listener;
+                    move || listener.poll_incoming()
+                })
+                .timeout(Duration::from_millis(1)),
+            );
+            assert!(result.err().expect("should be failed").is_inner());
+
+            Ok(())
+        }
+    }
 }
