@@ -16,6 +16,7 @@ mod util;
 pub mod http;
 pub mod net;
 pub mod system;
+pub mod test;
 pub mod tls;
 
 #[doc(inline)]

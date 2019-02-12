@@ -15,4 +15,4 @@ indexmap = "1"
 regex = "1"
 
 [dev-dependencies]
-izanami-test = { path = "../../izanami-test" }
+izanami = { path = "../.." }

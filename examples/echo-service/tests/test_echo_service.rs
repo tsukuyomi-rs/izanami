@@ -1,33 +1,33 @@
 use {
     echo_service::Echo,
     http::{Request, Response},
-    izanami_test::{AsyncResult, Server},
+    izanami::{test::Server, System},
 };
 
 #[test]
-fn test_empty_routes() -> izanami_test::Result<()> {
-    izanami_test::with_default(|cx| {
+fn test_empty_routes() -> izanami::Result<()> {
+    System::with_local(|sys| {
         let mut server = Server::new(
             Echo::builder() //
                 .build(),
         );
 
-        let mut client = server.client().wait(cx)?;
-
-        let response = client
-            .respond(
+        let mut client = sys.block_on(server.client())?;
+        let response = sys.block_on(
+            client.respond(
                 Request::get("/") //
                     .body(())?,
-            )
-            .wait(cx)?;
+            ),
+        )?;
         assert_eq!(response.status(), 404);
+
         Ok(())
     })
 }
 
 #[test]
-fn test_single_route() -> izanami_test::Result<()> {
-    izanami_test::with_default(|cx| {
+fn test_single_route() -> izanami::Result<()> {
+    System::with_local(|sys| {
         let mut server = Server::new(
             Echo::builder() //
                 .add_route("/", |_| {
@@ -38,17 +38,17 @@ fn test_single_route() -> izanami_test::Result<()> {
                 .build(),
         );
 
-        let mut client = server.client().wait(cx)?;
+        let mut client = sys.block_on(server.client())?;
 
-        let response = client
-            .respond(
+        let response = sys.block_on(
+            client.respond(
                 Request::get("/") //
                     .body(())?,
-            )
-            .wait(cx)?;
+            ),
+        )?;
         assert_eq!(response.status(), 200);
 
-        let body = response.send_body().wait(cx)?;
+        let body = sys.block_on(response.send_body())?;
         assert_eq!(body.to_utf8()?, "hello");
 
         Ok(())
@@ -56,8 +56,8 @@ fn test_single_route() -> izanami_test::Result<()> {
 }
 
 #[test]
-fn test_capture_param() -> izanami_test::Result<()> {
-    izanami_test::with_default(|cx| {
+fn test_capture_param() -> izanami::Result<()> {
+    System::with_local(|sys| {
         let mut server = Server::new(
             Echo::builder() //
                 .add_route("/([0-9]+)", |cx| {
@@ -79,25 +79,25 @@ fn test_capture_param() -> izanami_test::Result<()> {
                 .build(),
         );
 
-        let mut client = server.client().wait(cx)?;
+        let mut client = sys.block_on(server.client())?;
 
-        let response = client
-            .respond(
+        let response = sys.block_on(
+            client.respond(
                 Request::get("/42") //
                     .body(())?,
-            )
-            .wait(cx)?;
+            ),
+        )?;
         assert_eq!(response.status(), 200);
 
-        let body = response.send_body().wait(cx)?;
+        let body = sys.block_on(response.send_body())?;
         assert_eq!(body.to_utf8()?, "id=42");
 
-        let response = client
-            .respond(
+        let response = sys.block_on(
+            client.respond(
                 Request::get("/fox") //
                     .body(())?,
-            )
-            .wait(cx)?;
+            ),
+        )?;
         assert_eq!(response.status(), 404);
 
         Ok(())

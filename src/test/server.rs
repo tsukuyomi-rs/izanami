@@ -1,10 +1,6 @@
 use {
-    crate::{
-        async_result::AsyncResult, //
-        client::Client,
-        runtime::Runtime,
-        service::MakeTestService,
-    },
+    super::{client::Client, service::MakeTestService},
+    futures::Future,
     izanami_util::RemoteAddr,
 };
 
@@ -47,16 +43,9 @@ where
     }
 
     /// Create a `Client` associated with this server.
-    pub fn client<Rt>(&mut self) -> impl AsyncResult<Rt, Output = Client<'_, S>>
-    where
-        Rt: Runtime<S::Future>,
-    {
-        let future = self
-            .make_service
-            .make_service(crate::service::TestContext::new());
-        crate::async_result::wait_fn(move |cx| {
-            let service = cx.block_on(future)?;
-            Ok(Client::new(self, service))
-        })
+    pub fn client(&mut self) -> impl Future<Item = Client<'_, S>, Error = S::MakeError> {
+        self.make_service
+            .make_service(super::service::TestContext::new())
+            .map(move |service| Client::new(self, service))
     }
 }

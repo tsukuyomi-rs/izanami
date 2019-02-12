@@ -1,7 +1,5 @@
 use {
-    crate::{
-        async_result::AsyncResult,
-        runtime::Runtime,
+    super::{
         server::Server,
         service::{
             imp::{ResponseBody, TestService},
@@ -29,20 +27,24 @@ where
         Client { server, service }
     }
 
+    /// Return a reference to the inner value of `S::Service`.
+    pub fn get_ref(&self) -> &S::Service {
+        &self.service
+    }
+
+    /// Return a mutable reference to the inner value of `S::Service`.
+    pub fn get_mut(&mut self) -> &mut S::Service {
+        &mut self.service
+    }
+
     /// Applies an HTTP request to this client and await its response.
-    pub fn respond<Rt>(
+    pub fn respond(
         &mut self,
         request: Request<impl Into<MockRequestBody>>,
-    ) -> impl AsyncResult<Rt, Output = ClientResponse<S>>
-    where
-        Rt: Runtime<<S::Service as TestService>::Future>,
-    {
-        let future = self.service.call(request.map(Into::into));
-        crate::async_result::wait_fn(move |cx| {
-            Ok(ClientResponse {
-                inner: cx.block_on(future)?,
-            })
-        })
+    ) -> impl Future<Item = ClientResponse<S>, Error = S::Error> {
+        self.service
+            .call(request.map(Into::into))
+            .map(|inner| ClientResponse { inner })
     }
 }
 
@@ -83,10 +85,9 @@ where
     }
 
     /// Convert itself into an instance of `AsyncResult` resolved as `ResponseData`.
-    pub fn send_body<Rt>(self) -> impl AsyncResult<Rt, Output = ResponseData>
-    where
-        Rt: Runtime<SendResponseBody<S::ResponseBody>>,
-    {
+    pub fn send_body(
+        self,
+    ) -> impl Future<Item = ResponseData, Error = <S::ResponseBody as ResponseBody>::Error> {
         let body = self.inner.into_body();
         SendResponseBody {
             state: SendResponseBodyState::Init(Some(body)),

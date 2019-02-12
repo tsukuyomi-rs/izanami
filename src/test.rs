@@ -1,7 +1,7 @@
 //! The basic utility for testing HTTP services.
 //!
-//! The purpose of this crate is to provide the way to test HTTP services
-//! used by `izanami` server without using the low level I/O.
+//! The purpose of this module is to provide the way to test HTTP services
+//! without using the low level I/O.
 //!
 //! # Example
 //!
@@ -10,15 +10,15 @@
 //! use {
 //!     http::{Request, Response},
 //!     izanami_service::MakeService,
-//!     izanami_test::{Server, AsyncResult},
+//!     izanami::test::Server,
 //! };
 //! # use {
 //! #   izanami_service::Service,
 //! #   std::io,
 //! # };
 //!
-//! # fn test_echo() -> izanami_test::Result<()> {
-//! # izanami_test::with_default(|cx| {
+//! # fn test_echo() -> izanami::Result<()> {
+//! # izanami::System::with_local(|sys| {
 //! // the target service factory to be tested.
 //! let make_service = {
 //!     struct Echo(());
@@ -50,22 +50,23 @@
 //!
 //! // create a `Client` to test an established connection
 //! // with the peer.
-//! let mut client = server.client().wait(cx)?;
+//! let mut client = sys.block_on(server.client())?;
 //!
 //! // applies an HTTP request to the client and await
 //! // its response.
 //! //
 //! // the method simulates the behavior of service until
 //! // just before starting to send the response body.
-//! let response = client
-//!     .respond(
-//!         Request::get("/").body(())?
-//!     )
-//!     .wait(cx)?;
+//! let response = sys.block_on(
+//!     client
+//!         .respond(
+//!             Request::get("/").body(())?
+//!         )
+//! )?;
 //! assert_eq!(response.status(), 200);
 //!
 //! // drive the response body and await its result.
-//! let body = response.send_body().wait(cx)?;
+//! let body = sys.block_on(response.send_body())?;
 //! assert_eq!(body.to_utf8()?, "hello");
 //! # Ok(())
 //! # })
@@ -73,28 +74,8 @@
 //! # fn main() {}
 //! ```
 
-#![doc(html_root_url = "https://docs.rs/izanami-test/0.1.0-preview.1")]
-#![deny(
-    missing_debug_implementations,
-    nonstandard_style,
-    rust_2018_idioms,
-    rust_2018_compatibility,
-    unused
-)]
-#![forbid(clippy::unimplemented)]
-
-mod async_result;
 pub mod client;
-mod context;
-mod error;
-mod runtime;
 mod server;
 pub mod service;
 
-pub use crate::{
-    async_result::AsyncResult,
-    context::Context,
-    error::{Error, Result},
-    runtime::{with_current_thread, with_default, Runtime},
-    server::Server,
-};
+pub use self::server::Server;

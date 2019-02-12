@@ -45,7 +45,6 @@ features = ["user-hooks"]
 [workspace]
 members = [
   "izanami-service",
-  "izanami-test",
   "izanami-util",
 
   "examples/echo-service",
