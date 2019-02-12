@@ -52,17 +52,9 @@ jobs:
     after_script:
     - bash: .ci/scripts/build-doc.sh
       displayName: 'build API doc'
-    - bash: |
-        cd target/doc
-        git init
-        git remote add upstream "https://${GH_TOKEN}@github.com/ubnt-intrepid/izanami.git"
-        git config user.name 'Yusuke Sasaki'
-        git config user.email 'yusuke.sasaki.nuem@gmail.com'
-        git add -A .
-        git commit -qm "Build API doc at $(git rev-parse --short HEAD)"
-        git push -q upstream HEAD:refs/heads/gh-pages --force
+    - bash: .ci/scripts/deploy-doc.sh
       displayName: 'deploy API doc on GitHub Pages'
-      condition: and(eq(variables['rust_toolchain'], 'stable'), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
+      condition: and(succeeded(), eq(variables['rust_toolchain'], 'stable'), eq(variables['Build.SourceBranch'], 'refs/heads/master'))
       env:
         GH_TOKEN: $(myGitHubToken)
 

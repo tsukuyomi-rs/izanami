@@ -3,7 +3,6 @@
 set -ex
 
 cargo doc --no-deps -p izanami-service
-cargo doc --no-deps -p izanami-test
 cargo doc --no-deps -p izanami-util
 cargo doc --no-deps -p izanami --all-features
 cargo doc --no-deps -p echo-service
