@@ -1,7 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::{Http, System},
+    izanami::System,
     std::path::Path,
 };
 
@@ -16,10 +16,9 @@ fn main() -> izanami::Result<()> {
             })?
             .build();
 
-        sys.spawn(
-            Http::bind(Path::new("/tmp/echo-service.sock")) //
-                .serve(echo)?,
-        );
+        izanami::http::server(move || echo.clone())
+            .bind(Path::new("/tmp/echo-service.sock"))
+            .start(sys);
 
         Ok(())
     })

@@ -4,7 +4,6 @@ use {
     super::*,
     ::native_tls::{
         HandshakeError, //
-        Identity,
         TlsAcceptor,
         TlsStream,
     },
@@ -12,49 +11,20 @@ use {
     std::io,
 };
 
-/// A TLS configuration using `native_tls`.
-#[allow(missing_debug_implementations)]
-pub struct NativeTls {
-    acceptor: TlsAcceptor,
-}
-
-impl NativeTls {
-    /// Create a `TlsAcceptor` from the specified DER-formatted PKCS#12 archive.
-    pub fn from_pkcs12(der: &[u8], password: &str) -> crate::Result<Self> {
-        let identity = Identity::from_pkcs12(der, password)?;
-        Ok(Self {
-            acceptor: TlsAcceptor::new(identity)?,
-        })
-    }
-}
-
-impl From<TlsAcceptor> for NativeTls {
-    fn from(acceptor: TlsAcceptor) -> Self {
-        Self { acceptor }
-    }
-}
-
-impl<T> Tls<T> for NativeTls
+impl<T> TlsConfig<T> for TlsAcceptor
 where
     T: AsyncRead + AsyncWrite,
 {
     type Wrapped = NativeTlsStream<T>;
-    type Wrapper = NativeTlsWrapper;
+    type Wrapper = Self;
 
     #[inline]
-    fn wrapper(&self, _: TlsConfig) -> crate::Result<Self::Wrapper> {
-        Ok(NativeTlsWrapper {
-            acceptor: self.acceptor.clone(),
-        })
+    fn into_wrapper(self, _: Vec<String>) -> crate::Result<Self::Wrapper> {
+        Ok(self)
     }
 }
 
-#[allow(missing_debug_implementations)]
-pub struct NativeTlsWrapper {
-    acceptor: TlsAcceptor,
-}
-
-impl<T> TlsWrapper<T> for NativeTlsWrapper
+impl<T> TlsWrapper<T> for TlsAcceptor
 where
     T: AsyncRead + AsyncWrite,
 {
@@ -64,7 +34,7 @@ where
     fn wrap(&self, io: T) -> Self::Wrapped {
         NativeTlsStream {
             state: State::MidHandshake(MidHandshake {
-                inner: Some(self.acceptor.accept(io)),
+                inner: Some(self.accept(io)),
             }),
         }
     }

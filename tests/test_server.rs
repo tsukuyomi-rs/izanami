@@ -51,7 +51,7 @@ mod tcp {
             },
             Body,
         },
-        izanami::{Http, System}, //
+        izanami::System, //
         std::{
             io,
             net::{SocketAddr, TcpListener as StdTcpListener},
@@ -66,11 +66,10 @@ mod tcp {
             let local_addr = listener.local_addr()?;
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let http_server = Http::bind(listener) //
+            let handle = izanami::http::server(|| super::Echo::default())
                 .with_graceful_shutdown(rx_shutdown)
-                .serve(super::Echo::default())?;
-
-            let handle = sys.spawn(http_server);
+                .bind(listener)
+                .start(sys);
 
             let client = Client::builder() //
                 .build(TestConnect { local_addr });
@@ -125,7 +124,7 @@ mod unix {
             },
             Body,
         },
-        izanami::{Http, System}, //
+        izanami::System, //
         std::{io, path::PathBuf},
         tempfile::Builder,
         tokio::{net::UnixStream, sync::oneshot},
@@ -138,11 +137,10 @@ mod unix {
             let sock_path = sock_tempdir.path().join("connect.sock");
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let http_server = Http::bind(sock_path.clone()) //
+            let handle = izanami::http::server(|| super::Echo::default())
                 .with_graceful_shutdown(rx_shutdown)
-                .serve(super::Echo::default())?;
-
-            let handle = sys.spawn(http_server);
+                .bind(sock_path.clone())
+                .start(sys);
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -190,7 +188,7 @@ mod unix {
 #[cfg(feature = "native-tls")]
 mod native_tls {
     use {
-        ::native_tls::{Certificate, TlsConnector},
+        ::native_tls::{Certificate, Identity, TlsAcceptor, TlsConnector},
         futures::{Future, Stream},
         http::Request,
         hyper::{
@@ -200,7 +198,7 @@ mod native_tls {
             },
             Body,
         },
-        izanami::{tls::native_tls::NativeTls, Http, System},
+        izanami::System,
         std::{
             io,
             net::{SocketAddr, TcpListener},
@@ -217,15 +215,16 @@ mod native_tls {
 
             let listener = TcpListener::bind("127.0.0.1:0")?;
             let local_addr = listener.local_addr()?;
-            let native_tls = NativeTls::from_pkcs12(IDENTITY, "mypass")?;
+            let native_tls = {
+                let der = Identity::from_pkcs12(IDENTITY, "mypass")?;
+                TlsAcceptor::builder(der).build()?
+            };
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let http_server = Http::bind(listener) //
+            let handle = izanami::http::server(|| super::Echo::default())
                 .with_graceful_shutdown(rx_shutdown)
-                .with_tls(native_tls)
-                .serve(super::Echo::default())?;
-
-            let handle = sys.spawn(http_server);
+                .bind_tls(listener, native_tls)
+                .start(sys);
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -297,10 +296,15 @@ mod openssl {
             },
             Body,
         },
-        izanami::{tls::openssl::Ssl, Http, System},
+        izanami::System,
         openssl::{
             pkey::PKey,
-            ssl::{SslConnector, SslMethod, SslVerifyMode},
+            ssl::{
+                SslAcceptor, //
+                SslConnector,
+                SslMethod,
+                SslVerifyMode,
+            },
             x509::X509,
         },
         std::{
@@ -322,15 +326,19 @@ mod openssl {
 
             let cert = X509::from_pem(CERTIFICATE)?;
             let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
-            let ssl = Ssl::single_cert(cert, pkey);
+            let ssl = {
+                let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
+                builder.set_certificate(&cert)?;
+                builder.set_private_key(&pkey)?;
+                builder.check_private_key()?;
+                builder
+            };
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let http_server = Http::bind(listener) //
+            let handle = izanami::http::server(|| super::Echo::default())
                 .with_graceful_shutdown(rx_shutdown)
-                .with_tls(ssl)
-                .serve(super::Echo::default())?;
-
-            let handle = sys.spawn(http_server);
+                .bind_tls(listener, ssl)
+                .start(sys);
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -399,6 +407,7 @@ mod openssl {
 mod rustls {
     use {
         ::native_tls::Certificate,
+        ::rustls::{NoClientAuth, ServerConfig},
         futures::{Future, Stream},
         http::Request,
         hyper::{
@@ -408,7 +417,7 @@ mod rustls {
             },
             Body,
         },
-        izanami::{tls::rustls::Rustls, Http, System},
+        izanami::System,
         std::{
             io,
             net::{SocketAddr, TcpListener},
@@ -425,16 +434,36 @@ mod rustls {
 
             let listener = TcpListener::bind("127.0.0.1:0")?;
             let local_addr = listener.local_addr()?;
-            let rustls = Rustls::no_client_auth() //
-                .single_cert(CERTIFICATE, PRIVATE_KEY)?;
+            let rustls = {
+                let certs = {
+                    let mut reader = io::BufReader::new(io::Cursor::new(CERTIFICATE));
+                    ::rustls::internal::pemfile::certs(&mut reader)
+                        .map_err(|_| failure::format_err!("failed to read certificate file"))?
+                };
+
+                let priv_key = {
+                    let mut reader = io::BufReader::new(io::Cursor::new(PRIVATE_KEY));
+                    let rsa_keys = {
+                        ::rustls::internal::pemfile::rsa_private_keys(&mut reader).map_err(
+                            |_| failure::format_err!("failed to read private key file as RSA"),
+                        )?
+                    };
+                    rsa_keys
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| failure::format_err!("invalid private key"))?
+                };
+
+                let mut config = ServerConfig::new(NoClientAuth::new());
+                config.set_single_cert(certs, priv_key)?;
+                config
+            };
 
             let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let http_server = Http::bind(listener) //
+            let handle = izanami::http::server(|| super::Echo::default())
                 .with_graceful_shutdown(rx_shutdown)
-                .with_tls(rustls)
-                .serve(super::Echo::default())?;
-
-            let handle = sys.spawn(http_server);
+                .bind_tls(listener, rustls)
+                .start(sys);
 
             // FIXME: use rustls
             let client = Client::builder() //

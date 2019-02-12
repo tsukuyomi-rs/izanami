@@ -1,93 +1,56 @@
 #![cfg(feature = "openssl")]
 
 use {
-    super::{Tls, TlsConfig, TlsWrapper},
+    super::{TlsConfig, TlsWrapper},
     futures::{Async, Poll},
-    openssl::{
-        pkey::{HasPrivate, PKey},
-        ssl::{
-            AlpnError, //
-            ErrorCode,
-            HandshakeError,
-            MidHandshakeSslStream,
-            ShutdownResult,
-            SslAcceptor,
-            SslAcceptorBuilder,
-            SslMethod,
-            SslStream as RawSslStream,
-        },
-        x509::X509,
+    openssl::ssl::{
+        AlpnError, //
+        ErrorCode,
+        HandshakeError,
+        MidHandshakeSslStream,
+        ShutdownResult,
+        SslAcceptor,
+        SslAcceptorBuilder,
+        SslStream as RawSslStream,
     },
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
-trait NewSslAcceptorBuilder {
-    fn new_builder(&self) -> crate::Result<SslAcceptorBuilder>;
-}
-
-impl<F> NewSslAcceptorBuilder for F
-where
-    F: Fn() -> crate::Result<SslAcceptorBuilder>,
-{
-    fn new_builder(&self) -> crate::Result<SslAcceptorBuilder> {
-        (*self)()
-    }
-}
-
-/// A SSL/TLS configuration using OpenSSL.
-#[allow(missing_debug_implementations)]
-pub struct Ssl {
-    new_builder: Box<dyn NewSslAcceptorBuilder + Send + Sync + 'static>,
-}
-
-impl Ssl {
-    /// Create a new `Ssl` using the specified function.
-    pub fn new<F>(new_builder: F) -> Self
-    where
-        F: Fn() -> crate::Result<SslAcceptorBuilder> + Send + Sync + 'static,
-    {
-        Self {
-            new_builder: Box::new(new_builder),
-        }
-    }
-
-    /// Create a new `Ssl` with the specified certificate and private key.
-    pub fn single_cert(cert: X509, pkey: PKey<impl HasPrivate + Send + Sync + 'static>) -> Self {
-        Self::new(move || {
-            let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
-            builder.set_certificate(&cert)?;
-            builder.set_private_key(&pkey)?;
-            Ok(builder)
-        })
-    }
-}
-
-impl<T> Tls<T> for Ssl
+impl<T> TlsConfig<T> for SslAcceptor
 where
     T: AsyncRead + AsyncWrite,
 {
     type Wrapped = SslStream<T>;
-    type Wrapper = SslWrapper;
+    type Wrapper = Self;
 
     #[inline]
-    fn wrapper(&self, config: TlsConfig) -> crate::Result<Self::Wrapper> {
-        let mut builder = self.new_builder.new_builder()?;
+    fn into_wrapper(self, _: Vec<String>) -> crate::Result<Self::Wrapper> {
+        Ok(self)
+    }
+}
 
-        if !config.alpn_protocols.is_empty() {
-            let wired = wire_format::to_vec(&config.alpn_protocols)?;
-            builder.set_alpn_protos(&*wired)?;
+impl<T> TlsConfig<T> for SslAcceptorBuilder
+where
+    T: AsyncRead + AsyncWrite,
+{
+    type Wrapped = SslStream<T>;
+    type Wrapper = SslAcceptor;
 
-            let server_protos = config.alpn_protocols;
-            builder.set_alpn_select_callback(move |_, client_protos| {
+    #[inline]
+    fn into_wrapper(mut self, alpn_protocols: Vec<String>) -> crate::Result<Self::Wrapper> {
+        if !alpn_protocols.is_empty() {
+            let wired = wire_format::to_vec(&alpn_protocols)?;
+            self.set_alpn_protos(&*wired)?;
+
+            let server_protos = alpn_protocols;
+            self.set_alpn_select_callback(move |_, client_protos| {
                 select_alpn_proto(wire_format::iter(client_protos), &server_protos)
                     .ok_or_else(|| AlpnError::NOACK)
             });
         }
 
-        Ok(SslWrapper {
-            acceptor: builder.build(),
-        })
+        Ok(self.build())
     }
 }
 
@@ -132,12 +95,7 @@ fn test_select_alpn_proto() {
     );
 }
 
-#[allow(missing_debug_implementations)]
-pub struct SslWrapper {
-    acceptor: SslAcceptor,
-}
-
-impl<T> TlsWrapper<T> for SslWrapper
+impl<T> TlsWrapper<T> for SslAcceptor
 where
     T: AsyncRead + AsyncWrite,
 {
@@ -147,7 +105,7 @@ where
     fn wrap(&self, io: T) -> Self::Wrapped {
         SslStream {
             state: State::MidHandshake(MidHandshake::Start {
-                acceptor: self.acceptor.clone(),
+                acceptor: self.clone(),
                 io,
             }),
         }

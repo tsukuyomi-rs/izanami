@@ -1,7 +1,10 @@
 use {
     echo_service::Echo,
+    failure::format_err,
     http::Response,
-    izanami::{tls::rustls::Rustls, Http, System},
+    izanami::System,
+    rustls::{NoClientAuth, ServerConfig},
+    std::io,
 };
 
 const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
@@ -17,13 +20,33 @@ fn main() -> izanami::Result<()> {
             })?
             .build();
 
-        let rustls = Rustls::no_client_auth() //
-            .single_cert(CERTIFICATE, PRIVATE_KEY)?;
-        sys.spawn(
-            Http::bind("127.0.0.1:4000") //
-                .with_tls(rustls)
-                .serve(echo)?,
-        );
+        let rustls = {
+            let certs = {
+                let mut reader = io::BufReader::new(io::Cursor::new(CERTIFICATE));
+                ::rustls::internal::pemfile::certs(&mut reader)
+                    .map_err(|_| format_err!("failed to read certificate file"))?
+            };
+
+            let priv_key = {
+                let mut reader = io::BufReader::new(io::Cursor::new(PRIVATE_KEY));
+                let rsa_keys = {
+                    ::rustls::internal::pemfile::rsa_private_keys(&mut reader)
+                        .map_err(|_| format_err!("failed to read private key file as RSA"))?
+                };
+                rsa_keys
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| format_err!("invalid private key"))?
+            };
+
+            let mut config = ServerConfig::new(NoClientAuth::new());
+            config.set_single_cert(certs, priv_key)?;
+            config
+        };
+
+        izanami::http::server(move || echo.clone()) //
+            .bind_tls("127.0.0.1:4000", rustls)
+            .start(sys);
 
         Ok(())
     })

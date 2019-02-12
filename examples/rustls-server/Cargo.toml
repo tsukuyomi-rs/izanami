@@ -13,6 +13,7 @@ doc = false
 [dependencies]
 izanami = { path = "../..", features = ["rustls"] }
 failure = "0.1.3"
+rustls = "0.14"
 
 echo-service = { path = "../echo-service" }
 http = "0.1"

@@ -21,6 +21,5 @@ pub mod tls;
 #[doc(inline)]
 pub use crate::{
     error::{Error, Result},
-    http::Http,
     system::System,
 };

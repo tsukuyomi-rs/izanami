@@ -7,23 +7,17 @@ pub mod rustls;
 
 use tokio::io::{AsyncRead, AsyncWrite};
 
-/// A set of values passed to `Tls::wrapper`.
-#[derive(Debug)]
-pub struct TlsConfig {
-    pub(crate) alpn_protocols: Vec<String>,
-}
-
 /// Trait representing a SSL/TLS configuration.
-pub trait Tls<T> {
+pub trait TlsConfig<T> {
     type Wrapped: AsyncRead + AsyncWrite;
     type Wrapper: TlsWrapper<T, Wrapped = Self::Wrapped>;
 
     /// Creates an instance of `Acceptor` using the specified configuration.
-    fn wrapper(&self, config: TlsConfig) -> crate::Result<Self::Wrapper>;
+    fn into_wrapper(self, alpn_protocols: Vec<String>) -> crate::Result<Self::Wrapper>;
 }
 
 /// Trait representing a converter for granting the SSL/TLS to asynchronous I/Os.
-pub trait TlsWrapper<T> {
+pub trait TlsWrapper<T>: Clone {
     /// The type of wrapped asynchronous I/O returned from `accept`.
     type Wrapped: AsyncRead + AsyncWrite;
 
@@ -31,11 +25,11 @@ pub trait TlsWrapper<T> {
     fn wrap(&self, io: T) -> Self::Wrapped;
 }
 
-/// The default `Tls` that returns the input I/O directly.
-#[derive(Debug, Default)]
+/// The default `TlsConfig` that returns the input I/O directly.
+#[derive(Debug, Default, Clone)]
 pub struct NoTls(());
 
-impl<T> Tls<T> for NoTls
+impl<T> TlsConfig<T> for NoTls
 where
     T: AsyncRead + AsyncWrite,
 {
@@ -43,8 +37,8 @@ where
     type Wrapper = Self;
 
     #[inline]
-    fn wrapper(&self, _: TlsConfig) -> crate::Result<Self::Wrapper> {
-        Ok(NoTls(()))
+    fn into_wrapper(self, _: Vec<String>) -> crate::Result<Self::Wrapper> {
+        Ok(self.clone())
     }
 }
 

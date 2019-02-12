@@ -2,86 +2,39 @@
 
 use {
     super::*,
-    ::rustls::{NoClientAuth, NoKeyLog, ServerConfig, ServerSession, Session, Stream},
-    failure::format_err,
+    ::rustls::{ServerConfig, ServerSession, Session, Stream},
     futures::Poll,
     std::{io, sync::Arc},
 };
 
-#[allow(missing_debug_implementations)]
-pub struct Rustls {
-    server_config: ServerConfig,
-}
-
-impl Rustls {
-    pub fn no_client_auth() -> Self {
-        Self {
-            server_config: {
-                let mut config = ServerConfig::new(NoClientAuth::new());
-                config.key_log = Arc::new(NoKeyLog);
-                config
-            },
-        }
-    }
-
-    /// Sets a single certificate chain and matching private key.
-    pub fn single_cert(mut self, certificate: &[u8], private_key: &[u8]) -> crate::Result<Self> {
-        let certs = {
-            let mut reader = io::BufReader::new(io::Cursor::new(certificate));
-            ::rustls::internal::pemfile::certs(&mut reader)
-                .map_err(|_| format_err!("failed to read certificate file"))?
-        };
-
-        let priv_key = {
-            let mut reader = io::BufReader::new(io::Cursor::new(private_key));
-            let rsa_keys = {
-                ::rustls::internal::pemfile::rsa_private_keys(&mut reader)
-                    .map_err(|_| format_err!("failed to read private key file as RSA"))?
-            };
-            rsa_keys
-                .into_iter()
-                .next()
-                .ok_or_else(|| format_err!("invalid private key"))?
-        };
-
-        self.server_config.set_single_cert(certs, priv_key)?;
-
-        Ok(self)
-    }
-}
-
-impl From<ServerConfig> for Rustls {
-    fn from(server_config: ServerConfig) -> Self {
-        Self { server_config }
-    }
-}
-
-impl<T> Tls<T> for Rustls
+impl<T> TlsConfig<T> for Arc<ServerConfig>
 where
     T: AsyncRead + AsyncWrite,
 {
     type Wrapped = RustlsStream<T>;
-    type Wrapper = RustlsWrapper;
+    type Wrapper = Self;
 
     #[inline]
-    fn wrapper(&self, config: TlsConfig) -> crate::Result<Self::Wrapper> {
-        Ok(RustlsWrapper {
-            config: Arc::new({
-                let mut server_config = self.server_config.clone();
-                server_config.set_protocols(&config.alpn_protocols);
-                server_config
-            }),
-        })
+    fn into_wrapper(self, _: Vec<String>) -> crate::Result<Self::Wrapper> {
+        Ok(self)
     }
 }
 
-#[allow(missing_debug_implementations)]
-#[derive(Clone)]
-pub struct RustlsWrapper {
-    config: Arc<ServerConfig>,
+impl<T> TlsConfig<T> for ServerConfig
+where
+    T: AsyncRead + AsyncWrite,
+{
+    type Wrapped = RustlsStream<T>;
+    type Wrapper = Arc<ServerConfig>;
+
+    #[inline]
+    fn into_wrapper(mut self, alpn_protocols: Vec<String>) -> crate::Result<Self::Wrapper> {
+        self.set_protocols(&alpn_protocols);
+        Ok(Arc::new(self))
+    }
 }
 
-impl<T> TlsWrapper<T> for RustlsWrapper
+impl<T> TlsWrapper<T> for Arc<ServerConfig>
 where
     T: AsyncRead + AsyncWrite,
 {
@@ -92,7 +45,7 @@ where
         RustlsStream {
             io,
             is_shutdown: false,
-            session: ServerSession::new(&self.config),
+            session: ServerSession::new(self),
         }
     }
 }

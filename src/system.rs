@@ -245,7 +245,7 @@ pub mod notify {
 
     pub(crate) fn pair<T>() -> (Sender<T>, Receiver<T>) {
         let (tx, rx) = oneshot::channel();
-        (Sender { inner: tx }, Receiver { inner: rx })
+        (Sender { inner: tx }, Receiver { inner: Ok(rx) })
     }
 
     #[derive(Debug)]
@@ -261,7 +261,15 @@ pub mod notify {
 
     #[derive(Debug)]
     pub struct Receiver<T> {
-        inner: oneshot::Receiver<T>,
+        inner: Result<oneshot::Receiver<T>, Option<T>>,
+    }
+
+    impl<T> Receiver<T> {
+        pub(crate) fn ready(value: T) -> Self {
+            Self {
+                inner: Err(Some(value)),
+            }
+        }
     }
 
     impl<T> Future for Receiver<T> {
@@ -270,7 +278,13 @@ pub mod notify {
 
         #[inline]
         fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-            self.inner.poll().map_err(|_| ())
+            match &mut self.inner {
+                Ok(rx) => rx.poll().map_err(|_| ()),
+                Err(value) => Ok(value
+                    .take()
+                    .expect("the future has already been polled")
+                    .into()),
+            }
         }
     }
 }

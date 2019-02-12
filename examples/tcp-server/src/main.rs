@@ -1,7 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::{Http, System},
+    izanami::System,
 };
 
 fn main() -> izanami::Result<()> {
@@ -14,10 +14,9 @@ fn main() -> izanami::Result<()> {
             })?
             .build();
 
-        sys.spawn(
-            Http::bind("127.0.0.1:5000") //
-                .serve(echo)?,
-        );
+        izanami::http::server(move || echo.clone()) //
+            .bind("127.0.0.1:5000")
+            .start(sys);
 
         Ok(())
     })
