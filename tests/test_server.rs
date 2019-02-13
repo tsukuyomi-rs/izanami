@@ -51,25 +51,20 @@ mod tcp {
             },
             Body,
         },
-        std::{
-            io,
-            net::{SocketAddr, TcpListener as StdTcpListener},
-        },
-        tokio::{net::TcpStream, sync::oneshot},
+        izanami::http::HttpServer,
+        std::{io, net::SocketAddr},
+        tokio::net::{TcpListener, TcpStream},
     };
 
     #[test]
     fn tcp_server() -> izanami::Result<()> {
         izanami::system::run_local(|sys| {
-            let listener = StdTcpListener::bind("127.0.0.1:0")?;
+            let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
             let local_addr = listener.local_addr()?;
 
-            let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = sys.spawn(
-                izanami::http::server(|| super::Echo::default())
-                    .with_graceful_shutdown(rx_shutdown)
-                    .bind(listener),
-            );
+            let mut server = HttpServer::new(|| super::Echo::default())
+                .bind(listener)?
+                .start(sys)?;
 
             let client = Client::builder() //
                 .build(TestConnect { local_addr });
@@ -85,8 +80,8 @@ mod tcp {
             let body = sys.block_on(response.into_body().concat2())?;
             assert_eq!(body.into_bytes(), "hello");
 
-            let _ = tx_shutdown.send(());
-            handle.wait_complete(sys)?;
+            server.send_shutdown_signal();
+            server.wait_complete(sys)?;
 
             Ok(())
         })
@@ -124,9 +119,10 @@ mod unix {
             },
             Body,
         },
+        izanami::http::HttpServer,
         std::{io, path::PathBuf},
         tempfile::Builder,
-        tokio::{net::UnixStream, sync::oneshot},
+        tokio::net::UnixStream,
     };
 
     #[test]
@@ -135,12 +131,9 @@ mod unix {
             let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
             let sock_path = sock_tempdir.path().join("connect.sock");
 
-            let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = sys.spawn(
-                izanami::http::server(|| super::Echo::default())
-                    .with_graceful_shutdown(rx_shutdown)
-                    .bind(sock_path.clone()),
-            );
+            let mut server = HttpServer::new(|| super::Echo::default())
+                .bind(sock_path.clone())?
+                .start(sys)?;
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -158,8 +151,8 @@ mod unix {
             let body = sys.block_on(response.into_body().concat2())?;
             assert_eq!(body.into_bytes(), "hello");
 
-            let _ = tx_shutdown.send(());
-            handle.wait_complete(sys)?;
+            server.send_shutdown_signal();
+            server.wait_complete(sys)?;
 
             Ok(())
         })
@@ -198,11 +191,9 @@ mod native_tls {
             },
             Body,
         },
-        std::{
-            io,
-            net::{SocketAddr, TcpListener},
-        },
-        tokio::{net::TcpStream, sync::oneshot},
+        izanami::http::HttpServer,
+        std::{io, net::SocketAddr},
+        tokio::net::{TcpListener, TcpStream},
         tokio_tls::TlsStream,
     };
 
@@ -212,19 +203,16 @@ mod native_tls {
             const IDENTITY: &[u8] = include_bytes!("../test/identity.pfx");
             const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
 
-            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
             let local_addr = listener.local_addr()?;
             let native_tls = {
                 let der = Identity::from_pkcs12(IDENTITY, "mypass")?;
                 TlsAcceptor::builder(der).build()?
             };
 
-            let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = sys.spawn(
-                izanami::http::server(|| super::Echo::default())
-                    .with_graceful_shutdown(rx_shutdown)
-                    .bind_tls(listener, native_tls),
-            );
+            let mut server = HttpServer::new(|| super::Echo::default())
+                .bind_tls(listener, native_tls)?
+                .start(sys)?;
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -250,8 +238,8 @@ mod native_tls {
             )?;
             assert_eq!(body.into_bytes(), "hello");
 
-            let _ = tx_shutdown.send(());
-            handle.wait_complete(sys)?;
+            server.send_shutdown_signal();
+            server.wait_complete(sys)?;
 
             Ok(())
         })
@@ -296,6 +284,7 @@ mod openssl {
             },
             Body,
         },
+        izanami::http::HttpServer,
         openssl::{
             pkey::PKey,
             ssl::{
@@ -306,11 +295,8 @@ mod openssl {
             },
             x509::X509,
         },
-        std::{
-            io,
-            net::{SocketAddr, TcpListener},
-        },
-        tokio::{net::TcpStream, sync::oneshot},
+        std::{io, net::SocketAddr},
+        tokio::net::{TcpListener, TcpStream},
         tokio_openssl::{SslConnectorExt, SslStream},
     };
 
@@ -320,7 +306,7 @@ mod openssl {
     #[test]
     fn tls_server() -> izanami::Result<()> {
         izanami::system::run_local(|sys| {
-            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
             let local_addr = listener.local_addr()?;
 
             let cert = X509::from_pem(CERTIFICATE)?;
@@ -333,12 +319,9 @@ mod openssl {
                 builder
             };
 
-            let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = sys.spawn(
-                izanami::http::server(|| super::Echo::default())
-                    .with_graceful_shutdown(rx_shutdown)
-                    .bind_tls(listener, ssl),
-            );
+            let mut server = HttpServer::new(|| super::Echo::default())
+                .bind_tls(listener, ssl)?
+                .start(sys)?;
 
             let client = Client::builder() //
                 .build(TestConnect {
@@ -369,8 +352,8 @@ mod openssl {
             )?;
             assert_eq!(body.into_bytes(), "hello");
 
-            let _ = tx_shutdown.send(());
-            handle.wait_complete(sys)?;
+            server.send_shutdown_signal();
+            server.wait_complete(sys)?;
 
             Ok(())
         })
@@ -417,11 +400,9 @@ mod rustls {
             },
             Body,
         },
-        std::{
-            io,
-            net::{SocketAddr, TcpListener},
-        },
-        tokio::{net::TcpStream, sync::oneshot},
+        izanami::http::HttpServer,
+        std::{io, net::SocketAddr},
+        tokio::net::{TcpListener, TcpStream},
         tokio_tls::TlsStream,
     };
 
@@ -431,7 +412,7 @@ mod rustls {
             const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
             const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
 
-            let listener = TcpListener::bind("127.0.0.1:0")?;
+            let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
             let local_addr = listener.local_addr()?;
             let rustls = {
                 let certs = {
@@ -458,12 +439,9 @@ mod rustls {
                 config
             };
 
-            let (tx_shutdown, rx_shutdown) = oneshot::channel();
-            let handle = sys.spawn(
-                izanami::http::server(|| super::Echo::default())
-                    .with_graceful_shutdown(rx_shutdown)
-                    .bind_tls(listener, rustls),
-            );
+            let mut server = HttpServer::new(|| super::Echo::default())
+                .bind_tls(listener, rustls)?
+                .start(sys)?;
 
             // FIXME: use rustls
             let client = Client::builder() //
@@ -490,8 +468,8 @@ mod rustls {
             )?;
             assert_eq!(body.into_bytes(), "hello");
 
-            let _ = tx_shutdown.send(());
-            handle.wait_complete(sys)?;
+            server.send_shutdown_signal();
+            server.wait_complete(sys)?;
 
             Ok(())
         })

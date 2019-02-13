@@ -1,12 +1,14 @@
+//! HTTP server.
+
 use {
     crate::error::BoxedStdError,
     crate::{
         net::{Bind, Listener},
-        system::{notify, CurrentThread, DefaultRuntime, Spawn},
+        system::{notify, CurrentThread, DefaultRuntime, Runtime, Spawn, System},
         tls::{NoTls, TlsConfig, TlsWrapper},
     },
     bytes::{Buf, BufMut, Bytes},
-    futures::{Future, Poll, Stream},
+    futures::{Async, Future, Poll, Stream},
     http::{HeaderMap, Request, Response},
     hyper::body::Payload as _Payload,
     izanami_service::{MakeService, Service},
@@ -16,85 +18,188 @@ use {
         RemoteAddr,
     },
     std::{io, marker::PhantomData},
-    tokio::io::{AsyncRead, AsyncWrite},
+    tokio::{
+        io::{AsyncRead, AsyncWrite},
+        sync::oneshot,
+    },
 };
 
-pub fn server<F, S>(service_factory: F) -> Server<F>
-where
-    F: Fn() -> S,
-    S: MakeHttpService,
-{
-    Server::new(service_factory)
-}
+type SpawnFn<Rt, F> = dyn for<'s> FnMut(
+        &mut System<'s, Rt>,
+        &F,
+        &ShutdownSignal,
+        &mut Vec<crate::system::Handle<'s, Rt, crate::Result<()>>>,
+    ) -> crate::Result<()>
+    + 'static;
 
-/// A builder for configuring an HTTP server task.
-#[derive(Debug)]
-pub struct Server<F, Sig = NoSignal> {
+/// An HTTP server running on `System`.
+#[allow(missing_debug_implementations)]
+pub struct HttpServer<Rt, F>
+where
+    Rt: Runtime,
+{
     service_factory: F,
-    shutdown_signal: Option<Sig>,
+    tx_shutdown: oneshot::Sender<()>,
+    rx_shutdown: ShutdownSignal,
+    spawn_fns: Vec<Box<SpawnFn<Rt, F>>>,
 }
 
-impl<F, S> Server<F>
+impl<Rt, F, S> HttpServer<Rt, F>
 where
+    Rt: Runtime,
     F: Fn() -> S,
     S: MakeHttpService,
 {
-    /// Creates a `Server` using the specified service factory.
+    /// Creates a `HttpServer` using the specified service factory.
     pub fn new(service_factory: F) -> Self {
+        let (tx_shutdown, rx_shutdown) = oneshot::channel();
         Self {
             service_factory,
-            shutdown_signal: None,
+            tx_shutdown,
+            rx_shutdown: ShutdownSignal {
+                inner: Some(rx_shutdown.shared()),
+            },
+            spawn_fns: vec![],
         }
     }
 
-    /// Specifies a `Future` to shutdown the server gracefully.
-    pub fn with_graceful_shutdown<Sig>(self, shutdown_signal: Sig) -> Server<F, Sig>
+    /// Associate the specified I/O with this server.
+    pub fn bind<B>(self, bind: B) -> crate::Result<Self>
     where
-        Sig: Future<Item = ()>,
-    {
-        Server {
-            service_factory: self.service_factory,
-            shutdown_signal: Some(shutdown_signal),
-        }
-    }
-}
-
-impl<F, S, Sig> Server<F, Sig>
-where
-    F: Fn() -> S,
-    S: MakeHttpService,
-    Sig: Future<Item = ()>,
-{
-    /// Creates an `HttpTask` using the specified listener.
-    pub fn bind<B>(self, bind: B) -> ServerTask<F, Sig, B>
-    where
-        B: Bind,
+        B: Bind + 'static,
+        HttpServerTask<S, B::Listener, NoTls>: Spawn<Rt, Output = crate::Result<()>>,
     {
         self.bind_tls(bind, NoTls::default())
     }
 
-    /// Creates an `HttpTask` using the specified listener and TLS configuration.
-    pub fn bind_tls<B, T>(self, bind: B, tls: T) -> ServerTask<F, Sig, B, T>
+    /// Associate the specified I/O and SSL/TLS configuration with this server.
+    pub fn bind_tls<B, T>(mut self, bind: B, tls: T) -> crate::Result<Self>
     where
-        B: Bind,
-        T: TlsConfig<B::Conn>,
+        B: Bind + 'static,
+        T: TlsConfig<B::Conn> + 'static,
+        HttpServerTask<S, B::Listener, T::Wrapper>: Spawn<Rt, Output = crate::Result<()>>,
     {
-        ServerTask {
-            service_factory: self.service_factory,
-            shutdown_signal: self.shutdown_signal,
-            bind,
-            tls,
+        let mut listeners = bind.into_listeners()?;
+        let tls_wrapper = tls.into_wrapper(vec!["h2".into(), "http/1.1".into()])?;
+
+        self.spawn_fns.push(Box::new(
+            move |sys, service_factory, rx_shutdown, handles| {
+                for listener in listeners.drain(..) {
+                    let handle = sys.spawn(HttpServerTask {
+                        listener,
+                        tls_wrapper: tls_wrapper.clone(),
+                        make_service: (*service_factory)(),
+                        rx_shutdown: rx_shutdown.clone(),
+                    });
+                    handles.push(handle);
+                }
+                Ok(())
+            },
+        ));
+
+        Ok(self)
+    }
+
+    /// Start all tasks registered on this server and returns a handle that controls their tasks.
+    pub fn start<'s>(self, sys: &mut System<'s, Rt>) -> crate::Result<ServeHandle<'s, Rt>> {
+        let mut handles = vec![];
+        for mut spawn_fn in self.spawn_fns {
+            (spawn_fn)(sys, &self.service_factory, &self.rx_shutdown, &mut handles)?;
+        }
+
+        Ok(ServeHandle {
+            handles,
+            tx_shutdown: Some(self.tx_shutdown),
+        })
+    }
+}
+
+impl<F, S> HttpServer<DefaultRuntime, F>
+where
+    F: Fn() -> S,
+    S: MakeHttpService,
+{
+    /// Create a `System` using the default runtime and drive this serve within it.
+    pub fn run(self) -> crate::Result<()> {
+        crate::system::run(move |sys| {
+            sys.wait_incomplete_tasks(false);
+            self.start(sys)?.wait_complete(sys)
+        })
+    }
+}
+
+impl<F, S> HttpServer<CurrentThread, F>
+where
+    F: Fn() -> S,
+    S: MakeHttpService,
+{
+    /// Create a `System` using the single-threaded runtime and drive this serve within it.
+    pub fn run_local(self) -> crate::Result<()> {
+        crate::system::run_local(move |sys| {
+            sys.wait_incomplete_tasks(false);
+            self.start(sys)?.wait_complete(sys)
+        })
+    }
+}
+
+#[derive(Debug)]
+pub struct ServeHandle<'s, Rt: Runtime> {
+    handles: Vec<crate::system::Handle<'s, Rt, crate::Result<()>>>,
+    tx_shutdown: Option<oneshot::Sender<()>>,
+}
+
+impl<'s, Rt: Runtime> ServeHandle<'s, Rt> {
+    pub fn send_shutdown_signal(&mut self) {
+        if let Some(tx_shutdown) = self.tx_shutdown.take() {
+            let _ = tx_shutdown.send(());
+        }
+    }
+
+    pub fn wait_complete(self, sys: &mut System<'s, Rt>) -> crate::Result<()>
+    where
+        crate::system::notify::Receiver<crate::Result<()>>:
+            crate::system::BlockOn<Rt, Output = Result<crate::Result<()>, ()>>,
+    {
+        for handle in self.handles {
+            handle.wait_complete(sys)?;
+        }
+        Ok(())
+    }
+}
+
+#[allow(missing_debug_implementations)]
+#[derive(Clone)]
+struct ShutdownSignal {
+    inner: Option<futures::future::Shared<oneshot::Receiver<()>>>,
+}
+
+impl Future for ShutdownSignal {
+    type Item = ();
+    type Error = ();
+
+    #[inline]
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.inner.as_mut().map(|inner| inner.poll()) {
+            Some(Ok(Async::Ready(..))) => Ok(Async::Ready(())),
+            Some(Ok(Async::NotReady)) => Ok(Async::NotReady),
+            Some(Err(..)) => {
+                log::trace!("the shutdown signal throws an error");
+                log::trace!("  --> transit to the infinity run");
+                drop(self.inner.take());
+                Ok(Async::NotReady)
+            }
+            None => Ok(Async::NotReady),
         }
     }
 }
 
-/// A task representing an HTTP server task spawned onto `System`.
-#[derive(Debug)]
-pub struct ServerTask<F, Sig, B, T = NoTls> {
-    service_factory: F,
-    shutdown_signal: Option<Sig>,
-    bind: B,
-    tls: T,
+#[doc(hidden)]
+#[allow(missing_debug_implementations)]
+pub struct HttpServerTask<S, L, T> {
+    make_service: S,
+    listener: L,
+    tls_wrapper: T,
+    rx_shutdown: ShutdownSignal,
 }
 
 /// A helper macro for creating a server task.
@@ -102,67 +207,46 @@ macro_rules! spawn_inner {
     ($self:expr, $runtime:expr) => {{
         let self_ = $self;
         let runtime = $runtime;
-        let result = (move || -> crate::Result<_> {
-            let (tx_notify, rx_notify) = notify::pair();
-            let executor = runtime.executor();
-
-            let shutdown_signal = match self_.shutdown_signal {
-                Some(sig) => futures::future::Either::A(sig.map_err(|_| ())),
-                None => futures::future::Either::B(futures::future::empty::<(), ()>()),
-            };
-
-            let listener = self_.bind.bind()?;
-            let tls_wrapper = self_
-                .tls
-                .into_wrapper(vec!["h2".into(), "http/1.1".into()])?;
-            let incoming = AddrIncoming {
-                listener,
-                tls_wrapper,
-            };
-            let make_service = (self_.service_factory)();
-            runtime.spawn(
-                hyper::Server::builder(incoming)
-                    .executor(executor)
-                    .serve(hyper::service::make_service_fn(
-                        move |conn: &AddrStream<_>| {
-                            let remote_addr = conn.remote_addr.clone();
-                            make_service
-                                .make_service(&mut Context::new(&remote_addr))
-                                .map(move |service| IzanamiService {
-                                    service,
-                                    remote_addr,
-                                })
-                        },
-                    ))
-                    .with_graceful_shutdown(shutdown_signal)
-                    .then(move |result| {
-                        tx_notify.send(result.map_err(Into::into));
-                        Ok(())
-                    }),
-            );
-
-            Ok(rx_notify)
-        })();
-
-        match result {
-            Ok(rx_notify) => rx_notify,
-            Err(err) => notify::Receiver::ready(Err(err)),
-        }
+        let (tx_notify, rx_notify) = notify::pair();
+        let executor = runtime.executor();
+        let shutdown_signal = self_.rx_shutdown;
+        let incoming = AddrIncoming {
+            listener: self_.listener,
+            tls_wrapper: self_.tls_wrapper,
+        };
+        let make_service = self_.make_service;
+        runtime.spawn(
+            hyper::Server::builder(incoming)
+                .executor(executor)
+                .serve(hyper::service::make_service_fn(
+                    move |conn: &AddrStream<_>| {
+                        let remote_addr = conn.remote_addr.clone();
+                        make_service
+                            .make_service(&mut Context::new(&remote_addr))
+                            .map(move |service| IzanamiService {
+                                service,
+                                remote_addr,
+                            })
+                    },
+                ))
+                .with_graceful_shutdown(shutdown_signal)
+                .then(move |result| {
+                    tx_notify.send(result.map_err(Into::into));
+                    Ok(())
+                }),
+        );
+        rx_notify
     }};
 }
 
-impl<F, S, Sig, B, T> Spawn for ServerTask<F, Sig, B, T>
+impl<S, L, T> Spawn for HttpServerTask<S, L, T>
 where
-    F: Fn() -> S,
     S: MakeHttpService + Send + Sync + 'static,
     S::Future: Send + 'static,
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
-    Sig: Future<Item = ()> + Send + 'static,
-    B: Bind,
-    B::Listener: Send + 'static,
-    T: TlsConfig<B::Conn>,
-    T::Wrapper: Send + 'static,
+    L: Listener + Send + 'static,
+    T: TlsWrapper<L::Conn> + Send + 'static,
     T::Wrapped: Send + 'static,
 {
     type Output = crate::Result<()>;
@@ -172,37 +256,19 @@ where
     }
 }
 
-impl<F, S, Sig, B, T> Spawn<CurrentThread> for ServerTask<F, Sig, B, T>
+impl<S, L, T> Spawn<CurrentThread> for HttpServerTask<S, L, T>
 where
-    F: Fn() -> S,
     S: MakeHttpService + 'static,
     S::Service: 'static,
     S::Future: 'static,
-    Sig: Future<Item = ()> + 'static,
-    B: Bind,
-    B::Listener: 'static,
-    T: TlsConfig<B::Conn>,
-    T::Wrapper: 'static,
+    L: Listener + 'static,
+    T: TlsWrapper<L::Conn> + 'static,
     T::Wrapped: Send + 'static,
 {
     type Output = crate::Result<()>;
 
     fn spawn(self, rt: &mut CurrentThread) -> notify::Receiver<Self::Output> {
         spawn_inner!(self, rt)
-    }
-}
-
-#[doc(hidden)]
-#[derive(Debug)]
-pub struct NoSignal(futures::future::Empty<(), ()>);
-
-impl Future for NoSignal {
-    type Item = ();
-    type Error = ();
-
-    #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0.poll()
     }
 }
 

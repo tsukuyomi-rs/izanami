@@ -16,20 +16,18 @@ pub trait Bind {
     type Listener: Listener<Conn = Self::Conn>;
 
     /// Create an I/O object bound to the specified address.
-    fn bind(&self) -> crate::Result<Self::Listener>;
+    fn into_listeners(self) -> io::Result<Vec<Self::Listener>>;
 }
 
-impl<F, T> Bind for F
+impl<T> Bind for T
 where
-    F: Fn() -> crate::Result<T>,
     T: Listener,
 {
     type Conn = T::Conn;
     type Listener = T;
 
-    #[inline]
-    fn bind(&self) -> crate::Result<Self::Listener> {
-        (*self)()
+    fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
+        Ok(vec![self])
     }
 }
 
@@ -46,7 +44,10 @@ pub mod tcp {
     use {
         super::{sleep_on_errors::SleepOnErrors, *},
         crate::util::MapAsyncExt,
-        std::{net::SocketAddr, time::Duration},
+        std::{
+            net::{SocketAddr, ToSocketAddrs},
+            time::Duration,
+        },
         tokio::net::{TcpListener, TcpStream},
     };
 
@@ -82,13 +83,6 @@ pub mod tcp {
 
         pub(crate) fn bind(addr: &SocketAddr) -> io::Result<Self> {
             Self::new(TcpListener::bind(addr)?)
-        }
-
-        pub(crate) fn from_std(listener: std::net::TcpListener) -> io::Result<Self> {
-            Self::new(TcpListener::from_std(
-                listener,
-                &tokio::reactor::Handle::default(),
-            )?)
         }
 
         #[inline]
@@ -140,8 +134,8 @@ pub mod tcp {
         type Conn = TcpStream;
         type Listener = AddrIncoming;
 
-        fn bind(&self) -> crate::Result<Self::Listener> {
-            AddrIncoming::bind(self).map_err(Into::into)
+        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
+            (&self).into_listeners()
         }
     }
 
@@ -149,8 +143,8 @@ pub mod tcp {
         type Conn = TcpStream;
         type Listener = AddrIncoming;
 
-        fn bind(&self) -> crate::Result<Self::Listener> {
-            AddrIncoming::bind(self).map_err(Into::into)
+        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
+            AddrIncoming::bind(self).map(|listener| vec![listener])
         }
     }
 
@@ -158,8 +152,10 @@ pub mod tcp {
         type Conn = TcpStream;
         type Listener = AddrIncoming;
 
-        fn bind(&self) -> crate::Result<Self::Listener> {
-            self.parse::<SocketAddr>()?.bind()
+        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
+            self.to_socket_addrs()?
+                .map(|addr| AddrIncoming::bind(&addr))
+                .collect()
         }
     }
 
@@ -167,18 +163,8 @@ pub mod tcp {
         type Conn = TcpStream;
         type Listener = AddrIncoming;
 
-        fn bind(&self) -> crate::Result<Self::Listener> {
-            self.parse::<SocketAddr>()?.bind()
-        }
-    }
-
-    impl Bind for std::net::TcpListener {
-        type Conn = TcpStream;
-        type Listener = AddrIncoming;
-
-        fn bind(&self) -> crate::Result<Self::Listener> {
-            let listener = self.try_clone()?;
-            Ok(AddrIncoming::from_std(listener)?)
+        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
+            self.as_str().into_listeners()
         }
     }
 }
@@ -226,13 +212,6 @@ pub mod unix {
             Self::new(UnixListener::bind(sock_path)?)
         }
 
-        pub(crate) fn from_std(listener: std::os::unix::net::UnixListener) -> io::Result<Self> {
-            Self::new(UnixListener::from_std(
-                listener,
-                &tokio::reactor::Handle::default(),
-            )?)
-        }
-
         #[inline]
         pub fn local_addr(&self) -> &SocketAddr {
             &self.local_addr
@@ -258,8 +237,8 @@ pub mod unix {
         type Conn = UnixStream;
         type Listener = AddrIncoming;
 
-        fn bind(&self) -> crate::Result<Self::Listener> {
-            AddrIncoming::bind(&self).map_err(Into::into)
+        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
+            self.as_path().into_listeners()
         }
     }
 
@@ -267,8 +246,8 @@ pub mod unix {
         type Conn = UnixStream;
         type Listener = AddrIncoming;
 
-        fn bind(&self) -> crate::Result<Self::Listener> {
-            AddrIncoming::bind(&self).map_err(Into::into)
+        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
+            self.as_path().into_listeners()
         }
     }
 
@@ -276,18 +255,8 @@ pub mod unix {
         type Conn = UnixStream;
         type Listener = AddrIncoming;
 
-        fn bind(&self) -> crate::Result<Self::Listener> {
-            AddrIncoming::bind(&self).map_err(Into::into)
-        }
-    }
-
-    impl Bind for std::os::unix::net::UnixListener {
-        type Conn = UnixStream;
-        type Listener = AddrIncoming;
-
-        fn bind(&self) -> crate::Result<Self::Listener> {
-            let listener = self.try_clone()?;
-            Ok(AddrIncoming::from_std(listener)?)
+        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
+            AddrIncoming::bind(self).map(|listener| vec![listener])
         }
     }
 }

@@ -10,8 +10,13 @@ where
     let mut sys = System::new(DefaultRuntime {
         inner: tokio::runtime::Runtime::new()?,
     });
+
     let ret = f(&mut sys)?;
-    sys.runtime.inner.shutdown_on_idle().wait().unwrap();
+
+    if sys.wait_incomplete_tasks {
+        sys.runtime.inner.shutdown_on_idle().wait().unwrap();
+    }
+
     Ok(ret)
 }
 
@@ -23,8 +28,13 @@ where
     let mut sys = System::new(CurrentThread {
         inner: tokio::runtime::current_thread::Runtime::new()?,
     });
+
     let ret = f(&mut sys)?;
-    sys.runtime.inner.run().unwrap();
+
+    if sys.wait_incomplete_tasks {
+        sys.runtime.inner.run().unwrap();
+    }
+
     Ok(ret)
 }
 
@@ -35,6 +45,7 @@ where
     Rt: Runtime,
 {
     runtime: Rt,
+    wait_incomplete_tasks: bool,
     _anchor: PhantomData<&'s std::rc::Rc<()>>,
 }
 
@@ -42,9 +53,10 @@ impl<'s, Rt> System<'s, Rt>
 where
     Rt: Runtime,
 {
-    pub fn new(runtime: Rt) -> Self {
+    fn new(runtime: Rt) -> Self {
         Self {
             runtime,
+            wait_incomplete_tasks: true,
             _anchor: PhantomData,
         }
     }
@@ -66,6 +78,14 @@ where
         F: BlockOn<Rt>,
     {
         future.block_on(&mut self.runtime)
+    }
+
+    /// Specifies whether to wait for the completion of incomplete tasks
+    /// before shutting down the runtime.
+    ///
+    /// The default value is `true`.
+    pub fn wait_incomplete_tasks(&mut self, enabled: bool) {
+        self.wait_incomplete_tasks = enabled
     }
 }
 
@@ -255,14 +275,6 @@ pub mod notify {
     #[derive(Debug)]
     pub struct Receiver<T> {
         inner: Result<oneshot::Receiver<T>, Option<T>>,
-    }
-
-    impl<T> Receiver<T> {
-        pub(crate) fn ready(value: T) -> Self {
-            Self {
-                inner: Err(Some(value)),
-            }
-        }
     }
 
     impl<T> Future for Receiver<T> {
