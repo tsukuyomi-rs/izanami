@@ -1,11 +1,14 @@
 //! SSL/TLS support.
 
 #[path = "tls/native_tls.rs"]
-pub mod native_tls;
-pub mod openssl;
-pub mod rustls;
+mod native_tls;
+mod openssl;
+mod rustls;
 
-use tokio::io::{AsyncRead, AsyncWrite};
+use {
+    futures::Future,
+    tokio::io::{AsyncRead, AsyncWrite},
+};
 
 /// Trait representing a SSL/TLS configuration.
 pub trait TlsConfig<T> {
@@ -21,8 +24,12 @@ pub trait TlsWrapper<T>: Clone {
     /// The type of wrapped asynchronous I/O returned from `accept`.
     type Wrapped: AsyncRead + AsyncWrite;
 
+    type Error: Into<crate::error::BoxedStdError>;
+
+    type Future: Future<Item = Self::Wrapped, Error = Self::Error>;
+
     /// Wraps the specified I/O object in the SSL/TLS stream.
-    fn wrap(&self, io: T) -> Self::Wrapped;
+    fn wrap(&self, io: T) -> Self::Future;
 }
 
 /// The default `TlsConfig` that returns the input I/O directly.
@@ -47,9 +54,11 @@ where
     T: AsyncRead + AsyncWrite,
 {
     type Wrapped = T;
+    type Error = std::io::Error;
+    type Future = futures::future::FutureResult<Self::Wrapped, Self::Error>;
 
     #[inline]
-    fn wrap(&self, io: T) -> Self::Wrapped {
-        io
+    fn wrap(&self, io: T) -> Self::Future {
+        futures::future::ok(io)
     }
 }

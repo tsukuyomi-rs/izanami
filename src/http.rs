@@ -6,10 +6,9 @@ use {
         net::{Bind, Listener},
         system::{notify, CurrentThread, DefaultRuntime, Runtime, Spawn, System},
         tls::{NoTls, TlsConfig, TlsWrapper},
-        util::MapAsyncExt,
     },
     bytes::{Buf, BufMut, Bytes},
-    futures::{Async, Future, Poll, Stream},
+    futures::{future::Shared, Async, Future, IntoFuture, Poll, Stream},
     http::{HeaderMap, Request, Response},
     hyper::body::Payload as _Payload,
     izanami_service::{MakeService, Service},
@@ -21,7 +20,7 @@ use {
     std::{io, marker::PhantomData},
     tokio::{
         io::{AsyncRead, AsyncWrite},
-        sync::oneshot,
+        sync::{mpsc, oneshot},
     },
 };
 
@@ -236,6 +235,179 @@ impl Future for ShutdownSignal {
     }
 }
 
+trait TaskExecutor<F: Future<Item = (), Error = ()> + 'static> {
+    fn spawn(&mut self, future: F);
+}
+
+impl<F> TaskExecutor<F> for tokio::runtime::TaskExecutor
+where
+    F: Future<Item = (), Error = ()> + Send + 'static,
+{
+    fn spawn(&mut self, future: F) {
+        tokio::executor::Executor::spawn(self, Box::new(future))
+            .unwrap_or_else(|e| log::error!("failed to spawn a task: {}", e))
+    }
+}
+
+impl<F> TaskExecutor<F> for tokio::runtime::current_thread::TaskExecutor
+where
+    F: Future<Item = (), Error = ()> + 'static,
+{
+    fn spawn(&mut self, future: F) {
+        self.spawn_local(Box::new(future))
+            .unwrap_or_else(|e| log::error!("failed to spawn a task: {}", e))
+    }
+}
+
+#[allow(unused)]
+struct Graceful<L, E, F> {
+    state: GracefulState<L, E, F>,
+    tx_notify: Option<notify::Sender<crate::Result<()>>>,
+}
+
+enum GracefulState<L, E, F> {
+    Running {
+        signal: Option<Signal>,
+        watch: Watch,
+        listener: L,
+        executor: E,
+        serve_connection_fn: F,
+        rx_shutdown: ShutdownSignal,
+    },
+    Draining(mpsc::Receiver<Never>),
+}
+
+impl<L, E, F, Fut> Future for Graceful<L, E, F>
+where
+    L: Listener,
+    E: TaskExecutor<Fut>,
+    F: FnMut(L::Conn, RemoteAddr, Watch) -> Fut,
+    Fut: Future<Item = (), Error = ()> + 'static,
+{
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            self.state = match &mut self.state {
+                GracefulState::Running {
+                    signal,
+                    watch,
+                    listener,
+                    executor,
+                    serve_connection_fn,
+                    rx_shutdown,
+                    ..
+                } => match rx_shutdown.poll() {
+                    Ok(Async::Ready(())) | Err(..) => {
+                        // start graceful shutdown
+                        let signal = signal.take().unwrap();
+                        let _ = signal.tx.send(());
+                        GracefulState::Draining(signal.rx_drained)
+                    }
+                    Ok(Async::NotReady) => {
+                        let (conn, addr) = match listener.poll_incoming() {
+                            Ok(Async::Ready((conn, addr))) => (conn, addr),
+                            Ok(Async::NotReady) => return Ok(Async::NotReady),
+                            Err(e) => {
+                                self.tx_notify.take().unwrap().send(Err(e.into()));
+                                return Ok(Async::Ready(()));
+                            }
+                        };
+                        let future = serve_connection_fn(conn, addr, watch.clone());
+                        executor.spawn(future);
+                        continue;
+                    }
+                },
+                GracefulState::Draining(rx_drained) => match rx_drained.poll() {
+                    Ok(Async::Ready(None)) => {
+                        self.tx_notify.take().unwrap().send(Ok(()));
+                        return Ok(Async::Ready(()));
+                    }
+                    Ok(Async::Ready(Some(..))) | Err(..) => {
+                        unreachable!("rx_drain never receives a value")
+                    }
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                },
+            };
+        }
+    }
+}
+
+enum Never {}
+
+struct Signal {
+    tx: oneshot::Sender<()>,
+    rx_drained: mpsc::Receiver<Never>,
+}
+
+#[derive(Clone)]
+#[allow(missing_debug_implementations)]
+struct Watch {
+    rx: Shared<oneshot::Receiver<()>>,
+    tx_drained: mpsc::Sender<Never>,
+}
+
+impl Watch {
+    fn watch(&mut self) -> bool {
+        match self.rx.poll() {
+            Ok(Async::Ready(..)) | Err(..) => true,
+            Ok(Async::NotReady) => false,
+        }
+    }
+}
+
+#[allow(missing_debug_implementations)]
+struct Watching<Fut, F>
+where
+    Fut: Future,
+    F: FnOnce(&mut Fut),
+{
+    future: Fut,
+    on_drain: Option<F>,
+    watch: Watch,
+}
+
+impl<Fut, F> Watching<Fut, F>
+where
+    Fut: Future,
+    F: FnOnce(&mut Fut),
+{
+    fn new(watch: Watch, future: Fut, on_drain: F) -> Self {
+        Self {
+            future,
+            on_drain: Some(on_drain),
+            watch,
+        }
+    }
+}
+
+impl<Fut, F> Future for Watching<Fut, F>
+where
+    Fut: Future,
+    F: FnOnce(&mut Fut),
+{
+    type Item = Fut::Item;
+    type Error = Fut::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            match self.on_drain.take() {
+                Some(on_drain) => {
+                    if self.watch.watch() {
+                        on_drain(&mut self.future);
+                        continue;
+                    } else {
+                        self.on_drain = Some(on_drain);
+                        return self.future.poll();
+                    }
+                }
+                None => return self.future.poll(),
+            }
+        }
+    }
+}
+
 #[doc(hidden)]
 #[allow(missing_debug_implementations)]
 pub struct HttpServerTask<S, L, T> {
@@ -247,36 +419,75 @@ pub struct HttpServerTask<S, L, T> {
 }
 
 /// A helper macro for creating a server task.
+// TODOs:
+// * add SNI support
+// * refactor
 macro_rules! spawn_inner {
     ($self:expr, $runtime:expr) => {{
         let self_ = $self;
         let runtime = $runtime;
         let (tx_notify, rx_notify) = notify::pair();
-        let executor = runtime.executor();
-        let shutdown_signal = self_.rx_shutdown;
-        let incoming = AddrIncoming {
-            listener: self_.listener,
-            tls_wrapper: self_.tls_wrapper,
-        };
-        let make_service = self_.make_service;
-        runtime.spawn({
-            let mut builder = hyper::Server::builder(incoming).executor(executor);
-            match self_.http_versions {
-                HttpVersions::Http1Only => builder = builder.http1_only(true),
-                HttpVersions::Http2Only => builder = builder.http2_only(true),
-                _ => {}
-            }
+        let (tx, rx) = oneshot::channel();
+        // tokio_sync::mpsc::channel requires that the capacity is greater at least one.
+        let (tx_drained, rx_drained) = mpsc::channel(1);
+        runtime.spawn(Graceful {
+            tx_notify: Some(tx_notify),
+            state: GracefulState::Running {
+                signal: Some(Signal { tx, rx_drained }),
+                watch: Watch {
+                    rx: rx.shared(),
+                    tx_drained,
+                },
+                listener: self_.listener,
+                executor: runtime.executor(),
+                rx_shutdown: self_.rx_shutdown,
+                serve_connection_fn: {
+                    let mut make_service = self_.make_service;
+                    let mut executor = runtime.executor();
+                    let tls_wrapper = self_.tls_wrapper;
 
-            builder
-                .serve(MakeIzanamiService {
-                    make_service,
-                    _marker: PhantomData,
-                })
-                .with_graceful_shutdown(shutdown_signal)
-                .then(move |result| {
-                    tx_notify.send(result.map_err(Into::into));
-                    Ok(())
-                })
+                    let mut protocol =
+                        hyper::server::conn::Http::new().with_executor(executor.clone());
+                    match self_.http_versions {
+                        HttpVersions::Http1Only => {
+                            protocol.http1_only(true);
+                        }
+                        HttpVersions::Http2Only => {
+                            protocol.http2_only(true);
+                        }
+                        _ => {}
+                    }
+
+                    move |conn, remote_addr, watch| {
+                        let mk_svc_fut = make_service
+                            .make_service(&mut Context::new(&remote_addr))
+                            .map_err(|e| log::error!("make service error: {}", e.into()));
+                        let mk_conn_fut = tls_wrapper
+                            .wrap(conn)
+                            .map_err(|e| log::error!("tls error: {}", e.into()));
+                        let protocol = protocol.clone();
+                        (mk_svc_fut, mk_conn_fut) //
+                            .into_future()
+                            .and_then(move |(service, conn)| {
+                                // FIXME: server name indication.
+                                Watching::new(
+                                    watch,
+                                    protocol
+                                        .serve_connection(
+                                            conn,
+                                            IzanamiService {
+                                                service,
+                                                remote_addr,
+                                            },
+                                        )
+                                        .with_upgrades(),
+                                    |conn| conn.graceful_shutdown(),
+                                )
+                                .map_err(|e| log::error!("connection error: {}", e))
+                            })
+                    }
+                },
+            },
         });
         rx_notify
     }};
@@ -291,9 +502,11 @@ where
     L: Listener + Send + 'static,
     T: TlsWrapper<L::Conn> + Send + 'static,
     T::Wrapped: Send + 'static,
+    T::Future: Send + 'static,
 {
     type Output = crate::Result<()>;
 
+    #[allow(unused_mut)]
     fn spawn(self, rt: &mut DefaultRuntime) -> notify::Receiver<Self::Output> {
         spawn_inner!(self, rt)
     }
@@ -307,64 +520,13 @@ where
     L: Listener + 'static,
     T: TlsWrapper<L::Conn> + 'static,
     T::Wrapped: Send + 'static,
+    T::Future: 'static,
 {
     type Output = crate::Result<()>;
 
+    #[allow(unused_mut)]
     fn spawn(self, rt: &mut CurrentThread) -> notify::Receiver<Self::Output> {
         spawn_inner!(self, rt)
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct MakeIzanamiService<S, T> {
-    make_service: S,
-    _marker: PhantomData<fn(&T)>,
-}
-
-impl<'a, S, T> hyper::service::MakeService<&'a AddrStream<T>> for MakeIzanamiService<S, T>
-where
-    S: MakeHttpService,
-{
-    type ReqBody = hyper::Body;
-    type ResBody = InnerBody<S::ResponseBody>;
-    type Error = S::Error;
-    type Service = IzanamiService<S::Service>;
-    type MakeError = S::MakeError;
-    type Future = MakeIzanamiServiceFuture<S::Future>;
-
-    fn make_service(&mut self, conn: &'a AddrStream<T>) -> Self::Future {
-        let remote_addr = conn.remote_addr.clone();
-        MakeIzanamiServiceFuture {
-            future: self
-                .make_service
-                .make_service(&mut Context::new(&remote_addr)),
-            remote_addr: Some(remote_addr),
-        }
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct MakeIzanamiServiceFuture<F: Future> {
-    future: F,
-    remote_addr: Option<RemoteAddr>,
-}
-
-impl<F> Future for MakeIzanamiServiceFuture<F>
-where
-    F: Future,
-{
-    type Item = IzanamiService<F::Item>;
-    type Error = F::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let remote_addr = self
-            .remote_addr
-            .take()
-            .expect("the future has already been polled.");
-        self.future.poll().map_async(move |service| IzanamiService {
-            service,
-            remote_addr,
-        })
     }
 }
 
@@ -435,83 +597,6 @@ where
             (lower, Some(upper)) if lower == upper => Some(upper),
             _ => None,
         }
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct AddrIncoming<T: Listener, W: TlsWrapper<T::Conn>> {
-    listener: T,
-    tls_wrapper: W,
-}
-
-impl<T, W> Stream for AddrIncoming<T, W>
-where
-    T: Listener,
-    W: TlsWrapper<T::Conn>,
-{
-    type Item = AddrStream<W::Wrapped>;
-    type Error = io::Error;
-
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.listener.poll_incoming().map(|x| {
-            x.map(|(io, remote_addr)| {
-                Some(AddrStream {
-                    io: self.tls_wrapper.wrap(io),
-                    remote_addr,
-                })
-            })
-        })
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct AddrStream<T> {
-    io: T,
-    remote_addr: RemoteAddr,
-}
-
-impl<T> io::Read for AddrStream<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    #[inline]
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        self.io.read(dst)
-    }
-}
-
-impl<T> io::Write for AddrStream<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    #[inline]
-    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.io.write(src)
-    }
-
-    #[inline]
-    fn flush(&mut self) -> io::Result<()> {
-        self.io.flush()
-    }
-}
-
-impl<T> AsyncRead for AddrStream<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    #[inline]
-    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [u8]) -> bool {
-        self.io.prepare_uninitialized_buffer(buf)
-    }
-}
-
-impl<T> AsyncWrite for AddrStream<T>
-where
-    T: AsyncRead + AsyncWrite,
-{
-    #[inline]
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        self.io.shutdown()
     }
 }
 
