@@ -1,20 +1,12 @@
-#![cfg(feature = "openssl")]
+#![cfg(feature = "use-openssl")]
 
 use {
     super::{TlsConfig, TlsWrapper},
-    futures::{Async, Poll},
-    openssl::ssl::{
-        AlpnError, //
-        ErrorCode,
-        HandshakeError,
-        MidHandshakeSslStream,
-        ShutdownResult,
-        SslAcceptor,
-        SslAcceptorBuilder,
-        SslStream as RawSslStream,
-    },
+    futures::{Future, Poll},
+    openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder},
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
+    tokio_openssl::{SslAcceptorExt, SslStream},
 };
 
 impl<T> TlsConfig<T> for SslAcceptor
@@ -100,194 +92,34 @@ where
     T: AsyncRead + AsyncWrite,
 {
     type Wrapped = SslStream<T>;
+    type Error = io::Error;
+    type Future = AcceptAsync<T>;
 
     #[inline]
-    fn wrap(&self, io: T) -> Self::Wrapped {
-        SslStream {
-            state: State::MidHandshake(MidHandshake::Start {
-                acceptor: self.clone(),
-                io,
-            }),
+    fn wrap(&self, io: T) -> Self::Future {
+        AcceptAsync {
+            inner: self.accept_async(io),
         }
     }
 }
 
+#[doc(hidden)]
 #[allow(missing_debug_implementations)]
-pub struct SslStream<S> {
-    state: State<S>,
+pub struct AcceptAsync<T: AsyncRead + AsyncWrite> {
+    inner: tokio_openssl::AcceptAsync<T>,
 }
 
-#[allow(missing_debug_implementations)]
-enum State<S> {
-    MidHandshake(MidHandshake<S>),
-    Ready(RawSslStream<S>),
-    Gone,
-}
-
-impl<S> SslStream<S>
-where
-    S: AsyncRead + AsyncWrite,
-{
-    /// Return whether the stream completes the handshake process
-    /// and is available for use as transport.
-    ///
-    /// If this method returns `false`, the stream may progress
-    /// the handshake process before reading/writing the data.
-    pub fn is_ready(&self) -> bool {
-        match self.state {
-            State::Ready(..) => true,
-            _ => false,
-        }
-    }
-
-    /// Progress the internal state to complete the handshake process
-    /// so that the stream can be used as I/O.
-    pub fn poll_ready(&mut self) -> Poll<(), io::Error> {
-        match self.with_handshake(|_| Ok(())) {
-            Ok(()) => Ok(Async::Ready(())),
-            Err(e) => {
-                if e.kind() == io::ErrorKind::WouldBlock {
-                    Ok(Async::NotReady)
-                } else {
-                    Err(e)
-                }
-            }
-        }
-    }
-
-    fn with_handshake<T>(
-        &mut self,
-        op: impl FnOnce(&mut RawSslStream<S>) -> io::Result<T>,
-    ) -> io::Result<T> {
-        loop {
-            self.state = match &mut self.state {
-                State::MidHandshake(m) => match m.try_handshake()? {
-                    Some(io) => State::Ready(io),
-                    None => panic!("cannot perform handshake twice"),
-                },
-                State::Ready(io) => return op(io),
-                State::Gone => return Err(io::ErrorKind::Other.into()),
-            };
-        }
-    }
-}
-
-impl<S> io::Read for SslStream<S>
-where
-    S: AsyncRead + AsyncWrite,
-{
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        self.with_handshake(|io| io.read(buf))
-    }
-}
-
-impl<S> io::Write for SslStream<S>
-where
-    S: AsyncRead + AsyncWrite,
-{
-    fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
-        self.with_handshake(|io| io.write(buf))
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        match &mut self.state {
-            State::MidHandshake(m) => m.flush(),
-            State::Ready(io) => io.flush(),
-            State::Gone => Err(io::ErrorKind::Other.into()),
-        }
-    }
-}
-
-impl<S> AsyncRead for SslStream<S>
-where
-    S: AsyncRead + AsyncWrite,
-{
-    unsafe fn prepare_uninitialized_buffer(&self, _: &mut [u8]) -> bool {
-        true
-    }
-}
-
-impl<S> AsyncWrite for SslStream<S>
-where
-    S: AsyncRead + AsyncWrite,
-{
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        match &mut self.state {
-            State::MidHandshake(m) => {
-                futures::try_ready!(m.shutdown());
-                self.state = State::Gone;
-                Ok(Async::Ready(()))
-            }
-            State::Ready(io) => shutdown_io(io),
-            State::Gone => Ok(().into()),
-        }
-    }
-}
-
-fn shutdown_io<S>(io: &mut RawSslStream<S>) -> Poll<(), io::Error>
-where
-    S: AsyncRead + AsyncWrite,
-{
-    match io.shutdown() {
-        Ok(ShutdownResult::Sent) | Ok(ShutdownResult::Received) => Ok(Async::Ready(())),
-        Err(ref e) if e.code() == ErrorCode::ZERO_RETURN => Ok(Async::Ready(())),
-        Err(ref e) if e.code() == ErrorCode::WANT_READ || e.code() == ErrorCode::WANT_WRITE => {
-            Ok(Async::NotReady)
-        }
-        Err(err) => Err({
-            err.into_io_error()
-                .unwrap_or_else(|e| io::Error::new(io::ErrorKind::Other, e))
-        }),
-    }
-}
-
-#[allow(missing_debug_implementations)]
-enum MidHandshake<T> {
-    Start { acceptor: SslAcceptor, io: T },
-    Handshake(MidHandshakeSslStream<T>),
-    Done,
-}
-
-impl<T> MidHandshake<T>
+impl<T> Future for AcceptAsync<T>
 where
     T: AsyncRead + AsyncWrite,
 {
-    fn try_handshake(&mut self) -> io::Result<Option<RawSslStream<T>>> {
-        match std::mem::replace(self, MidHandshake::Done) {
-            MidHandshake::Start { acceptor, io } => match acceptor.accept(io) {
-                Ok(io) => Ok(Some(io)),
-                Err(HandshakeError::WouldBlock(s)) => {
-                    *self = MidHandshake::Handshake(s);
-                    Err(io::ErrorKind::WouldBlock.into())
-                }
-                Err(_e) => Err(io::Error::new(io::ErrorKind::Other, "handshake error")),
-            },
-            MidHandshake::Handshake(s) => match s.handshake() {
-                Ok(io) => Ok(Some(io)),
-                Err(HandshakeError::WouldBlock(s)) => {
-                    *self = MidHandshake::Handshake(s);
-                    Err(io::ErrorKind::WouldBlock.into())
-                }
-                Err(_e) => Err(io::Error::new(io::ErrorKind::Other, "handshake error")),
-            },
-            MidHandshake::Done => Ok(None),
-        }
-    }
+    type Item = SslStream<T>;
+    type Error = io::Error;
 
-    fn flush(&mut self) -> io::Result<()> {
-        match self {
-            MidHandshake::Start { io, .. } => io.flush(),
-            MidHandshake::Handshake(s) => s.get_mut().flush(),
-            MidHandshake::Done => Err(io::ErrorKind::Other.into()),
-        }
-    }
-
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        match self {
-            MidHandshake::Start { io, .. } => io.shutdown(),
-            MidHandshake::Handshake(s) => s.get_mut().shutdown(),
-            MidHandshake::Done => Err(io::ErrorKind::Other.into()),
-        }
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.inner
+            .poll()
+            .map_err(|_e| io::Error::new(io::ErrorKind::Other, "OpenSSL handshake error"))
     }
 }
 
