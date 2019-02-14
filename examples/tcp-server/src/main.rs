@@ -14,7 +14,6 @@ fn main() -> izanami::Result<()> {
         .build();
 
     HttpServer::new(move || echo.clone()) //
-        .bind("127.0.0.1:5000")?
-        .bind("127.0.0.1:6000")?
+        .bind(vec!["127.0.0.1:5000", "127.0.0.1:6000"])?
         .run()
 }

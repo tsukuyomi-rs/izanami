@@ -31,6 +31,22 @@ where
     }
 }
 
+impl<B> Bind for Vec<B>
+where
+    B: Bind,
+{
+    type Conn = B::Conn;
+    type Listener = B::Listener;
+
+    fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
+        let mut listeners = vec![];
+        for bind in self {
+            listeners.extend(bind.into_listeners()?);
+        }
+        Ok(listeners)
+    }
+}
+
 /// A trait abstracting I/O objects that listens for incoming connections.
 pub trait Listener {
     /// The type of established connection returned from `poll_incoming`.
