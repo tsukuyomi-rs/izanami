@@ -6,6 +6,7 @@ use {
         net::{Bind, Listener},
         system::{notify, CurrentThread, DefaultRuntime, Runtime, Spawn, System},
         tls::{NoTls, TlsConfig, TlsWrapper},
+        util::MapAsyncExt,
     },
     bytes::{Buf, BufMut, Bytes},
     futures::{Async, Future, Poll, Stream},
@@ -267,17 +268,10 @@ macro_rules! spawn_inner {
             }
 
             builder
-                .serve(hyper::service::make_service_fn(
-                    move |conn: &AddrStream<_>| {
-                        let remote_addr = conn.remote_addr.clone();
-                        make_service
-                            .make_service(&mut Context::new(&remote_addr))
-                            .map(move |service| IzanamiService {
-                                service,
-                                remote_addr,
-                            })
-                    },
-                ))
+                .serve(MakeIzanamiService {
+                    make_service,
+                    _marker: PhantomData,
+                })
                 .with_graceful_shutdown(shutdown_signal)
                 .then(move |result| {
                     tx_notify.send(result.map_err(Into::into));
@@ -318,6 +312,59 @@ where
 
     fn spawn(self, rt: &mut CurrentThread) -> notify::Receiver<Self::Output> {
         spawn_inner!(self, rt)
+    }
+}
+
+#[allow(missing_debug_implementations)]
+struct MakeIzanamiService<S, T> {
+    make_service: S,
+    _marker: PhantomData<fn(&T)>,
+}
+
+impl<'a, S, T> hyper::service::MakeService<&'a AddrStream<T>> for MakeIzanamiService<S, T>
+where
+    S: MakeHttpService,
+{
+    type ReqBody = hyper::Body;
+    type ResBody = InnerBody<S::ResponseBody>;
+    type Error = S::Error;
+    type Service = IzanamiService<S::Service>;
+    type MakeError = S::MakeError;
+    type Future = MakeIzanamiServiceFuture<S::Future>;
+
+    fn make_service(&mut self, conn: &'a AddrStream<T>) -> Self::Future {
+        let remote_addr = conn.remote_addr.clone();
+        MakeIzanamiServiceFuture {
+            future: self
+                .make_service
+                .make_service(&mut Context::new(&remote_addr)),
+            remote_addr: Some(remote_addr),
+        }
+    }
+}
+
+#[allow(missing_debug_implementations)]
+struct MakeIzanamiServiceFuture<F: Future> {
+    future: F,
+    remote_addr: Option<RemoteAddr>,
+}
+
+impl<F> Future for MakeIzanamiServiceFuture<F>
+where
+    F: Future,
+{
+    type Item = IzanamiService<F::Item>;
+    type Error = F::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        let remote_addr = self
+            .remote_addr
+            .take()
+            .expect("the future has already been polled.");
+        self.future.poll().map_async(move |service| IzanamiService {
+            service,
+            remote_addr,
+        })
     }
 }
 
@@ -663,7 +710,7 @@ pub trait MakeHttpService {
     type MakeError: Into<BoxedStdError>;
     type Future: Future<Item = Self::Service, Error = Self::MakeError>;
 
-    fn make_service(&self, cx: &mut Context<'_>) -> Self::Future;
+    fn make_service(&mut self, cx: &mut Context<'_>) -> Self::Future;
 }
 
 impl<S, Bd, SvcErr, MkErr, Svc, Fut> MakeHttpService for S
@@ -689,7 +736,7 @@ where
     type MakeError = MkErr;
     type Future = Fut;
 
-    fn make_service(&self, cx: &mut Context<'_>) -> Self::Future {
+    fn make_service(&mut self, cx: &mut Context<'_>) -> Self::Future {
         MakeService::make_service(self, cx)
     }
 }

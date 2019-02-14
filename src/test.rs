@@ -9,11 +9,10 @@
 //! # #![deny(deprecated)]
 //! use {
 //!     http::{Request, Response},
-//!     izanami_service::MakeService,
+//!     izanami_service::Service,
 //!     izanami::test::Server,
 //! };
 //! # use {
-//! #   izanami_service::Service,
 //! #   std::io,
 //! # };
 //!
@@ -23,16 +22,16 @@
 //! let make_service = {
 //!     struct Echo(());
 //!
-//!     impl<Ctx, Bd> MakeService<Ctx, Request<Bd>> for Echo {
+//!     impl<Ctx> Service<Ctx> for Echo {
 //!         // ...
-//! #       type Response = Response<String>;
+//! #       type Response = EchoService;
 //! #       type Error = io::Error;
-//! #       type Service = Echo;
-//! #       type MakeError = io::Error;
-//! #       type Future = futures::future::FutureResult<Self::Service, Self::MakeError>;
-//! #       fn make_service(&self, _: Ctx) -> Self::Future { futures::future::ok(Echo(())) }
+//! #       type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+//! #       fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> { Ok(().into()) }
+//! #       fn call(&mut self, _: Ctx) -> Self::Future { futures::future::ok(EchoService(())) }
 //!     }
-//! #   impl<Bd> Service<Request<Bd>> for Echo {
+//! #   struct EchoService(());
+//! #   impl<Bd> Service<Request<Bd>> for EchoService {
 //! #       type Response = Response<String>;
 //! #       type Error = io::Error;
 //! #       type Future = futures::future::FutureResult<Self::Response, Self::Error>;

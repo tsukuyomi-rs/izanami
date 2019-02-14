@@ -2,7 +2,7 @@ use {
     bytes::Bytes,
     futures::{Async, Poll},
     http::{Request, Response, StatusCode},
-    izanami_service::{MakeService, Service},
+    izanami_service::Service,
     regex::{Captures, Regex, RegexSet},
     std::sync::Arc,
 };
@@ -100,26 +100,28 @@ impl<Bd> Echo<Bd> {
     }
 }
 
+impl<Ctx, Bd> Service<Ctx> for Echo<Bd> {
+    type Response = EchoService<Bd>;
+    type Error = std::io::Error;
+    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(().into())
+    }
+
+    fn call(&mut self, _: Ctx) -> Self::Future {
+        futures::future::ok(EchoService {
+            inner: self.inner.clone(),
+        })
+    }
+}
+
+pub struct EchoService<Bd> {
+    inner: Arc<Inner<Bd>>,
+}
+
 mod imp {
     use super::*;
-
-    impl<Ctx, Bd> MakeService<Ctx, Request<Bd>> for Echo<Bd> {
-        type Response = Response<Bytes>;
-        type Error = std::io::Error;
-        type Service = EchoService<Bd>;
-        type MakeError = std::io::Error;
-        type Future = futures::future::FutureResult<Self::Service, Self::MakeError>;
-
-        fn make_service(&self, _: Ctx) -> Self::Future {
-            futures::future::ok(EchoService {
-                inner: self.inner.clone(),
-            })
-        }
-    }
-
-    pub struct EchoService<Bd> {
-        inner: Arc<Inner<Bd>>,
-    }
 
     impl<Bd> Service<Request<Bd>> for EchoService<Bd> {
         type Response = Response<Bytes>;

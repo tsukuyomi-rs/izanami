@@ -56,15 +56,8 @@ where
     ServiceFn(f)
 }
 
-/// A trait representing a factory of `Service`s.
-///
-/// The signature of this trait imitates `tower_util::MakeService`,
-/// but there are the following differences:
-///
-/// * This trait does not have the method `poll_ready` to check
-///   if the factory is ready for creating a `Service`.
-/// * The method `make_service` is *immutable*.
-pub trait MakeService<Ctx, Request> {
+/// A trait representing an asynchronous factory of `Service`s.
+pub trait MakeService<Ctx, Request>: self::sealed::Sealed<Ctx, Request> {
     /// The response type returned by `Service`.
     type Response;
     /// The error type returned by `Service`.
@@ -76,44 +69,42 @@ pub trait MakeService<Ctx, Request> {
     /// The type of `Future` returned from `make_service`.
     type Future: Future<Item = Self::Service, Error = Self::MakeError>;
 
+    #[doc(hidden)]
+    fn poll_ready(&mut self) -> Poll<(), Self::MakeError>;
+
     /// Creates a `Future` that will return a value of `Service`.
-    fn make_service(&self, ctx: Ctx) -> Self::Future;
+    fn make_service(&mut self, ctx: Ctx) -> Self::Future;
 }
 
-/// An *alias* of `MakeService` receiving the context value of `Ctx` as reference.
-#[allow(missing_docs)]
-pub trait MakeServiceRef<Ctx, Request> {
-    type Response;
-    type Error;
-    type Service: Service<Request, Response = Self::Response, Error = Self::Error>;
-    type MakeError;
-    type Future: Future<Item = Self::Service, Error = Self::MakeError>;
-
-    fn make_service_ref(&self, ctx: &Ctx) -> Self::Future;
-}
-
-impl<S, T, Req, Res, Err, Svc, MkErr, Fut> MakeServiceRef<T, Req> for S
+impl<S, Ctx, Request> MakeService<Ctx, Request> for S
 where
-    for<'a> S: MakeService<
-        &'a T,
-        Req,
-        Response = Res,
-        Error = Err,
-        Service = Svc,
-        MakeError = MkErr,
-        Future = Fut,
-    >,
-    Svc: Service<Req, Response = Res, Error = Err>,
-    Fut: Future<Item = Svc, Error = MkErr>,
+    S: Service<Ctx>,
+    S::Response: Service<Request>,
 {
-    type Response = Res;
-    type Error = Err;
-    type Service = Svc;
-    type MakeError = MkErr;
-    type Future = Fut;
+    type Response = <S::Response as Service<Request>>::Response;
+    type Error = <S::Response as Service<Request>>::Error;
+    type Service = S::Response;
+    type MakeError = S::Error;
+    type Future = S::Future;
 
-    #[inline]
-    fn make_service_ref(&self, ctx: &T) -> Self::Future {
-        MakeService::make_service(self, ctx)
+    fn poll_ready(&mut self) -> Poll<(), Self::MakeError> {
+        Service::poll_ready(self)
+    }
+
+    fn make_service(&mut self, ctx: Ctx) -> Self::Future {
+        Service::call(self, ctx)
+    }
+}
+
+mod sealed {
+    use super::*;
+
+    pub trait Sealed<Ctx, Request> {}
+
+    impl<S, Ctx, Request> Sealed<Ctx, Request> for S
+    where
+        S: Service<Ctx>,
+        S::Response: Service<Request>,
+    {
     }
 }

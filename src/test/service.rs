@@ -192,7 +192,7 @@ pub(crate) mod imp {
         type MakeError: Into<BoxedStdError>;
         type Future: Future<Item = Self::Service, Error = Self::MakeError>;
 
-        fn make_service(&self, cx: TestContext<'_>) -> Self::Future;
+        fn make_service(&mut self, cx: TestContext<'_>) -> Self::Future;
     }
 
     impl<S, Bd, SvcErr, Svc, MkErr, Fut> MakeTestService for S
@@ -237,7 +237,7 @@ pub(crate) mod imp {
         type MakeError = MkErr;
         type Future = Fut;
 
-        fn make_service(&self, cx: TestContext<'_>) -> Self::Future {
+        fn make_service(&mut self, cx: TestContext<'_>) -> Self::Future {
             MakeService::make_service(self, cx)
         }
     }

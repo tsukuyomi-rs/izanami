@@ -2,7 +2,7 @@
 
 use {
     http::{Request, Response},
-    izanami_service::{MakeService, Service},
+    izanami_service::Service,
     std::io,
 };
 
@@ -14,19 +14,23 @@ fn version_sync() {
 #[derive(Default)]
 struct Echo(());
 
-impl<Ctx, Bd> MakeService<Ctx, Request<Bd>> for Echo {
-    type Response = Response<String>;
+impl<Ctx> Service<Ctx> for Echo {
+    type Response = EchoService;
     type Error = io::Error;
-    type Service = Self;
-    type MakeError = io::Error;
-    type Future = futures::future::FutureResult<Self::Service, Self::MakeError>;
+    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
 
-    fn make_service(&self, _: Ctx) -> Self::Future {
-        futures::future::ok(Echo::default())
+    fn poll_ready(&mut self) -> futures::Poll<(), Self::Error> {
+        Ok(().into())
+    }
+
+    fn call(&mut self, _: Ctx) -> Self::Future {
+        futures::future::ok(EchoService(()))
     }
 }
 
-impl<Bd> Service<Request<Bd>> for Echo {
+struct EchoService(());
+
+impl<Bd> Service<Request<Bd>> for EchoService {
     type Response = Response<String>;
     type Error = io::Error;
     type Future = futures::future::FutureResult<Self::Response, Self::Error>;
