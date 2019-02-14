@@ -32,9 +32,16 @@ type SpawnFn<Rt, F> = dyn for<'s> FnMut(
     ) -> crate::Result<()>
     + 'static;
 
+#[derive(Debug, Copy, Clone)]
+enum HttpVersions {
+    Http1Only,
+    Http2Only,
+    Fallback,
+}
+
 /// An HTTP server running on `System`.
 #[allow(missing_debug_implementations)]
-pub struct HttpServer<Rt, F>
+pub struct HttpServer<F, Rt>
 where
     Rt: Runtime,
 {
@@ -42,13 +49,15 @@ where
     tx_shutdown: oneshot::Sender<()>,
     rx_shutdown: ShutdownSignal,
     spawn_fns: Vec<Box<SpawnFn<Rt, F>>>,
+    http_versions: HttpVersions,
+    alpn_protocols: Option<Vec<String>>,
 }
 
-impl<Rt, F, S> HttpServer<Rt, F>
+impl<F, S, Rt> HttpServer<F, Rt>
 where
-    Rt: Runtime,
     F: Fn() -> S,
     S: MakeHttpService,
+    Rt: Runtime,
 {
     /// Creates a `HttpServer` using the specified service factory.
     pub fn new(service_factory: F) -> Self {
@@ -60,6 +69,36 @@ where
                 inner: Some(rx_shutdown.shared()),
             },
             spawn_fns: vec![],
+            http_versions: HttpVersions::Fallback,
+            alpn_protocols: None,
+        }
+    }
+
+    /// Sets whether to use HTTP/1 is required or not.
+    ///
+    /// By default, the server try HTTP/2 at first and switches to HTTP/1 if failed.
+    pub fn http1_only(self) -> Self {
+        Self {
+            http_versions: HttpVersions::Http1Only,
+            ..self
+        }
+    }
+
+    /// Sets whether to use HTTP/2 is required or not.
+    ///
+    /// By default, the server try HTTP/2 at first and switches to HTTP/1 if failed.
+    pub fn http2_only(self) -> Self {
+        Self {
+            http_versions: HttpVersions::Http2Only,
+            ..self
+        }
+    }
+
+    /// Specifies the list of protocols used by ALPN.
+    pub fn alpn_protocols(self, protocols: Vec<String>) -> Self {
+        Self {
+            alpn_protocols: Some(protocols),
+            ..self
         }
     }
 
@@ -80,7 +119,15 @@ where
         HttpServerTask<S, B::Listener, T::Wrapper>: Spawn<Rt, Output = crate::Result<()>>,
     {
         let mut listeners = bind.into_listeners()?;
-        let tls_wrapper = tls.into_wrapper(vec!["h2".into(), "http/1.1".into()])?;
+        let http_versions = self.http_versions;
+
+        let alpn_protocols = match (&self.alpn_protocols, http_versions) {
+            (Some(protocols), _) => protocols.clone(),
+            (None, HttpVersions::Http1Only) => vec!["http/1.1".into()],
+            (None, HttpVersions::Http2Only) => vec!["h2".into()],
+            (None, HttpVersions::Fallback) => vec!["h2".into(), "http/1.1".into()],
+        };
+        let tls_wrapper = tls.into_wrapper(alpn_protocols)?;
 
         self.spawn_fns.push(Box::new(
             move |sys, service_factory, rx_shutdown, handles| {
@@ -90,6 +137,7 @@ where
                         tls_wrapper: tls_wrapper.clone(),
                         make_service: (*service_factory)(),
                         rx_shutdown: rx_shutdown.clone(),
+                        http_versions,
                     });
                     handles.push(handle);
                 }
@@ -114,31 +162,25 @@ where
     }
 }
 
-impl<F, S> HttpServer<DefaultRuntime, F>
+impl<F, S> HttpServer<F, DefaultRuntime>
 where
     F: Fn() -> S,
     S: MakeHttpService,
 {
     /// Create a `System` using the default runtime and drive this serve within it.
     pub fn run(self) -> crate::Result<()> {
-        crate::system::run(move |sys| {
-            sys.wait_incomplete_tasks(false);
-            self.start(sys)?.wait_complete(sys)
-        })
+        crate::system::run(move |sys| self.start(sys)?.wait_complete(sys))
     }
 }
 
-impl<F, S> HttpServer<CurrentThread, F>
+impl<F, S> HttpServer<F, CurrentThread>
 where
     F: Fn() -> S,
     S: MakeHttpService,
 {
     /// Create a `System` using the single-threaded runtime and drive this serve within it.
     pub fn run_local(self) -> crate::Result<()> {
-        crate::system::run_local(move |sys| {
-            sys.wait_incomplete_tasks(false);
-            self.start(sys)?.wait_complete(sys)
-        })
+        crate::system::run_local(move |sys| self.start(sys)?.wait_complete(sys))
     }
 }
 
@@ -200,6 +242,7 @@ pub struct HttpServerTask<S, L, T> {
     listener: L,
     tls_wrapper: T,
     rx_shutdown: ShutdownSignal,
+    http_versions: HttpVersions,
 }
 
 /// A helper macro for creating a server task.
@@ -215,9 +258,15 @@ macro_rules! spawn_inner {
             tls_wrapper: self_.tls_wrapper,
         };
         let make_service = self_.make_service;
-        runtime.spawn(
-            hyper::Server::builder(incoming)
-                .executor(executor)
+        runtime.spawn({
+            let mut builder = hyper::Server::builder(incoming).executor(executor);
+            match self_.http_versions {
+                HttpVersions::Http1Only => builder = builder.http1_only(true),
+                HttpVersions::Http2Only => builder = builder.http2_only(true),
+                _ => {}
+            }
+
+            builder
                 .serve(hyper::service::make_service_fn(
                     move |conn: &AddrStream<_>| {
                         let remote_addr = conn.remote_addr.clone();
@@ -233,8 +282,8 @@ macro_rules! spawn_inner {
                 .then(move |result| {
                     tx_notify.send(result.map_err(Into::into));
                     Ok(())
-                }),
-        );
+                })
+        });
         rx_notify
     }};
 }
