@@ -9,7 +9,7 @@ use {
     },
     futures::{future::Shared, Async, Future, IntoFuture, Poll, Stream},
     http::{Request, Response},
-    izanami_util::RemoteAddr,
+    izanami_util::{RemoteAddr, SniHostname},
     tokio::sync::{mpsc, oneshot},
 };
 
@@ -468,8 +468,7 @@ macro_rules! spawn_inner {
                         let protocol = protocol.clone();
                         (mk_svc_fut, mk_conn_fut) //
                             .into_future()
-                            .and_then(move |(service, conn)| {
-                                // FIXME: server name indication.
+                            .and_then(move |(service, (conn, sni_hostname))| {
                                 Watching::new(
                                     watch,
                                     protocol
@@ -478,6 +477,7 @@ macro_rules! spawn_inner {
                                             IzanamiService {
                                                 service,
                                                 remote_addr,
+                                                sni_hostname,
                                             },
                                         )
                                         .with_upgrades(),
@@ -529,6 +529,7 @@ where
 struct IzanamiService<S> {
     service: S,
     remote_addr: RemoteAddr,
+    sni_hostname: SniHostname,
 }
 
 impl<S> hyper::service::Service for IzanamiService<S>
@@ -544,6 +545,7 @@ where
     fn call(&mut self, request: Request<hyper::Body>) -> Self::Future {
         let mut request = request.map(RequestBody::from_hyp);
         request.extensions_mut().insert(self.remote_addr.clone());
+        request.extensions_mut().insert(self.sni_hostname.clone());
 
         LiftedHttpServiceFuture(self.service.call(request))
     }

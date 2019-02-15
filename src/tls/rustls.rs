@@ -2,7 +2,9 @@
 
 use {
     super::*,
+    crate::util::MapAsyncExt,
     ::rustls::{ServerConfig, ServerSession},
+    futures::Poll,
     std::{io, sync::Arc},
     tokio_rustls::{Accept, TlsAcceptor, TlsStream},
 };
@@ -40,10 +42,32 @@ where
 {
     type Wrapped = TlsStream<T, ServerSession>;
     type Error = io::Error;
-    type Future = Accept<T>;
+    type Future = AcceptWithSni<T>;
 
     #[inline]
     fn wrap(&self, io: T) -> Self::Future {
-        self.accept(io)
+        AcceptWithSni {
+            inner: self.accept(io),
+        }
+    }
+}
+
+#[allow(missing_debug_implementations)]
+pub struct AcceptWithSni<T> {
+    inner: Accept<T>,
+}
+
+impl<T> Future for AcceptWithSni<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
+    type Item = (TlsStream<T, ServerSession>, SniHostname);
+    type Error = io::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.inner.poll().map_async(|conn| {
+            let sni_hostname = conn.get_ref().1.get_sni_hostname().into();
+            (conn, sni_hostname)
+        })
     }
 }

@@ -7,26 +7,27 @@ mod rustls;
 
 use {
     futures::Future,
+    izanami_util::SniHostname,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
 /// Trait representing a SSL/TLS configuration.
 pub trait TlsConfig<T> {
     type Wrapped: AsyncRead + AsyncWrite;
-    type Wrapper: TlsWrapper<T, Wrapped = Self::Wrapped>;
+    type Wrapper: TlsWrapper<T, Wrapped = Self::Wrapped> + Clone;
 
     /// Creates an instance of `Acceptor` using the specified configuration.
     fn into_wrapper(self, alpn_protocols: Vec<String>) -> crate::Result<Self::Wrapper>;
 }
 
 /// Trait representing a converter for granting the SSL/TLS to asynchronous I/Os.
-pub trait TlsWrapper<T>: Clone {
+pub trait TlsWrapper<T> {
     /// The type of wrapped asynchronous I/O returned from `accept`.
     type Wrapped: AsyncRead + AsyncWrite;
 
     type Error: Into<crate::error::BoxedStdError>;
 
-    type Future: Future<Item = Self::Wrapped, Error = Self::Error>;
+    type Future: Future<Item = (Self::Wrapped, SniHostname), Error = Self::Error>;
 
     /// Wraps the specified I/O object in the SSL/TLS stream.
     fn wrap(&self, io: T) -> Self::Future;
@@ -55,10 +56,10 @@ where
 {
     type Wrapped = T;
     type Error = std::io::Error;
-    type Future = futures::future::FutureResult<Self::Wrapped, Self::Error>;
+    type Future = futures::future::FutureResult<(Self::Wrapped, SniHostname), Self::Error>;
 
     #[inline]
     fn wrap(&self, io: T) -> Self::Future {
-        futures::future::ok(io)
+        futures::future::ok((io, SniHostname::unknown()))
     }
 }

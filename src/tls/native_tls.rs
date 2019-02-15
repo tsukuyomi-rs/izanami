@@ -2,6 +2,7 @@
 
 use {
     super::*,
+    crate::util::MapAsyncExt,
     tokio_tls::{Accept, TlsAcceptor, TlsStream},
 };
 
@@ -24,10 +25,32 @@ where
 {
     type Wrapped = TlsStream<T>;
     type Error = ::native_tls::Error;
-    type Future = Accept<T>;
+    type Future = AcceptWithSni<T>;
 
     #[inline]
     fn wrap(&self, io: T) -> Self::Future {
-        self.accept(io)
+        AcceptWithSni {
+            inner: self.accept(io),
+        }
+    }
+}
+
+#[allow(missing_debug_implementations)]
+pub struct AcceptWithSni<T> {
+    inner: Accept<T>,
+}
+
+impl<T> Future for AcceptWithSni<T>
+where
+    T: AsyncRead + AsyncWrite,
+{
+    type Item = (TlsStream<T>, SniHostname);
+    type Error = ::native_tls::Error;
+
+    #[inline]
+    fn poll(&mut self) -> futures::Poll<Self::Item, Self::Error> {
+        self.inner
+            .poll()
+            .map_async(|conn| (conn, SniHostname::unknown()))
     }
 }
