@@ -55,18 +55,18 @@ mod tcp {
             },
             Body,
         },
-        izanami::http::HttpServer,
+        izanami::HttpServer,
         std::{io, net::SocketAddr},
         tokio::net::{TcpListener, TcpStream},
     };
 
     #[test]
     fn tcp_server() -> izanami::Result<()> {
-        izanami::system::run_local(|sys| {
+        izanami::system::current_thread(|sys| {
             let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
             let local_addr = listener.local_addr()?;
 
-            let mut server = HttpServer::new(|| super::Echo::default())
+            let server = HttpServer::new(|| super::Echo::default())
                 .bind(listener)?
                 .start(sys)?;
 
@@ -84,8 +84,7 @@ mod tcp {
             let body = sys.block_on(response.into_body().concat2())?;
             assert_eq!(body.into_bytes(), "hello");
 
-            server.send_shutdown_signal();
-            server.wait_complete(sys)?;
+            sys.block_on(server.shutdown()).unwrap();
 
             Ok(())
         })
@@ -123,7 +122,7 @@ mod unix {
             },
             Body,
         },
-        izanami::http::HttpServer,
+        izanami::HttpServer,
         std::{io, path::PathBuf},
         tempfile::Builder,
         tokio::net::UnixStream,
@@ -131,11 +130,11 @@ mod unix {
 
     #[test]
     fn unix_server() -> izanami::Result<()> {
-        izanami::system::run_local(|sys| {
+        izanami::system::current_thread(|sys| {
             let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
             let sock_path = sock_tempdir.path().join("connect.sock");
 
-            let mut server = HttpServer::new(|| super::Echo::default())
+            let server = HttpServer::new(|| super::Echo::default())
                 .bind(sock_path.clone())?
                 .start(sys)?;
 
@@ -155,8 +154,7 @@ mod unix {
             let body = sys.block_on(response.into_body().concat2())?;
             assert_eq!(body.into_bytes(), "hello");
 
-            server.send_shutdown_signal();
-            server.wait_complete(sys)?;
+            sys.block_on(server.shutdown()).unwrap();
 
             Ok(())
         })
@@ -195,7 +193,7 @@ mod native_tls {
             },
             Body,
         },
-        izanami::http::HttpServer,
+        izanami::HttpServer,
         std::{io, net::SocketAddr},
         tokio::net::{TcpListener, TcpStream},
         tokio_tls::TlsStream,
@@ -203,7 +201,7 @@ mod native_tls {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        izanami::system::run_local(|sys| {
+        izanami::system::current_thread(|sys| {
             const IDENTITY: &[u8] = include_bytes!("../test/identity.pfx");
             const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
 
@@ -214,7 +212,7 @@ mod native_tls {
                 TlsAcceptor::builder(der).build()?
             };
 
-            let mut server = HttpServer::new(|| super::Echo::default())
+            let server = HttpServer::new(|| super::Echo::default())
                 .bind_tls(listener, native_tls)?
                 .start(sys)?;
 
@@ -242,8 +240,7 @@ mod native_tls {
             )?;
             assert_eq!(body.into_bytes(), "hello");
 
-            server.send_shutdown_signal();
-            server.wait_complete(sys)?;
+            sys.block_on(server.shutdown()).unwrap();
 
             Ok(())
         })
@@ -288,7 +285,7 @@ mod openssl {
             },
             Body,
         },
-        izanami::http::HttpServer,
+        izanami::HttpServer,
         openssl::{
             pkey::PKey,
             ssl::{
@@ -309,7 +306,7 @@ mod openssl {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        izanami::system::run_local(|sys| {
+        izanami::system::current_thread(|sys| {
             let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
             let local_addr = listener.local_addr()?;
 
@@ -323,7 +320,7 @@ mod openssl {
                 builder
             };
 
-            let mut server = HttpServer::new(|| super::Echo::default())
+            let server = HttpServer::new(|| super::Echo::default())
                 .bind_tls(listener, ssl)?
                 .start(sys)?;
 
@@ -356,8 +353,7 @@ mod openssl {
             )?;
             assert_eq!(body.into_bytes(), "hello");
 
-            server.send_shutdown_signal();
-            server.wait_complete(sys)?;
+            sys.block_on(server.shutdown()).unwrap();
 
             Ok(())
         })
@@ -404,7 +400,7 @@ mod rustls {
             },
             Body,
         },
-        izanami::http::HttpServer,
+        izanami::HttpServer,
         std::{io, net::SocketAddr},
         tokio::net::{TcpListener, TcpStream},
         tokio_tls::TlsStream,
@@ -412,7 +408,7 @@ mod rustls {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        izanami::system::run_local(|sys| {
+        izanami::system::current_thread(|sys| {
             const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
             const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
 
@@ -443,7 +439,7 @@ mod rustls {
                 config
             };
 
-            let mut server = HttpServer::new(|| super::Echo::default())
+            let server = HttpServer::new(|| super::Echo::default())
                 .bind_tls(listener, rustls)?
                 .start(sys)?;
 
@@ -472,8 +468,7 @@ mod rustls {
             )?;
             assert_eq!(body.into_bytes(), "hello");
 
-            server.send_shutdown_signal();
-            server.wait_complete(sys)?;
+            sys.block_on(server.shutdown()).unwrap();
 
             Ok(())
         })

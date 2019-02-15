@@ -3,7 +3,7 @@
 use {futures::Future, std::marker::PhantomData};
 
 /// Run the specified function onto the system using the default runtime.
-pub fn run<F, T>(f: F) -> crate::Result<T>
+pub fn default<F, T>(f: F) -> crate::Result<T>
 where
     F: FnOnce(&mut System<'_>) -> crate::Result<T>,
 {
@@ -21,7 +21,7 @@ where
 }
 
 /// Run the specified function onto the system using the single-threaded runtime.
-pub fn run_local<F, T>(f: F) -> crate::Result<T>
+pub fn current_thread<F, T>(f: F) -> crate::Result<T>
 where
     F: FnOnce(&mut System<'_, CurrentThread>) -> crate::Result<T>,
 {
@@ -61,15 +61,12 @@ where
         }
     }
 
-    /// Spawn the specified future onto this system and returns the associated `Handle`.
-    pub fn spawn<F>(&mut self, future: F) -> Handle<'s, Rt, F::Output>
+    /// Spawn the specified future onto this system.
+    pub fn spawn<F>(&mut self, future: F)
     where
         F: Spawn<Rt>,
     {
-        Handle {
-            rx_complete: future.spawn(&mut self.runtime),
-            _marker: PhantomData,
-        }
+        future.spawn(&mut self.runtime)
     }
 
     /// Run the specified future onto this system and await its result.
@@ -85,28 +82,7 @@ where
     ///
     /// The default value is `true`.
     pub fn wait_incomplete_tasks(&mut self, enabled: bool) {
-        self.wait_incomplete_tasks = enabled
-    }
-}
-
-/// The handle for managing a spawned task.
-#[derive(Debug)]
-pub struct Handle<'rt, Rt: Runtime, T> {
-    rx_complete: notify::Receiver<T>,
-    _marker: PhantomData<fn(&mut System<'rt, Rt>)>,
-}
-
-impl<'rt, Rt, T> Handle<'rt, Rt, T>
-where
-    Rt: Runtime,
-{
-    /// Wait for the completion of associated task and returns its result.
-    pub fn wait_complete(self, sys: &mut System<'rt, Rt>) -> T
-    where
-        notify::Receiver<T>: BlockOn<Rt, Output = Result<T, ()>>,
-    {
-        sys.block_on(self.rx_complete) //
-            .unwrap_or_else(|_| panic!("failed to receive completion signal"))
+        self.wait_incomplete_tasks = enabled;
     }
 }
 
@@ -171,11 +147,13 @@ impl CurrentThread {
 
 impl Runtime for CurrentThread {}
 
-/// Trait representing the ability to run a future.
-pub trait BlockOn<Rt: Runtime = DefaultRuntime> {
+/// Trait representing the value that drives on the specific runtime
+/// and returns a result.
+pub trait BlockOn<Rt: Runtime + ?Sized = DefaultRuntime> {
+    /// The result type obtained by driving this value.
     type Output;
 
-    /// Run the provided future onto this runtime until it completes.
+    /// Run this value onto the specified runtime until it completes.
     fn block_on(self, rt: &mut Rt) -> Self::Output;
 }
 
@@ -203,93 +181,35 @@ where
     }
 }
 
-/// Trait representing the value to be spawned onto `System`.
+/// Trait representing the value to be spawned onto the specific runtime.
 ///
-/// The role of this trait is similar to `Future`, but it explicitly
-/// specifies the type of runtime to be spawned.
-pub trait Spawn<Rt: Runtime = DefaultRuntime> {
-    /// The output type which will be returned when the spawned task completes.
-    type Output;
-
-    /// Spawned itself onto the specified system.
-    fn spawn(self, rt: &mut Rt) -> notify::Receiver<Self::Output>;
+/// The role of this trait is similar to `Future`, but there are
+/// the following differences:
+///
+/// * The implementor of this trait might spawns multiple tasks
+///   with a single call.
+/// * Unlike `Future<Item = (), Error= ()>`, this trait explicitly
+///   specifies a reference to the runtime and can use its runtime
+///   when constructing the task(s) to be spawned.
+pub trait Spawn<Rt: Runtime + ?Sized = DefaultRuntime> {
+    /// Spawns itself onto the specified runtime.
+    fn spawn(self, rt: &mut Rt);
 }
 
 impl<F> Spawn<DefaultRuntime> for F
 where
-    F: Future + Send + 'static,
-    F::Item: Send + 'static,
-    F::Error: Send + 'static,
+    F: Future<Item = (), Error = ()> + Send + 'static,
 {
-    type Output = Result<F::Item, F::Error>;
-
-    fn spawn(self, rt: &mut DefaultRuntime) -> notify::Receiver<Self::Output> {
-        let (tx, rx) = notify::pair();
-        rt.spawn(self.then(move |result| {
-            tx.send(result);
-            Ok(())
-        }));
-        rx
+    fn spawn(self, rt: &mut DefaultRuntime) {
+        rt.spawn(self);
     }
 }
 
 impl<F> Spawn<CurrentThread> for F
 where
-    F: Future + 'static,
+    F: Future<Item = (), Error = ()> + 'static,
 {
-    type Output = Result<F::Item, F::Error>;
-
-    fn spawn(self, rt: &mut CurrentThread) -> notify::Receiver<Self::Output> {
-        let (tx, rx) = notify::pair();
-        rt.spawn(self.then(move |result| {
-            tx.send(result);
-            Ok(())
-        }));
-        rx
-    }
-}
-
-#[doc(hidden)]
-pub mod notify {
-    use {
-        futures::{Future, Poll},
-        tokio::sync::oneshot,
-    };
-
-    pub(crate) fn pair<T>() -> (Sender<T>, Receiver<T>) {
-        let (tx, rx) = oneshot::channel();
-        (Sender { inner: tx }, Receiver { inner: Ok(rx) })
-    }
-
-    #[derive(Debug)]
-    pub(crate) struct Sender<T> {
-        inner: oneshot::Sender<T>,
-    }
-
-    impl<T> Sender<T> {
-        pub(crate) fn send(self, value: T) {
-            let _ = self.inner.send(value);
-        }
-    }
-
-    #[derive(Debug)]
-    pub struct Receiver<T> {
-        inner: Result<oneshot::Receiver<T>, Option<T>>,
-    }
-
-    impl<T> Future for Receiver<T> {
-        type Item = T;
-        type Error = ();
-
-        #[inline]
-        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-            match &mut self.inner {
-                Ok(rx) => rx.poll().map_err(|_| ()),
-                Err(value) => Ok(value
-                    .take()
-                    .expect("the future has already been polled")
-                    .into()),
-            }
-        }
+    fn spawn(self, rt: &mut CurrentThread) {
+        rt.spawn(self);
     }
 }

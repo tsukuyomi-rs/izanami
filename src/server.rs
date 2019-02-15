@@ -1,34 +1,26 @@
 //! HTTP server.
 
 use {
-    crate::error::BoxedStdError,
     crate::{
         net::{Bind, Listener},
-        system::{notify, CurrentThread, DefaultRuntime, Runtime, Spawn, System},
+        service::{HttpService, MakeContext, MakeHttpService, RequestBody, ResponseBody},
+        system::{CurrentThread, DefaultRuntime, Runtime, Spawn, System},
         tls::{NoTls, TlsConfig, TlsWrapper},
     },
-    bytes::{Buf, BufMut, Bytes},
     futures::{future::Shared, Async, Future, IntoFuture, Poll, Stream},
-    http::{HeaderMap, Request, Response},
-    hyper::body::Payload as _Payload,
-    izanami_service::{MakeService, Service},
-    izanami_util::{
-        buf_stream::{BufStream, SizeHint},
-        http::{HasTrailers, Upgrade},
-        RemoteAddr,
-    },
-    std::{io, marker::PhantomData},
-    tokio::{
-        io::{AsyncRead, AsyncWrite},
-        sync::{mpsc, oneshot},
-    },
+    http::{Request, Response},
+    izanami_util::RemoteAddr,
+    tokio::sync::{mpsc, oneshot},
 };
+
+// FIXME: replace with never type.
+enum Never {}
 
 type SpawnFn<Rt, F> = dyn for<'s> FnMut(
         &mut System<'s, Rt>,
         &F,
         &ShutdownSignal,
-        &mut Vec<crate::system::Handle<'s, Rt, crate::Result<()>>>,
+        &mpsc::Sender<Never>,
     ) -> crate::Result<()>
     + 'static;
 
@@ -106,7 +98,7 @@ where
     pub fn bind<B>(self, bind: B) -> crate::Result<Self>
     where
         B: Bind + 'static,
-        HttpServerTask<S, B::Listener, NoTls>: Spawn<Rt, Output = crate::Result<()>>,
+        HttpServerTask<S, B::Listener, NoTls>: Spawn<Rt>,
     {
         self.bind_tls(bind, NoTls::default())
     }
@@ -116,7 +108,7 @@ where
     where
         B: Bind + 'static,
         T: TlsConfig<B::Conn> + 'static,
-        HttpServerTask<S, B::Listener, T::Wrapper>: Spawn<Rt, Output = crate::Result<()>>,
+        HttpServerTask<S, B::Listener, T::Wrapper>: Spawn<Rt>,
     {
         let mut listeners = bind.into_listeners()?;
         let http_versions = self.http_versions;
@@ -130,16 +122,16 @@ where
         let tls_wrapper = tls.into_wrapper(alpn_protocols)?;
 
         self.spawn_fns.push(Box::new(
-            move |sys, service_factory, rx_shutdown, handles| {
+            move |sys, service_factory, rx_shutdown, tx_drained| {
                 for listener in listeners.drain(..) {
-                    let handle = sys.spawn(HttpServerTask {
+                    sys.spawn(HttpServerTask {
                         listener,
                         tls_wrapper: tls_wrapper.clone(),
                         make_service: (*service_factory)(),
                         rx_shutdown: rx_shutdown.clone(),
+                        tx_drained: tx_drained.clone(),
                         http_versions,
                     });
-                    handles.push(handle);
                 }
                 Ok(())
             },
@@ -148,64 +140,73 @@ where
         Ok(self)
     }
 
-    /// Start all tasks registered on this server and returns a handle that controls their tasks.
-    pub fn start<'s>(self, sys: &mut System<'s, Rt>) -> crate::Result<ServeHandle<'s, Rt>> {
-        let mut handles = vec![];
+    /// Start all tasks registered on this server onto the specified system.
+    ///
+    /// This method returns a `Handle` to notify a shutdown signal to the all of
+    /// spawned tasks and track their completion.
+    pub fn start(self, sys: &mut System<'_, Rt>) -> crate::Result<Handle> {
+        let (tx_drained, rx_drained) = mpsc::channel(1);
         for mut spawn_fn in self.spawn_fns {
-            (spawn_fn)(sys, &self.service_factory, &self.rx_shutdown, &mut handles)?;
+            (spawn_fn)(sys, &self.service_factory, &self.rx_shutdown, &tx_drained)?;
         }
 
-        Ok(ServeHandle {
-            handles,
-            tx_shutdown: Some(self.tx_shutdown),
+        Ok(Handle {
+            tx_shutdown: self.tx_shutdown,
+            draining: Draining { rx_drained },
         })
     }
-}
 
-impl<F, S> HttpServer<F, DefaultRuntime>
-where
-    F: Fn() -> S,
-    S: MakeHttpService,
-{
-    /// Create a `System` using the default runtime and drive this serve within it.
-    pub fn run(self) -> crate::Result<()> {
-        crate::system::run(move |sys| self.start(sys)?.wait_complete(sys))
-    }
-}
-
-impl<F, S> HttpServer<F, CurrentThread>
-where
-    F: Fn() -> S,
-    S: MakeHttpService,
-{
-    /// Create a `System` using the single-threaded runtime and drive this serve within it.
-    pub fn run_local(self) -> crate::Result<()> {
-        crate::system::run_local(move |sys| self.start(sys)?.wait_complete(sys))
+    /// Run this server onto the specified `System`.
+    pub fn run(self, sys: &mut System<'_, Rt>) -> crate::Result<()>
+    where
+        Handle: crate::system::BlockOn<Rt>,
+    {
+        let server = self.start(sys)?;
+        let _ = sys.block_on(server);
+        Ok(())
     }
 }
 
 #[derive(Debug)]
-pub struct ServeHandle<'s, Rt: Runtime> {
-    handles: Vec<crate::system::Handle<'s, Rt, crate::Result<()>>>,
-    tx_shutdown: Option<oneshot::Sender<()>>,
+pub struct Handle {
+    tx_shutdown: oneshot::Sender<()>,
+    draining: Draining,
 }
 
-impl<'s, Rt: Runtime> ServeHandle<'s, Rt> {
-    pub fn send_shutdown_signal(&mut self) {
-        if let Some(tx_shutdown) = self.tx_shutdown.take() {
-            let _ = tx_shutdown.send(());
-        }
+impl Handle {
+    /// Send a shutdown signal to the background tasks.
+    pub fn shutdown(self) -> impl Future<Item = (), Error = ()> {
+        let _ = self.tx_shutdown.send(());
+        self.draining
     }
+}
 
-    pub fn wait_complete(self, sys: &mut System<'s, Rt>) -> crate::Result<()>
-    where
-        crate::system::notify::Receiver<crate::Result<()>>:
-            crate::system::BlockOn<Rt, Output = Result<crate::Result<()>, ()>>,
-    {
-        for handle in self.handles {
-            handle.wait_complete(sys)?;
+impl Future for Handle {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.draining.poll()
+    }
+}
+
+#[derive(Debug)]
+struct Draining {
+    rx_drained: mpsc::Receiver<Never>,
+}
+
+impl Future for Draining {
+    type Item = ();
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        match self.rx_drained.poll() {
+            Ok(Async::Ready(Some(..))) | Err(..) => {
+                unreachable!("Receiver<Never> never receives a value")
+            }
+            Ok(Async::Ready(None)) => Ok(Async::Ready(())),
+            Ok(Async::NotReady) => Ok(Async::NotReady),
         }
-        Ok(())
     }
 }
 
@@ -262,7 +263,7 @@ where
 #[allow(unused)]
 struct Graceful<L, E, F> {
     state: GracefulState<L, E, F>,
-    tx_notify: Option<notify::Sender<crate::Result<()>>>,
+    tx_drained: Option<mpsc::Sender<Never>>,
 }
 
 enum GracefulState<L, E, F> {
@@ -310,7 +311,8 @@ where
                             Ok(Async::Ready((conn, addr))) => (conn, addr),
                             Ok(Async::NotReady) => return Ok(Async::NotReady),
                             Err(e) => {
-                                self.tx_notify.take().unwrap().send(Err(e.into()));
+                                log::error!("accept error: {}", e);
+                                drop(self.tx_drained.take());
                                 return Ok(Async::Ready(()));
                             }
                         };
@@ -321,7 +323,7 @@ where
                 },
                 GracefulState::Draining(rx_drained) => match rx_drained.poll() {
                     Ok(Async::Ready(None)) => {
-                        self.tx_notify.take().unwrap().send(Ok(()));
+                        drop(self.tx_drained.take());
                         return Ok(Async::Ready(()));
                     }
                     Ok(Async::Ready(Some(..))) | Err(..) => {
@@ -333,8 +335,6 @@ where
         }
     }
 }
-
-enum Never {}
 
 struct Signal {
     tx: oneshot::Sender<()>,
@@ -415,6 +415,7 @@ pub struct HttpServerTask<S, L, T> {
     listener: L,
     tls_wrapper: T,
     rx_shutdown: ShutdownSignal,
+    tx_drained: mpsc::Sender<Never>,
     http_versions: HttpVersions,
 }
 
@@ -426,12 +427,11 @@ macro_rules! spawn_inner {
     ($self:expr, $runtime:expr) => {{
         let self_ = $self;
         let runtime = $runtime;
-        let (tx_notify, rx_notify) = notify::pair();
         let (tx, rx) = oneshot::channel();
         // tokio_sync::mpsc::channel requires that the capacity is greater at least one.
         let (tx_drained, rx_drained) = mpsc::channel(1);
         runtime.spawn(Graceful {
-            tx_notify: Some(tx_notify),
+            tx_drained: Some(self_.tx_drained),
             state: GracefulState::Running {
                 signal: Some(Signal { tx, rx_drained }),
                 watch: Watch {
@@ -460,7 +460,7 @@ macro_rules! spawn_inner {
 
                     move |conn, remote_addr, watch| {
                         let mk_svc_fut = make_service
-                            .make_service(&mut Context::new(&remote_addr))
+                            .make_service(&mut MakeContext::new(&remote_addr))
                             .map_err(|e| log::error!("make service error: {}", e.into()));
                         let mk_conn_fut = tls_wrapper
                             .wrap(conn)
@@ -489,7 +489,6 @@ macro_rules! spawn_inner {
                 },
             },
         });
-        rx_notify
     }};
 }
 
@@ -504,10 +503,8 @@ where
     T::Wrapped: Send + 'static,
     T::Future: Send + 'static,
 {
-    type Output = crate::Result<()>;
-
     #[allow(unused_mut)]
-    fn spawn(self, rt: &mut DefaultRuntime) -> notify::Receiver<Self::Output> {
+    fn spawn(self, rt: &mut DefaultRuntime) {
         spawn_inner!(self, rt)
     }
 }
@@ -522,10 +519,8 @@ where
     T::Wrapped: Send + 'static,
     T::Future: 'static,
 {
-    type Output = crate::Result<()>;
-
     #[allow(unused_mut)]
-    fn spawn(self, rt: &mut CurrentThread) -> notify::Receiver<Self::Output> {
+    fn spawn(self, rt: &mut CurrentThread) {
         spawn_inner!(self, rt)
     }
 }
@@ -598,298 +593,4 @@ where
             _ => None,
         }
     }
-}
-
-// ==== Service ====
-
-/// Context values passed from the server when creating the service.
-///
-/// Currently, there is nothing available from the value of this type.
-#[derive(Debug)]
-pub struct Context<'a> {
-    remote_addr: &'a RemoteAddr,
-    _anchor: PhantomData<std::rc::Rc<()>>,
-}
-
-impl<'a> Context<'a> {
-    pub(crate) fn new(remote_addr: &'a RemoteAddr) -> Self {
-        Self {
-            remote_addr,
-            _anchor: PhantomData,
-        }
-    }
-
-    pub fn remote_addr(&self) -> &RemoteAddr {
-        &*self.remote_addr
-    }
-}
-
-/// An asynchronous stream of chunks that represents the HTTP request body.
-#[derive(Debug)]
-pub struct RequestBody(Inner);
-
-#[derive(Debug)]
-enum Inner {
-    Stream(hyper::Body),
-    OnUpgrade(hyper::upgrade::OnUpgrade),
-}
-
-impl RequestBody {
-    pub(crate) fn from_hyp(body: hyper::Body) -> Self {
-        RequestBody(Inner::Stream(body))
-    }
-
-    /// Returns whether the body is complete or not.
-    pub fn is_end_stream(&self) -> bool {
-        match &self.0 {
-            Inner::Stream(body) => body.is_end_stream(),
-            _ => true,
-        }
-    }
-
-    /// Returns whether this stream has already been upgraded.
-    ///
-    /// If this method returns `true`, the result from `BufStream::poll_buf`
-    /// or `HasTrailers::poll_trailers` becomes an error.
-    pub fn is_upgraded(&self) -> bool {
-        match self.0 {
-            Inner::OnUpgrade(..) => true,
-            _ => false,
-        }
-    }
-
-    /// Returns a length of the total bytes, if possible.
-    pub fn content_length(&self) -> Option<u64> {
-        match &self.0 {
-            Inner::Stream(body) => body.content_length(),
-            _ => None,
-        }
-    }
-}
-
-impl BufStream for RequestBody {
-    type Item = io::Cursor<Bytes>;
-    type Error = BoxedStdError;
-
-    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match &mut self.0 {
-            Inner::Stream(body) => body
-                .poll_data()
-                .map(|x| x.map(|opt| opt.map(|chunk| io::Cursor::new(chunk.into_bytes()))))
-                .map_err(Into::into),
-            Inner::OnUpgrade(..) => Err(already_upgraded()),
-        }
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        match &self.0 {
-            Inner::Stream(body) => {
-                let mut hint = SizeHint::new();
-                if let Some(len) = body.content_length() {
-                    hint.set_upper(len);
-                    hint.set_lower(len);
-                }
-                hint
-            }
-            Inner::OnUpgrade(..) => SizeHint::new(),
-        }
-    }
-}
-
-impl HasTrailers for RequestBody {
-    type TrailersError = BoxedStdError;
-
-    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
-        match &mut self.0 {
-            Inner::Stream(body) => body.poll_trailers().map_err(Into::into),
-            Inner::OnUpgrade(..) => Err(already_upgraded()),
-        }
-    }
-}
-
-impl Upgrade for RequestBody {
-    type Upgraded = Upgraded;
-    type Error = BoxedStdError;
-
-    fn poll_upgrade(&mut self) -> Poll<Self::Upgraded, Self::Error> {
-        loop {
-            self.0 = match &mut self.0 {
-                Inner::Stream(body) => {
-                    let body = std::mem::replace(body, hyper::Body::empty());
-                    Inner::OnUpgrade(body.on_upgrade())
-                }
-                Inner::OnUpgrade(on_upgrade) => {
-                    return on_upgrade
-                        .poll()
-                        .map(|x| x.map(Upgraded))
-                        .map_err(Into::into);
-                }
-            };
-        }
-    }
-}
-
-#[derive(Debug)]
-pub struct Upgraded(hyper::upgrade::Upgraded);
-
-impl Upgraded {
-    #[inline]
-    pub fn downcast<T>(self) -> Result<(T, Bytes), Self>
-    where
-        T: AsyncRead + AsyncWrite + 'static,
-    {
-        self.0
-            .downcast::<T>()
-            .map(|parts| (parts.io, parts.read_buf))
-            .map_err(Upgraded)
-    }
-}
-
-impl io::Read for Upgraded {
-    #[inline]
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        self.0.read(dst)
-    }
-}
-
-impl io::Write for Upgraded {
-    #[inline]
-    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.0.write(src)
-    }
-
-    #[inline]
-    fn flush(&mut self) -> io::Result<()> {
-        self.0.flush()
-    }
-}
-
-impl AsyncRead for Upgraded {
-    #[inline]
-    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [u8]) -> bool {
-        self.0.prepare_uninitialized_buffer(buf)
-    }
-
-    #[inline]
-    fn read_buf<B: BufMut>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
-        self.0.read_buf(buf)
-    }
-}
-
-impl AsyncWrite for Upgraded {
-    #[inline]
-    fn write_buf<B: Buf>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
-        self.0.write_buf(buf)
-    }
-
-    #[inline]
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        self.0.shutdown()
-    }
-}
-
-pub trait MakeHttpService {
-    type ResponseBody: ResponseBody + Send + 'static;
-    type Error: Into<BoxedStdError>;
-    type Service: HttpService<ResponseBody = Self::ResponseBody, Error = Self::Error>;
-    type MakeError: Into<BoxedStdError>;
-    type Future: Future<Item = Self::Service, Error = Self::MakeError>;
-
-    fn make_service(&mut self, cx: &mut Context<'_>) -> Self::Future;
-}
-
-impl<S, Bd, SvcErr, MkErr, Svc, Fut> MakeHttpService for S
-where
-    S: for<'cx, 'srv> MakeService<
-        &'cx mut Context<'srv>, //
-        Request<RequestBody>,
-        Response = Response<Bd>,
-        Error = SvcErr,
-        Service = Svc,
-        MakeError = MkErr,
-        Future = Fut,
-    >,
-    SvcErr: Into<BoxedStdError>,
-    MkErr: Into<BoxedStdError>,
-    Svc: Service<Request<RequestBody>, Response = Response<Bd>, Error = SvcErr>,
-    Fut: Future<Item = Svc, Error = MkErr>,
-    Bd: ResponseBody + Send + 'static,
-{
-    type ResponseBody = Bd;
-    type Error = SvcErr;
-    type Service = Svc;
-    type MakeError = MkErr;
-    type Future = Fut;
-
-    fn make_service(&mut self, cx: &mut Context<'_>) -> Self::Future {
-        MakeService::make_service(self, cx)
-    }
-}
-
-pub trait HttpService {
-    type ResponseBody: ResponseBody + Send + 'static;
-    type Error: Into<BoxedStdError>;
-    type Future: Future<Item = Response<Self::ResponseBody>, Error = Self::Error>;
-
-    fn call(&mut self, request: Request<RequestBody>) -> Self::Future;
-}
-
-impl<S, Bd> HttpService for S
-where
-    S: Service<Request<RequestBody>, Response = Response<Bd>>,
-    S::Error: Into<BoxedStdError>,
-    Bd: ResponseBody + Send + 'static,
-{
-    type ResponseBody = Bd;
-    type Error = S::Error;
-    type Future = S::Future;
-
-    fn call(&mut self, request: Request<RequestBody>) -> Self::Future {
-        Service::call(self, request)
-    }
-}
-
-pub trait ResponseBody {
-    type Item: Buf + Send;
-    type Error: Into<BoxedStdError>;
-    type TrailersError: Into<BoxedStdError>;
-
-    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error>;
-
-    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError>;
-
-    fn size_hint(&self) -> SizeHint;
-}
-
-impl<Bd> ResponseBody for Bd
-where
-    Bd: BufStream + HasTrailers,
-    Bd::Item: Send,
-    Bd::Error: Into<BoxedStdError>,
-    Bd::TrailersError: Into<BoxedStdError>,
-{
-    type Item = Bd::Item;
-    type Error = Bd::Error;
-    type TrailersError = Bd::TrailersError;
-
-    #[inline]
-    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        BufStream::poll_buf(self)
-    }
-
-    #[inline]
-    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
-        HasTrailers::poll_trailers(self)
-    }
-
-    #[inline]
-    fn size_hint(&self) -> SizeHint {
-        BufStream::size_hint(self)
-    }
-}
-
-fn already_upgraded() -> BoxedStdError {
-    failure::format_err!("the request body has already been upgraded")
-        .compat()
-        .into()
 }

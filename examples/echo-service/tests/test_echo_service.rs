@@ -6,7 +6,7 @@ use {
 
 #[test]
 fn test_empty_routes() -> izanami::Result<()> {
-    izanami::system::run_local(|sys| {
+    izanami::system::current_thread(|sys| {
         let mut server = Server::new(
             Echo::builder() //
                 .build(),
@@ -27,7 +27,7 @@ fn test_empty_routes() -> izanami::Result<()> {
 
 #[test]
 fn test_single_route() -> izanami::Result<()> {
-    izanami::system::run_local(|sys| {
+    izanami::system::current_thread(|sys| {
         let mut server = Server::new(
             Echo::builder() //
                 .add_route("/", |_| {
@@ -57,7 +57,7 @@ fn test_single_route() -> izanami::Result<()> {
 
 #[test]
 fn test_capture_param() -> izanami::Result<()> {
-    izanami::system::run_local(|sys| {
+    izanami::system::current_thread(|sys| {
         let mut server = Server::new(
             Echo::builder() //
                 .add_route("/([0-9]+)", |cx| {

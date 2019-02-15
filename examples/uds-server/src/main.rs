@@ -1,23 +1,25 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::http::HttpServer,
+    izanami::HttpServer,
     std::path::Path,
 };
 
 #[cfg(unix)]
 fn main() -> izanami::Result<()> {
-    let echo = Echo::builder()
-        .add_route("/", |_cx| {
-            Response::builder() //
-                .body("Hello")
-                .unwrap()
-        })?
-        .build();
+    izanami::system::default(|sys| {
+        let echo = Echo::builder()
+            .add_route("/", |_cx| {
+                Response::builder() //
+                    .body("Hello")
+                    .unwrap()
+            })?
+            .build();
 
-    HttpServer::new(move || echo.clone()) //
-        .bind(Path::new("/tmp/echo-service.sock"))?
-        .run_local()
+        HttpServer::new(move || echo.clone()) //
+            .bind(Path::new("/tmp/echo-service.sock"))?
+            .run(sys)
+    })
 }
 
 #[cfg(not(unix))]

@@ -13,8 +13,9 @@
 mod error;
 mod util;
 
-pub mod http;
 pub mod net;
+pub mod server;
+pub mod service;
 pub mod system;
 pub mod test;
 pub mod tls;
@@ -22,5 +23,6 @@ pub mod tls;
 #[doc(inline)]
 pub use crate::{
     error::{Error, Result},
+    server::HttpServer,
     system::System,
 };

@@ -1,7 +1,7 @@
 //! The basic utility for testing HTTP services.
 //!
 //! The purpose of this module is to provide the way to test HTTP services
-//! without using the low level I/O.
+//! without using the network I/O.
 //!
 //! # Example
 //!
@@ -17,7 +17,7 @@
 //! # };
 //!
 //! # fn test_echo() -> izanami::Result<()> {
-//! # izanami::system::run_local(|sys| {
+//! # izanami::system::current_thread(|sys| {
 //! // the target service factory to be tested.
 //! let make_service = {
 //!     struct Echo(());
