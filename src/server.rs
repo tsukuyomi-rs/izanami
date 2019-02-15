@@ -172,63 +172,6 @@ impl Future for Handle {
     }
 }
 
-#[allow(unused)]
-struct SpawnAll<L, E, F> {
-    state: SpawnAllState<L, E, F>,
-    watch: Watch,
-}
-
-enum SpawnAllState<L, E, F> {
-    Running {
-        listener: L,
-        executor: E,
-        serve_connection_fn: F,
-    },
-    Done,
-}
-
-impl<L, E, F> SpawnAll<L, E, F> {
-    fn shutdown(&mut self) {
-        self.state = SpawnAllState::Done;
-    }
-}
-
-impl<L, E, F, Fut> Future for SpawnAll<L, E, F>
-where
-    L: Listener,
-    E: Executor<Fut>,
-    F: FnMut(L::Conn, RemoteAddr, Watch) -> Fut,
-    Fut: Future<Item = (), Error = ()> + 'static,
-{
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            match self.state {
-                SpawnAllState::Running {
-                    ref mut listener,
-                    ref mut executor,
-                    ref mut serve_connection_fn,
-                } => match listener.poll_incoming() {
-                    Ok(Async::Ready((conn, addr))) => {
-                        executor
-                            .execute(serve_connection_fn(conn, addr, self.watch.clone()))
-                            .unwrap_or_else(|_e| log::error!("executor error"));
-                        continue;
-                    }
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Err(e) => {
-                        log::error!("accept error: {}", e);
-                        return Ok(Async::Ready(()));
-                    }
-                },
-                SpawnAllState::Done => return Ok(Async::Ready(())),
-            };
-        }
-    }
-}
-
 #[allow(missing_debug_implementations)]
 pub struct HttpServerTask<S, L, T> {
     make_service: S,
@@ -271,38 +214,35 @@ macro_rules! spawn_inner {
                 .map_err(|e| log::error!("tls error: {}", e.into()));
 
             let protocol = protocol.clone();
-
             (mk_svc_fut, mk_conn_fut) //
                 .into_future()
-                .and_then(move |(service, (conn, sni_hostname))| {
+                .and_then(move |(service, (stream, sni_hostname))| {
+                    let service = IzanamiService {
+                        service,
+                        remote_addr,
+                        sni_hostname,
+                    };
+                    let conn = protocol.serve_connection(stream, service).with_upgrades();
                     watch
-                        .watching(
-                            protocol
-                                .serve_connection(
-                                    conn,
-                                    IzanamiService {
-                                        service,
-                                        remote_addr,
-                                        sni_hostname,
-                                    },
-                                )
-                                .with_upgrades(),
-                            |conn| conn.graceful_shutdown(),
-                        )
+                        .watching(conn, |c, _| c.poll(), |c| c.graceful_shutdown())
                         .map_err(|e| log::error!("connection error: {}", e))
                 })
         };
 
         let spawn_all = SpawnAll {
-            watch: watch.clone(),
-            state: SpawnAllState::Running {
-                listener: self_.listener,
-                executor: runtime.executor(),
-                serve_connection_fn,
-            },
+            listener: self_.listener,
+            executor: runtime.executor(),
+            serve_connection_fn,
+            state: SpawnAllState::Running,
         };
 
-        runtime.spawn(watch.watching(spawn_all, |s| s.shutdown()));
+        let watching = watch.watching(
+            spawn_all,
+            |s, watch| s.poll_watching(watch),
+            |s| s.shutdown(),
+        );
+
+        runtime.spawn(watching);
     }};
 }
 
@@ -336,6 +276,57 @@ where
     #[allow(unused_mut)]
     fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime) {
         spawn_inner!(self, rt)
+    }
+}
+
+#[allow(unused)]
+struct SpawnAll<L, E, F> {
+    listener: L,
+    executor: E,
+    serve_connection_fn: F,
+    state: SpawnAllState,
+}
+
+enum SpawnAllState {
+    Running,
+    Done,
+}
+
+impl<L, E, F> SpawnAll<L, E, F> {
+    fn shutdown(&mut self) {
+        self.state = SpawnAllState::Done;
+    }
+}
+
+impl<L, E, F, Fut> SpawnAll<L, E, F>
+where
+    L: Listener,
+    E: Executor<Fut>,
+    F: FnMut(L::Conn, RemoteAddr, Watch) -> Fut,
+    Fut: Future<Item = (), Error = ()> + 'static,
+{
+    fn poll_watching(&mut self, watch: &Watch) -> Poll<(), ()> {
+        loop {
+            match self.state {
+                SpawnAllState::Running => match self.listener.poll_incoming() {
+                    Ok(Async::Ready((conn, addr))) => {
+                        let serve_connection =
+                            (self.serve_connection_fn)(conn, addr, watch.clone());
+                        self.executor
+                            .execute(serve_connection)
+                            .unwrap_or_else(|_e| log::error!("executor error"));
+                        continue;
+                    }
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Err(e) => {
+                        log::error!("accept error: {}", e);
+                        self.state = SpawnAllState::Done;
+                        return Ok(Async::Ready(()));
+                    }
+                },
+                SpawnAllState::Done => return Ok(Async::Ready(())),
+            };
+        }
     }
 }
 

@@ -9,26 +9,26 @@ enum Never {}
 pub(crate) fn channel() -> (Signal, Watch) {
     let (tx, rx) = oneshot::channel();
     let (tx_drained, rx_drained) = mpsc::channel(1);
-    (
-        Signal { tx, rx_drained },
-        Watch {
-            rx: rx.shared(),
-            tx_drained,
-        },
-    )
+    let signal = Signal {
+        tx,
+        draining: Draining { rx_drained },
+    };
+    let watch = Watch {
+        rx: rx.shared(),
+        tx_drained,
+    };
+    (signal, watch)
 }
 
 #[derive(Debug)]
 pub(crate) struct Signal {
     tx: oneshot::Sender<()>,
-    rx_drained: mpsc::Receiver<Never>,
+    draining: Draining,
 }
 
 impl Signal {
     pub(crate) fn drain(self) -> Draining {
-        Draining {
-            rx_drained: self.rx_drained,
-        }
+        self.draining
     }
 }
 
@@ -37,6 +37,20 @@ impl Future for Signal {
     type Error = ();
 
     #[inline]
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.draining.poll()
+    }
+}
+
+#[derive(Debug)]
+pub(crate) struct Draining {
+    rx_drained: mpsc::Receiver<Never>,
+}
+
+impl Future for Draining {
+    type Item = ();
+    type Error = ();
+
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         match self.rx_drained.poll() {
             Ok(Async::Ready(Some(..))) | Err(..) => {
@@ -63,53 +77,40 @@ impl Watch {
         }
     }
 
-    pub(crate) fn watching<Fut, F>(self, future: Fut, on_drain: F) -> Watching<Fut, F>
+    pub(crate) fn watching<Fut, FnPoll, FnShutdown, T, E>(
+        self,
+        future: Fut,
+        on_poll: FnPoll,
+        on_drain: FnShutdown,
+    ) -> Watching<Fut, FnPoll, FnShutdown>
     where
-        Fut: Future,
-        F: FnOnce(&mut Fut),
+        FnPoll: Fn(&mut Fut, &Watch) -> Poll<T, E>,
+        FnShutdown: FnOnce(&mut Fut),
     {
         Watching {
             future,
+            on_poll,
             on_drain: Some(on_drain),
             watch: self,
         }
     }
 }
 
-#[derive(Debug)]
-pub(crate) struct Draining {
-    rx_drained: mpsc::Receiver<Never>,
-}
-
-impl Future for Draining {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.rx_drained.poll() {
-            Ok(Async::Ready(Some(..))) | Err(..) => {
-                unreachable!("Receiver<Never> never receives a value")
-            }
-            Ok(Async::Ready(None)) => Ok(Async::Ready(())),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-        }
-    }
-}
-
 #[allow(missing_debug_implementations)]
-pub(crate) struct Watching<Fut, F> {
+pub(crate) struct Watching<Fut, FnPoll, FnShutdown> {
     future: Fut,
-    on_drain: Option<F>,
+    on_poll: FnPoll,
+    on_drain: Option<FnShutdown>,
     watch: Watch,
 }
 
-impl<Fut, F> Future for Watching<Fut, F>
+impl<Fut, FnPoll, FnShutdown, T, E> Future for Watching<Fut, FnPoll, FnShutdown>
 where
-    Fut: Future,
-    F: FnOnce(&mut Fut),
+    FnPoll: Fn(&mut Fut, &Watch) -> Poll<T, E>,
+    FnShutdown: FnOnce(&mut Fut),
 {
-    type Item = Fut::Item;
-    type Error = Fut::Error;
+    type Item = T;
+    type Error = E;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
@@ -120,10 +121,10 @@ where
                         continue;
                     } else {
                         self.on_drain = Some(on_drain);
-                        return self.future.poll();
+                        return (self.on_poll)(&mut self.future, &self.watch);
                     }
                 }
-                None => return self.future.poll(),
+                None => return (self.on_poll)(&mut self.future, &self.watch),
             }
         }
     }
