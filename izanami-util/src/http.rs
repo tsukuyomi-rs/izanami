@@ -4,8 +4,8 @@ mod remote;
 mod sni;
 
 pub use {
-    remote::RemoteAddr, //
-    sni::SniHostname,
+    self::remote::RemoteAddr, //
+    self::sni::SniHostname,
 };
 
 use {
