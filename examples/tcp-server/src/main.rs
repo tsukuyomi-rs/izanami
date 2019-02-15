@@ -2,20 +2,20 @@ use {
     echo_service::Echo, //
     http::Response,
     izanami::HttpServer,
+    tokio::runtime::Runtime,
 };
 
 fn main() -> izanami::Result<()> {
-    izanami::system::default(|sys| {
-        let echo = Echo::builder()
-            .add_route("/", |_cx| {
-                Response::builder() //
-                    .body("Hello")
-                    .unwrap()
-            })?
-            .build();
+    let echo = Echo::builder()
+        .add_route("/", |_cx| {
+            Response::builder() //
+                .body("Hello")
+                .unwrap()
+        })?
+        .build();
 
-        HttpServer::new(move || echo.clone()) //
-            .bind(vec!["127.0.0.1:5000", "127.0.0.1:6000"])?
-            .run(sys)
-    })
+    let mut rt = Runtime::new()?;
+    HttpServer::new(move || echo.clone()) //
+        .bind(vec!["127.0.0.1:5000", "127.0.0.1:6000"])?
+        .run(&mut rt)
 }

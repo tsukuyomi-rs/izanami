@@ -2,104 +2,105 @@ use {
     echo_service::Echo,
     http::{Request, Response},
     izanami::test::Server,
+    tokio::runtime::current_thread::Runtime,
 };
 
 #[test]
 fn test_empty_routes() -> izanami::Result<()> {
-    izanami::system::current_thread(|sys| {
-        let mut server = Server::new(
-            Echo::builder() //
-                .build(),
-        );
+    let mut rt = Runtime::new()?;
 
-        let mut client = sys.block_on(server.client())?;
-        let response = sys.block_on(
-            client.respond(
-                Request::get("/") //
-                    .body(())?,
-            ),
-        )?;
-        assert_eq!(response.status(), 404);
+    let mut server = Server::new(
+        Echo::builder() //
+            .build(),
+    );
 
-        Ok(())
-    })
+    let mut client = rt.block_on(server.client())?;
+    let response = rt.block_on(
+        client.respond(
+            Request::get("/") //
+                .body(())?,
+        ),
+    )?;
+    assert_eq!(response.status(), 404);
+
+    Ok(())
 }
 
 #[test]
 fn test_single_route() -> izanami::Result<()> {
-    izanami::system::current_thread(|sys| {
-        let mut server = Server::new(
-            Echo::builder() //
-                .add_route("/", |_| {
-                    Response::builder() //
-                        .body("hello")
-                        .unwrap()
-                })?
-                .build(),
-        );
+    let mut rt = Runtime::new()?;
 
-        let mut client = sys.block_on(server.client())?;
+    let mut server = Server::new(
+        Echo::builder() //
+            .add_route("/", |_| {
+                Response::builder() //
+                    .body("hello")
+                    .unwrap()
+            })?
+            .build(),
+    );
 
-        let response = sys.block_on(
-            client.respond(
-                Request::get("/") //
-                    .body(())?,
-            ),
-        )?;
-        assert_eq!(response.status(), 200);
+    let mut client = rt.block_on(server.client())?;
 
-        let body = sys.block_on(response.send_body())?;
-        assert_eq!(body.to_utf8()?, "hello");
+    let response = rt.block_on(
+        client.respond(
+            Request::get("/") //
+                .body(())?,
+        ),
+    )?;
+    assert_eq!(response.status(), 200);
 
-        Ok(())
-    })
+    let body = rt.block_on(response.send_body())?;
+    assert_eq!(body.to_utf8()?, "hello");
+
+    Ok(())
 }
 
 #[test]
 fn test_capture_param() -> izanami::Result<()> {
-    izanami::system::current_thread(|sys| {
-        let mut server = Server::new(
-            Echo::builder() //
-                .add_route("/([0-9]+)", |cx| {
-                    match cx
-                        .captures()
-                        .and_then(|c| c.get(1))
-                        .and_then(|m| m.as_str().parse::<u32>().ok())
-                    {
-                        Some(id) => Response::builder()
-                            .status(200)
-                            .body(format!("id={}", id))
-                            .unwrap(),
-                        None => Response::builder()
-                            .status(400)
-                            .body("missing or invalid id".into())
-                            .unwrap(),
-                    }
-                })?
-                .build(),
-        );
+    let mut rt = Runtime::new()?;
 
-        let mut client = sys.block_on(server.client())?;
+    let mut server = Server::new(
+        Echo::builder() //
+            .add_route("/([0-9]+)", |cx| {
+                match cx
+                    .captures()
+                    .and_then(|c| c.get(1))
+                    .and_then(|m| m.as_str().parse::<u32>().ok())
+                {
+                    Some(id) => Response::builder()
+                        .status(200)
+                        .body(format!("id={}", id))
+                        .unwrap(),
+                    None => Response::builder()
+                        .status(400)
+                        .body("missing or invalid id".into())
+                        .unwrap(),
+                }
+            })?
+            .build(),
+    );
 
-        let response = sys.block_on(
-            client.respond(
-                Request::get("/42") //
-                    .body(())?,
-            ),
-        )?;
-        assert_eq!(response.status(), 200);
+    let mut client = rt.block_on(server.client())?;
 
-        let body = sys.block_on(response.send_body())?;
-        assert_eq!(body.to_utf8()?, "id=42");
+    let response = rt.block_on(
+        client.respond(
+            Request::get("/42") //
+                .body(())?,
+        ),
+    )?;
+    assert_eq!(response.status(), 200);
 
-        let response = sys.block_on(
-            client.respond(
-                Request::get("/fox") //
-                    .body(())?,
-            ),
-        )?;
-        assert_eq!(response.status(), 404);
+    let body = rt.block_on(response.send_body())?;
+    assert_eq!(body.to_utf8()?, "id=42");
 
-        Ok(())
-    })
+    let response = rt.block_on(
+        client.respond(
+            Request::get("/fox") //
+                .body(())?,
+        ),
+    )?;
+    assert_eq!(response.status(), 404);
+
+    Ok(())
 }

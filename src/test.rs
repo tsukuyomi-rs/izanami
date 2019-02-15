@@ -17,7 +17,8 @@
 //! # };
 //!
 //! # fn test_echo() -> izanami::Result<()> {
-//! # izanami::system::current_thread(|sys| {
+//! let mut rt = tokio::runtime::current_thread::Runtime::new()?;
+//!
 //! // the target service factory to be tested.
 //! let make_service = {
 //!     struct Echo(());
@@ -49,14 +50,14 @@
 //!
 //! // create a `Client` to test an established connection
 //! // with the peer.
-//! let mut client = sys.block_on(server.client())?;
+//! let mut client = rt.block_on(server.client())?;
 //!
 //! // applies an HTTP request to the client and await
 //! // its response.
 //! //
 //! // the method simulates the behavior of service until
 //! // just before starting to send the response body.
-//! let response = sys.block_on(
+//! let response = rt.block_on(
 //!     client
 //!         .respond(
 //!             Request::get("/").body(())?
@@ -65,10 +66,9 @@
 //! assert_eq!(response.status(), 200);
 //!
 //! // drive the response body and await its result.
-//! let body = sys.block_on(response.send_body())?;
+//! let body = rt.block_on(response.send_body())?;
 //! assert_eq!(body.to_utf8()?, "hello");
 //! # Ok(())
-//! # })
 //! # }
 //! # fn main() {}
 //! ```

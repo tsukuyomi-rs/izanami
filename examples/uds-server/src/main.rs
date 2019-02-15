@@ -3,23 +3,23 @@ use {
     http::Response,
     izanami::HttpServer,
     std::path::Path,
+    tokio::runtime::Runtime,
 };
 
 #[cfg(unix)]
 fn main() -> izanami::Result<()> {
-    izanami::system::default(|sys| {
-        let echo = Echo::builder()
-            .add_route("/", |_cx| {
-                Response::builder() //
-                    .body("Hello")
-                    .unwrap()
-            })?
-            .build();
+    let echo = Echo::builder()
+        .add_route("/", |_cx| {
+            Response::builder() //
+                .body("Hello")
+                .unwrap()
+        })?
+        .build();
 
-        HttpServer::new(move || echo.clone()) //
-            .bind(Path::new("/tmp/echo-service.sock"))?
-            .run(sys)
-    })
+    let mut rt = Runtime::new()?;
+    HttpServer::new(move || echo.clone()) //
+        .bind(Path::new("/tmp/echo-service.sock"))?
+        .run(&mut rt)
 }
 
 #[cfg(not(unix))]

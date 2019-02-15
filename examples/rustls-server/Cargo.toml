@@ -17,3 +17,4 @@ rustls = "0.14"
 
 echo-service = { path = "../echo-service" }
 http = "0.1"
+tokio = "0.1"

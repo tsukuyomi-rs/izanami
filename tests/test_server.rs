@@ -57,37 +57,40 @@ mod tcp {
         },
         izanami::HttpServer,
         std::{io, net::SocketAddr},
-        tokio::net::{TcpListener, TcpStream},
+        tokio::{
+            net::{TcpListener, TcpStream},
+            runtime::current_thread::Runtime,
+        },
     };
 
     #[test]
     fn tcp_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
-            let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
-            let local_addr = listener.local_addr()?;
+        let mut rt = Runtime::new()?;
 
-            let server = HttpServer::new(|| super::Echo::default())
-                .bind(listener)?
-                .start(sys)?;
+        let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
+        let local_addr = listener.local_addr()?;
 
-            let client = Client::builder() //
-                .build(TestConnect { local_addr });
+        let server = HttpServer::new(|| super::Echo::default())
+            .bind(listener)?
+            .start(&mut rt)?;
 
-            let response = sys.block_on(
-                client.request(
-                    Request::get("http://localhost/") //
-                        .body(Body::empty())?,
-                ),
-            )?;
-            assert_eq!(response.status(), 200);
+        let client = Client::builder() //
+            .build(TestConnect { local_addr });
 
-            let body = sys.block_on(response.into_body().concat2())?;
-            assert_eq!(body.into_bytes(), "hello");
+        let response = rt.block_on(
+            client.request(
+                Request::get("http://localhost/") //
+                    .body(Body::empty())?,
+            ),
+        )?;
+        assert_eq!(response.status(), 200);
 
-            sys.block_on(server.shutdown()).unwrap();
+        let body = rt.block_on(response.into_body().concat2())?;
+        assert_eq!(body.into_bytes(), "hello");
 
-            Ok(())
-        })
+        rt.block_on(server.shutdown()).unwrap();
+
+        Ok(())
     }
 
     struct TestConnect {
@@ -125,39 +128,42 @@ mod unix {
         izanami::HttpServer,
         std::{io, path::PathBuf},
         tempfile::Builder,
-        tokio::net::UnixStream,
+        tokio::{
+            net::UnixStream, //
+            runtime::current_thread::Runtime,
+        },
     };
 
     #[test]
     fn unix_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
-            let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
-            let sock_path = sock_tempdir.path().join("connect.sock");
+        let mut rt = Runtime::new()?;
 
-            let server = HttpServer::new(|| super::Echo::default())
-                .bind(sock_path.clone())?
-                .start(sys)?;
+        let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
+        let sock_path = sock_tempdir.path().join("connect.sock");
 
-            let client = Client::builder() //
-                .build(TestConnect {
-                    sock_path: sock_path.clone(),
-                });
+        let server = HttpServer::new(|| super::Echo::default())
+            .bind(sock_path.clone())?
+            .start(&mut rt)?;
 
-            let response = sys.block_on(
-                client.request(
-                    Request::get("http://localhost/") //
-                        .body(Body::empty())?,
-                ),
-            )?;
-            assert_eq!(response.status(), 200);
+        let client = Client::builder() //
+            .build(TestConnect {
+                sock_path: sock_path.clone(),
+            });
 
-            let body = sys.block_on(response.into_body().concat2())?;
-            assert_eq!(body.into_bytes(), "hello");
+        let response = rt.block_on(
+            client.request(
+                Request::get("http://localhost/") //
+                    .body(Body::empty())?,
+            ),
+        )?;
+        assert_eq!(response.status(), 200);
 
-            sys.block_on(server.shutdown()).unwrap();
+        let body = rt.block_on(response.into_body().concat2())?;
+        assert_eq!(body.into_bytes(), "hello");
 
-            Ok(())
-        })
+        rt.block_on(server.shutdown()).unwrap();
+
+        Ok(())
     }
 
     struct TestConnect {
@@ -195,55 +201,58 @@ mod native_tls {
         },
         izanami::HttpServer,
         std::{io, net::SocketAddr},
-        tokio::net::{TcpListener, TcpStream},
+        tokio::{
+            net::{TcpListener, TcpStream},
+            runtime::current_thread::Runtime,
+        },
         tokio_tls::TlsStream,
     };
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
-            const IDENTITY: &[u8] = include_bytes!("../test/identity.pfx");
-            const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
+        let mut rt = Runtime::new()?;
 
-            let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
-            let local_addr = listener.local_addr()?;
-            let native_tls = {
-                let der = Identity::from_pkcs12(IDENTITY, "mypass")?;
-                TlsAcceptor::builder(der).build()?
-            };
+        const IDENTITY: &[u8] = include_bytes!("../test/identity.pfx");
+        const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
 
-            let server = HttpServer::new(|| super::Echo::default())
-                .bind_tls(listener, native_tls)?
-                .start(sys)?;
+        let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
+        let local_addr = listener.local_addr()?;
+        let native_tls = {
+            let der = Identity::from_pkcs12(IDENTITY, "mypass")?;
+            TlsAcceptor::builder(der).build()?
+        };
 
-            let client = Client::builder() //
-                .build(TestConnect {
-                    local_addr,
-                    connector: TlsConnector::builder()
-                        .add_root_certificate(Certificate::from_pem(CERTIFICATE)?)
-                        .build()?
-                        .into(),
-                });
+        let server = HttpServer::new(|| super::Echo::default())
+            .bind_tls(listener, native_tls)?
+            .start(&mut rt)?;
 
-            let response = sys.block_on(
-                client.request(
-                    Request::get("http://localhost/") //
-                        .body(Body::empty())?,
-                ),
-            )?;
-            assert_eq!(response.status(), 200);
+        let client = Client::builder() //
+            .build(TestConnect {
+                local_addr,
+                connector: TlsConnector::builder()
+                    .add_root_certificate(Certificate::from_pem(CERTIFICATE)?)
+                    .build()?
+                    .into(),
+            });
 
-            let body = sys.block_on(
-                response
-                    .into_body() //
-                    .concat2(),
-            )?;
-            assert_eq!(body.into_bytes(), "hello");
+        let response = rt.block_on(
+            client.request(
+                Request::get("http://localhost/") //
+                    .body(Body::empty())?,
+            ),
+        )?;
+        assert_eq!(response.status(), 200);
 
-            sys.block_on(server.shutdown()).unwrap();
+        let body = rt.block_on(
+            response
+                .into_body() //
+                .concat2(),
+        )?;
+        assert_eq!(body.into_bytes(), "hello");
 
-            Ok(())
-        })
+        rt.block_on(server.shutdown()).unwrap();
+
+        Ok(())
     }
 
     struct TestConnect {
@@ -297,7 +306,10 @@ mod openssl {
             x509::X509,
         },
         std::{io, net::SocketAddr},
-        tokio::net::{TcpListener, TcpStream},
+        tokio::{
+            net::{TcpListener, TcpStream},
+            runtime::current_thread::Runtime,
+        },
         tokio_openssl::{SslConnectorExt, SslStream},
     };
 
@@ -306,57 +318,57 @@ mod openssl {
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
-            let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
-            let local_addr = listener.local_addr()?;
+        let mut rt = Runtime::new()?;
 
-            let cert = X509::from_pem(CERTIFICATE)?;
-            let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
-            let ssl = {
-                let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
-                builder.set_certificate(&cert)?;
-                builder.set_private_key(&pkey)?;
-                builder.check_private_key()?;
-                builder
-            };
+        let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
+        let local_addr = listener.local_addr()?;
 
-            let server = HttpServer::new(|| super::Echo::default())
-                .bind_tls(listener, ssl)?
-                .start(sys)?;
+        let cert = X509::from_pem(CERTIFICATE)?;
+        let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
+        let ssl = {
+            let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
+            builder.set_certificate(&cert)?;
+            builder.set_private_key(&pkey)?;
+            builder.check_private_key()?;
+            builder
+        };
 
-            let client = Client::builder() //
-                .build(TestConnect {
-                    local_addr,
-                    connector: {
-                        let cert = X509::from_pem(CERTIFICATE)?;
-                        let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
-                        let mut builder = SslConnector::builder(SslMethod::tls())?;
-                        builder.set_verify(SslVerifyMode::NONE);
-                        builder.set_certificate(&cert)?;
-                        builder.set_private_key(&pkey)?;
-                        builder.build()
-                    },
-                });
+        let server = HttpServer::new(|| super::Echo::default())
+            .bind_tls(listener, ssl)?
+            .start(&mut rt)?;
 
-            let response = sys.block_on(
-                client.request(
-                    Request::get("http://localhost/") //
-                        .body(Body::empty())?,
-                ),
-            )?;
-            assert_eq!(response.status(), 200);
+        let client = Client::builder() //
+            .build(TestConnect {
+                local_addr,
+                connector: {
+                    let cert = X509::from_pem(CERTIFICATE)?;
+                    let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
+                    let mut builder = SslConnector::builder(SslMethod::tls())?;
+                    builder.set_verify(SslVerifyMode::NONE);
+                    builder.set_certificate(&cert)?;
+                    builder.set_private_key(&pkey)?;
+                    builder.build()
+                },
+            });
 
-            let body = sys.block_on(
-                response
-                    .into_body() //
-                    .concat2(),
-            )?;
-            assert_eq!(body.into_bytes(), "hello");
+        let response = rt.block_on(
+            client.request(
+                Request::get("http://localhost/") //
+                    .body(Body::empty())?,
+            ),
+        )?;
+        assert_eq!(response.status(), 200);
 
-            sys.block_on(server.shutdown()).unwrap();
+        let body = rt.block_on(
+            response
+                .into_body() //
+                .concat2(),
+        )?;
+        assert_eq!(body.into_bytes(), "hello");
 
-            Ok(())
-        })
+        rt.block_on(server.shutdown()).unwrap();
+
+        Ok(())
     }
 
     struct TestConnect {
@@ -402,76 +414,79 @@ mod rustls {
         },
         izanami::HttpServer,
         std::{io, net::SocketAddr},
-        tokio::net::{TcpListener, TcpStream},
+        tokio::{
+            net::{TcpListener, TcpStream},
+            runtime::current_thread::Runtime,
+        },
         tokio_tls::TlsStream,
     };
 
     #[test]
     fn tls_server() -> izanami::Result<()> {
-        izanami::system::current_thread(|sys| {
-            const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
-            const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
+        let mut rt = Runtime::new()?;
 
-            let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
-            let local_addr = listener.local_addr()?;
-            let rustls = {
-                let certs = {
-                    let mut reader = io::BufReader::new(io::Cursor::new(CERTIFICATE));
-                    ::rustls::internal::pemfile::certs(&mut reader)
-                        .map_err(|_| failure::format_err!("failed to read certificate file"))?
-                };
+        const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");
+        const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
 
-                let priv_key = {
-                    let mut reader = io::BufReader::new(io::Cursor::new(PRIVATE_KEY));
-                    let rsa_keys = {
-                        ::rustls::internal::pemfile::rsa_private_keys(&mut reader).map_err(
-                            |_| failure::format_err!("failed to read private key file as RSA"),
-                        )?
-                    };
-                    rsa_keys
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| failure::format_err!("invalid private key"))?
-                };
-
-                let mut config = ServerConfig::new(NoClientAuth::new());
-                config.set_single_cert(certs, priv_key)?;
-                config
+        let listener = TcpListener::bind(&"127.0.0.1:0".parse()?)?;
+        let local_addr = listener.local_addr()?;
+        let rustls = {
+            let certs = {
+                let mut reader = io::BufReader::new(io::Cursor::new(CERTIFICATE));
+                ::rustls::internal::pemfile::certs(&mut reader)
+                    .map_err(|_| failure::format_err!("failed to read certificate file"))?
             };
 
-            let server = HttpServer::new(|| super::Echo::default())
-                .bind_tls(listener, rustls)?
-                .start(sys)?;
+            let priv_key = {
+                let mut reader = io::BufReader::new(io::Cursor::new(PRIVATE_KEY));
+                let rsa_keys = {
+                    ::rustls::internal::pemfile::rsa_private_keys(&mut reader).map_err(|_| {
+                        failure::format_err!("failed to read private key file as RSA")
+                    })?
+                };
+                rsa_keys
+                    .into_iter()
+                    .next()
+                    .ok_or_else(|| failure::format_err!("invalid private key"))?
+            };
 
-            // FIXME: use rustls
-            let client = Client::builder() //
-                .build(TestConnect {
-                    local_addr,
-                    connector: ::native_tls::TlsConnector::builder()
-                        .add_root_certificate(Certificate::from_pem(CERTIFICATE)?)
-                        .build()?
-                        .into(),
-                });
+            let mut config = ServerConfig::new(NoClientAuth::new());
+            config.set_single_cert(certs, priv_key)?;
+            config
+        };
 
-            let response = sys.block_on(
-                client.request(
-                    Request::get("http://localhost/") //
-                        .body(Body::empty())?,
-                ),
-            )?;
-            assert_eq!(response.status(), 200);
+        let server = HttpServer::new(|| super::Echo::default())
+            .bind_tls(listener, rustls)?
+            .start(&mut rt)?;
 
-            let body = sys.block_on(
-                response
-                    .into_body() //
-                    .concat2(),
-            )?;
-            assert_eq!(body.into_bytes(), "hello");
+        // FIXME: use rustls
+        let client = Client::builder() //
+            .build(TestConnect {
+                local_addr,
+                connector: ::native_tls::TlsConnector::builder()
+                    .add_root_certificate(Certificate::from_pem(CERTIFICATE)?)
+                    .build()?
+                    .into(),
+            });
 
-            sys.block_on(server.shutdown()).unwrap();
+        let response = rt.block_on(
+            client.request(
+                Request::get("http://localhost/") //
+                    .body(Body::empty())?,
+            ),
+        )?;
+        assert_eq!(response.status(), 200);
 
-            Ok(())
-        })
+        let body = rt.block_on(
+            response
+                .into_body() //
+                .concat2(),
+        )?;
+        assert_eq!(body.into_bytes(), "hello");
+
+        rt.block_on(server.shutdown()).unwrap();
+
+        Ok(())
     }
 
     // FIXME: use rustls

@@ -4,17 +4,16 @@ use {
     crate::{
         drain::{Signal, Watch},
         net::{Bind, Listener},
+        runtime::{BlockOn, Runtime, Spawn},
         service::{HttpService, MakeContext, MakeHttpService, RequestBody, ResponseBody},
-        system::{CurrentThread, DefaultRuntime, Runtime, Spawn, System},
         tls::{NoTls, TlsConfig, TlsWrapper},
     },
-    futures::{Async, Future, IntoFuture, Poll},
+    futures::{future::Executor, Async, Future, IntoFuture, Poll},
     http::{Request, Response},
     izanami_util::http::{RemoteAddr, SniHostname},
 };
 
-type SpawnFn<Rt, F> =
-    dyn for<'s> FnMut(&mut System<'s, Rt>, &F, &Watch) -> crate::Result<()> + 'static;
+type SpawnFn<Rt, F> = dyn FnMut(&mut Rt, &F, &Watch) -> crate::Result<()> + 'static;
 
 #[derive(Debug, Copy, Clone)]
 enum HttpVersions {
@@ -128,26 +127,26 @@ where
         Ok(self)
     }
 
-    /// Start all tasks registered on this server onto the specified system.
+    /// Start all tasks registered on this server onto the specified runtime.
     ///
-    /// This method returns a `Handle` to notify a shutdown signal to the all of
-    /// spawned tasks and track their completion.
-    pub fn start(self, sys: &mut System<'_, Rt>) -> crate::Result<Handle> {
+    /// This method returns a `Handle` to notify a shutdown signal to the all
+    /// of spawned tasks and track their completion.
+    pub fn start(self, rt: &mut Rt) -> crate::Result<Handle> {
         for mut spawn_fn in self.spawn_fns {
-            (spawn_fn)(sys, &self.service_factory, &self.watch)?;
+            (spawn_fn)(rt, &self.service_factory, &self.watch)?;
         }
         Ok(Handle {
             signal: self.signal,
         })
     }
 
-    /// Run this server onto the specified `System`.
-    pub fn run(self, sys: &mut System<'_, Rt>) -> crate::Result<()>
+    /// Run this server onto the specified runtime.
+    pub fn run(self, rt: &mut Rt) -> crate::Result<()>
     where
-        Handle: crate::system::BlockOn<Rt>,
+        Handle: BlockOn<Rt>,
     {
-        let server = self.start(sys)?;
-        let _ = sys.block_on(server);
+        let server = self.start(rt)?;
+        let _ = rt.block_on(server);
         Ok(())
     }
 }
@@ -170,30 +169,6 @@ impl Future for Handle {
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.signal.poll()
-    }
-}
-
-trait TaskExecutor<F: Future<Item = (), Error = ()> + 'static> {
-    fn spawn(&mut self, future: F);
-}
-
-impl<F> TaskExecutor<F> for tokio::runtime::TaskExecutor
-where
-    F: Future<Item = (), Error = ()> + Send + 'static,
-{
-    fn spawn(&mut self, future: F) {
-        tokio::executor::Executor::spawn(self, Box::new(future))
-            .unwrap_or_else(|e| log::error!("failed to spawn a task: {}", e))
-    }
-}
-
-impl<F> TaskExecutor<F> for tokio::runtime::current_thread::TaskExecutor
-where
-    F: Future<Item = (), Error = ()> + 'static,
-{
-    fn spawn(&mut self, future: F) {
-        self.spawn_local(Box::new(future))
-            .unwrap_or_else(|e| log::error!("failed to spawn a task: {}", e))
     }
 }
 
@@ -221,7 +196,7 @@ impl<L, E, F> SpawnAll<L, E, F> {
 impl<L, E, F, Fut> Future for SpawnAll<L, E, F>
 where
     L: Listener,
-    E: TaskExecutor<Fut>,
+    E: Executor<Fut>,
     F: FnMut(L::Conn, RemoteAddr, Watch) -> Fut,
     Fut: Future<Item = (), Error = ()> + 'static,
 {
@@ -235,19 +210,19 @@ where
                     ref mut listener,
                     ref mut executor,
                     ref mut serve_connection_fn,
-                } => {
-                    let (conn, addr) = match listener.poll_incoming() {
-                        Ok(Async::Ready((conn, addr))) => (conn, addr),
-                        Ok(Async::NotReady) => return Ok(Async::NotReady),
-                        Err(e) => {
-                            log::error!("accept error: {}", e);
-                            return Ok(Async::Ready(()));
-                        }
-                    };
-                    let future = serve_connection_fn(conn, addr, self.watch.clone());
-                    executor.spawn(future);
-                    continue;
-                }
+                } => match listener.poll_incoming() {
+                    Ok(Async::Ready((conn, addr))) => {
+                        executor
+                            .execute(serve_connection_fn(conn, addr, self.watch.clone()))
+                            .unwrap_or_else(|_e| log::error!("executor error"));
+                        continue;
+                    }
+                    Ok(Async::NotReady) => return Ok(Async::NotReady),
+                    Err(e) => {
+                        log::error!("accept error: {}", e);
+                        return Ok(Async::Ready(()));
+                    }
+                },
                 SpawnAllState::Done => return Ok(Async::Ready(())),
             };
         }
@@ -331,7 +306,7 @@ macro_rules! spawn_inner {
     }};
 }
 
-impl<S, L, T> Spawn for HttpServerTask<S, L, T>
+impl<S, L, T> Spawn<tokio::runtime::Runtime> for HttpServerTask<S, L, T>
 where
     S: MakeHttpService + Send + Sync + 'static,
     S::Future: Send + 'static,
@@ -343,12 +318,12 @@ where
     T::Future: Send + 'static,
 {
     #[allow(unused_mut)]
-    fn spawn(self, rt: &mut DefaultRuntime) {
+    fn spawn(self, rt: &mut tokio::runtime::Runtime) {
         spawn_inner!(self, rt)
     }
 }
 
-impl<S, L, T> Spawn<CurrentThread> for HttpServerTask<S, L, T>
+impl<S, L, T> Spawn<tokio::runtime::current_thread::Runtime> for HttpServerTask<S, L, T>
 where
     S: MakeHttpService + 'static,
     S::Service: 'static,
@@ -359,7 +334,7 @@ where
     T::Future: 'static,
 {
     #[allow(unused_mut)]
-    fn spawn(self, rt: &mut CurrentThread) {
+    fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime) {
         spawn_inner!(self, rt)
     }
 }

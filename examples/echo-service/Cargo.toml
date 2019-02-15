@@ -16,3 +16,4 @@ regex = "1"
 
 [dev-dependencies]
 izanami = { path = "../.." }
+tokio = "0.1"
