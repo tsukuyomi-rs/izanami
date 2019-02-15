@@ -9,7 +9,7 @@ use {
     },
     futures::{future::Shared, Async, Future, IntoFuture, Poll, Stream},
     http::{Request, Response},
-    izanami_util::{RemoteAddr, SniHostname},
+    izanami_util::http::{RemoteAddr, SniHostname},
     tokio::sync::{mpsc, oneshot},
 };
 

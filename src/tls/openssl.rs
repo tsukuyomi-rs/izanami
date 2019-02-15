@@ -3,7 +3,7 @@
 use {
     super::{TlsConfig, TlsWrapper},
     futures::{Async, Future, Poll},
-    izanami_util::SniHostname,
+    izanami_util::http::SniHostname,
     openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder},
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},

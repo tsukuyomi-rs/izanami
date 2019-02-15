@@ -1,7 +1,7 @@
 use {
     super::{client::Client, service::MakeTestService},
     futures::Future,
-    izanami_util::RemoteAddr,
+    izanami_util::http::RemoteAddr,
 };
 
 /// A type that simulates an HTTP server without using the low-level I/O.

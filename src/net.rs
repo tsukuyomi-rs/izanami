@@ -2,7 +2,7 @@
 
 use {
     futures::Poll,
-    izanami_util::RemoteAddr,
+    izanami_util::http::RemoteAddr,
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };

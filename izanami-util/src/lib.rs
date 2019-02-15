@@ -16,12 +16,6 @@ pub mod http;
 pub mod rt;
 
 mod either;
-mod remote;
-mod sni;
 mod util;
 
-pub use crate::{
-    either::Either, //
-    remote::RemoteAddr,
-    sni::SniHostname,
-};
+pub use crate::either::Either;

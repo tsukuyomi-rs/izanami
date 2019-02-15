@@ -7,7 +7,7 @@ mod rustls;
 
 use {
     futures::Future,
-    izanami_util::SniHostname,
+    izanami_util::http::SniHostname,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 

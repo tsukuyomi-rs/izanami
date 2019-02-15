@@ -1,5 +1,13 @@
 //! Supplemental abstractions around HTTP message bodies.
 
+mod remote;
+mod sni;
+
+pub use {
+    remote::RemoteAddr, //
+    sni::SniHostname,
+};
+
 use {
     futures::{Async, Future, Poll},
     http::{HeaderMap, Request},

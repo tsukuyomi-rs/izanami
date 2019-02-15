@@ -9,8 +9,7 @@ use {
     izanami_service::{MakeService, Service},
     izanami_util::{
         buf_stream::{BufStream, SizeHint},
-        http::{HasTrailers, Upgrade},
-        RemoteAddr,
+        http::{HasTrailers, RemoteAddr, Upgrade},
     },
     std::{io, marker::PhantomData},
     tokio::io::{AsyncRead, AsyncWrite},
