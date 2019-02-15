@@ -10,6 +10,7 @@
 )]
 #![forbid(clippy::unimplemented)]
 
+mod drain;
 mod error;
 mod util;
 

@@ -2,27 +2,19 @@
 
 use {
     crate::{
+        drain::{Signal, Watch},
         net::{Bind, Listener},
         service::{HttpService, MakeContext, MakeHttpService, RequestBody, ResponseBody},
         system::{CurrentThread, DefaultRuntime, Runtime, Spawn, System},
         tls::{NoTls, TlsConfig, TlsWrapper},
     },
-    futures::{future::Shared, Async, Future, IntoFuture, Poll, Stream},
+    futures::{Async, Future, IntoFuture, Poll},
     http::{Request, Response},
     izanami_util::http::{RemoteAddr, SniHostname},
-    tokio::sync::{mpsc, oneshot},
 };
 
-// FIXME: replace with never type.
-enum Never {}
-
-type SpawnFn<Rt, F> = dyn for<'s> FnMut(
-        &mut System<'s, Rt>,
-        &F,
-        &ShutdownSignal,
-        &mpsc::Sender<Never>,
-    ) -> crate::Result<()>
-    + 'static;
+type SpawnFn<Rt, F> =
+    dyn for<'s> FnMut(&mut System<'s, Rt>, &F, &Watch) -> crate::Result<()> + 'static;
 
 #[derive(Debug, Copy, Clone)]
 enum HttpVersions {
@@ -38,8 +30,8 @@ where
     Rt: Runtime,
 {
     service_factory: F,
-    tx_shutdown: oneshot::Sender<()>,
-    rx_shutdown: ShutdownSignal,
+    signal: Signal,
+    watch: Watch,
     spawn_fns: Vec<Box<SpawnFn<Rt, F>>>,
     http_versions: HttpVersions,
     alpn_protocols: Option<Vec<String>>,
@@ -53,13 +45,11 @@ where
 {
     /// Creates a `HttpServer` using the specified service factory.
     pub fn new(service_factory: F) -> Self {
-        let (tx_shutdown, rx_shutdown) = oneshot::channel();
+        let (signal, watch) = crate::drain::channel();
         Self {
             service_factory,
-            tx_shutdown,
-            rx_shutdown: ShutdownSignal {
-                inner: Some(rx_shutdown.shared()),
-            },
+            signal,
+            watch,
             spawn_fns: vec![],
             http_versions: HttpVersions::Fallback,
             alpn_protocols: None,
@@ -121,21 +111,19 @@ where
         };
         let tls_wrapper = tls.into_wrapper(alpn_protocols)?;
 
-        self.spawn_fns.push(Box::new(
-            move |sys, service_factory, rx_shutdown, tx_drained| {
+        self.spawn_fns
+            .push(Box::new(move |sys, service_factory, watch| {
                 for listener in listeners.drain(..) {
                     sys.spawn(HttpServerTask {
                         listener,
                         tls_wrapper: tls_wrapper.clone(),
                         make_service: (*service_factory)(),
-                        rx_shutdown: rx_shutdown.clone(),
-                        tx_drained: tx_drained.clone(),
+                        watch: watch.clone(),
                         http_versions,
                     });
                 }
                 Ok(())
-            },
-        ));
+            }));
 
         Ok(self)
     }
@@ -145,14 +133,11 @@ where
     /// This method returns a `Handle` to notify a shutdown signal to the all of
     /// spawned tasks and track their completion.
     pub fn start(self, sys: &mut System<'_, Rt>) -> crate::Result<Handle> {
-        let (tx_drained, rx_drained) = mpsc::channel(1);
         for mut spawn_fn in self.spawn_fns {
-            (spawn_fn)(sys, &self.service_factory, &self.rx_shutdown, &tx_drained)?;
+            (spawn_fn)(sys, &self.service_factory, &self.watch)?;
         }
-
         Ok(Handle {
-            tx_shutdown: self.tx_shutdown,
-            draining: Draining { rx_drained },
+            signal: self.signal,
         })
     }
 
@@ -169,15 +154,13 @@ where
 
 #[derive(Debug)]
 pub struct Handle {
-    tx_shutdown: oneshot::Sender<()>,
-    draining: Draining,
+    signal: Signal,
 }
 
 impl Handle {
     /// Send a shutdown signal to the background tasks.
     pub fn shutdown(self) -> impl Future<Item = (), Error = ()> {
-        let _ = self.tx_shutdown.send(());
-        self.draining
+        self.signal.drain()
     }
 }
 
@@ -186,53 +169,7 @@ impl Future for Handle {
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.draining.poll()
-    }
-}
-
-#[derive(Debug)]
-struct Draining {
-    rx_drained: mpsc::Receiver<Never>,
-}
-
-impl Future for Draining {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.rx_drained.poll() {
-            Ok(Async::Ready(Some(..))) | Err(..) => {
-                unreachable!("Receiver<Never> never receives a value")
-            }
-            Ok(Async::Ready(None)) => Ok(Async::Ready(())),
-            Ok(Async::NotReady) => Ok(Async::NotReady),
-        }
-    }
-}
-
-#[allow(missing_debug_implementations)]
-#[derive(Clone)]
-struct ShutdownSignal {
-    inner: Option<futures::future::Shared<oneshot::Receiver<()>>>,
-}
-
-impl Future for ShutdownSignal {
-    type Item = ();
-    type Error = ();
-
-    #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        match self.inner.as_mut().map(|inner| inner.poll()) {
-            Some(Ok(Async::Ready(..))) => Ok(Async::Ready(())),
-            Some(Ok(Async::NotReady)) => Ok(Async::NotReady),
-            Some(Err(..)) => {
-                log::trace!("the shutdown signal throws an error");
-                log::trace!("  --> transit to the infinity run");
-                drop(self.inner.take());
-                Ok(Async::NotReady)
-            }
-            None => Ok(Async::NotReady),
-        }
+        self.signal.poll()
     }
 }
 
@@ -261,24 +198,27 @@ where
 }
 
 #[allow(unused)]
-struct Graceful<L, E, F> {
-    state: GracefulState<L, E, F>,
-    tx_drained: Option<mpsc::Sender<Never>>,
+struct SpawnAll<L, E, F> {
+    state: SpawnAllState<L, E, F>,
+    watch: Watch,
 }
 
-enum GracefulState<L, E, F> {
+enum SpawnAllState<L, E, F> {
     Running {
-        signal: Option<Signal>,
-        watch: Watch,
         listener: L,
         executor: E,
         serve_connection_fn: F,
-        rx_shutdown: ShutdownSignal,
     },
-    Draining(mpsc::Receiver<Never>),
+    Done,
 }
 
-impl<L, E, F, Fut> Future for Graceful<L, E, F>
+impl<L, E, F> SpawnAll<L, E, F> {
+    fn shutdown(&mut self) {
+        self.state = SpawnAllState::Done;
+    }
+}
+
+impl<L, E, F, Fut> Future for SpawnAll<L, E, F>
 where
     L: Listener,
     E: TaskExecutor<Fut>,
@@ -290,205 +230,104 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            self.state = match &mut self.state {
-                GracefulState::Running {
-                    signal,
-                    watch,
-                    listener,
-                    executor,
-                    serve_connection_fn,
-                    rx_shutdown,
-                    ..
-                } => match rx_shutdown.poll() {
-                    Ok(Async::Ready(())) | Err(..) => {
-                        // start graceful shutdown
-                        let signal = signal.take().unwrap();
-                        let _ = signal.tx.send(());
-                        GracefulState::Draining(signal.rx_drained)
-                    }
-                    Ok(Async::NotReady) => {
-                        let (conn, addr) = match listener.poll_incoming() {
-                            Ok(Async::Ready((conn, addr))) => (conn, addr),
-                            Ok(Async::NotReady) => return Ok(Async::NotReady),
-                            Err(e) => {
-                                log::error!("accept error: {}", e);
-                                drop(self.tx_drained.take());
-                                return Ok(Async::Ready(()));
-                            }
-                        };
-                        let future = serve_connection_fn(conn, addr, watch.clone());
-                        executor.spawn(future);
-                        continue;
-                    }
-                },
-                GracefulState::Draining(rx_drained) => match rx_drained.poll() {
-                    Ok(Async::Ready(None)) => {
-                        drop(self.tx_drained.take());
-                        return Ok(Async::Ready(()));
-                    }
-                    Ok(Async::Ready(Some(..))) | Err(..) => {
-                        unreachable!("rx_drain never receives a value")
-                    }
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
-                },
+            match self.state {
+                SpawnAllState::Running {
+                    ref mut listener,
+                    ref mut executor,
+                    ref mut serve_connection_fn,
+                } => {
+                    let (conn, addr) = match listener.poll_incoming() {
+                        Ok(Async::Ready((conn, addr))) => (conn, addr),
+                        Ok(Async::NotReady) => return Ok(Async::NotReady),
+                        Err(e) => {
+                            log::error!("accept error: {}", e);
+                            return Ok(Async::Ready(()));
+                        }
+                    };
+                    let future = serve_connection_fn(conn, addr, self.watch.clone());
+                    executor.spawn(future);
+                    continue;
+                }
+                SpawnAllState::Done => return Ok(Async::Ready(())),
             };
         }
     }
 }
 
-struct Signal {
-    tx: oneshot::Sender<()>,
-    rx_drained: mpsc::Receiver<Never>,
-}
-
-#[derive(Clone)]
-#[allow(missing_debug_implementations)]
-struct Watch {
-    rx: Shared<oneshot::Receiver<()>>,
-    tx_drained: mpsc::Sender<Never>,
-}
-
-impl Watch {
-    fn watch(&mut self) -> bool {
-        match self.rx.poll() {
-            Ok(Async::Ready(..)) | Err(..) => true,
-            Ok(Async::NotReady) => false,
-        }
-    }
-}
-
-#[allow(missing_debug_implementations)]
-struct Watching<Fut, F>
-where
-    Fut: Future,
-    F: FnOnce(&mut Fut),
-{
-    future: Fut,
-    on_drain: Option<F>,
-    watch: Watch,
-}
-
-impl<Fut, F> Watching<Fut, F>
-where
-    Fut: Future,
-    F: FnOnce(&mut Fut),
-{
-    fn new(watch: Watch, future: Fut, on_drain: F) -> Self {
-        Self {
-            future,
-            on_drain: Some(on_drain),
-            watch,
-        }
-    }
-}
-
-impl<Fut, F> Future for Watching<Fut, F>
-where
-    Fut: Future,
-    F: FnOnce(&mut Fut),
-{
-    type Item = Fut::Item;
-    type Error = Fut::Error;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            match self.on_drain.take() {
-                Some(on_drain) => {
-                    if self.watch.watch() {
-                        on_drain(&mut self.future);
-                        continue;
-                    } else {
-                        self.on_drain = Some(on_drain);
-                        return self.future.poll();
-                    }
-                }
-                None => return self.future.poll(),
-            }
-        }
-    }
-}
-
-#[doc(hidden)]
 #[allow(missing_debug_implementations)]
 pub struct HttpServerTask<S, L, T> {
     make_service: S,
     listener: L,
     tls_wrapper: T,
-    rx_shutdown: ShutdownSignal,
-    tx_drained: mpsc::Sender<Never>,
+    watch: Watch,
     http_versions: HttpVersions,
 }
 
 /// A helper macro for creating a server task.
-// TODOs:
-// * add SNI support
-// * refactor
 macro_rules! spawn_inner {
     ($self:expr, $runtime:expr) => {{
         let self_ = $self;
         let runtime = $runtime;
-        let (tx, rx) = oneshot::channel();
-        // tokio_sync::mpsc::channel requires that the capacity is greater at least one.
-        let (tx_drained, rx_drained) = mpsc::channel(1);
-        runtime.spawn(Graceful {
-            tx_drained: Some(self_.tx_drained),
-            state: GracefulState::Running {
-                signal: Some(Signal { tx, rx_drained }),
-                watch: Watch {
-                    rx: rx.shared(),
-                    tx_drained,
-                },
+
+        let watch = self_.watch;
+        let mut make_service = self_.make_service;
+        let tls_wrapper = self_.tls_wrapper;
+        let mut executor = runtime.executor();
+
+        let mut protocol = hyper::server::conn::Http::new() //
+            .with_executor(executor.clone());
+        match self_.http_versions {
+            HttpVersions::Http1Only => {
+                protocol.http1_only(true);
+            }
+            HttpVersions::Http2Only => {
+                protocol.http2_only(true);
+            }
+            _ => {}
+        }
+
+        let serve_connection_fn = move |conn, remote_addr, watch: Watch| {
+            let mk_svc_fut = make_service
+                .make_service(&mut MakeContext::new(&remote_addr))
+                .map_err(|e| log::error!("make service error: {}", e.into()));
+
+            let mk_conn_fut = tls_wrapper
+                .wrap(conn)
+                .map_err(|e| log::error!("tls error: {}", e.into()));
+
+            let protocol = protocol.clone();
+
+            (mk_svc_fut, mk_conn_fut) //
+                .into_future()
+                .and_then(move |(service, (conn, sni_hostname))| {
+                    watch
+                        .watching(
+                            protocol
+                                .serve_connection(
+                                    conn,
+                                    IzanamiService {
+                                        service,
+                                        remote_addr,
+                                        sni_hostname,
+                                    },
+                                )
+                                .with_upgrades(),
+                            |conn| conn.graceful_shutdown(),
+                        )
+                        .map_err(|e| log::error!("connection error: {}", e))
+                })
+        };
+
+        let spawn_all = SpawnAll {
+            watch: watch.clone(),
+            state: SpawnAllState::Running {
                 listener: self_.listener,
                 executor: runtime.executor(),
-                rx_shutdown: self_.rx_shutdown,
-                serve_connection_fn: {
-                    let mut make_service = self_.make_service;
-                    let mut executor = runtime.executor();
-                    let tls_wrapper = self_.tls_wrapper;
-
-                    let mut protocol =
-                        hyper::server::conn::Http::new().with_executor(executor.clone());
-                    match self_.http_versions {
-                        HttpVersions::Http1Only => {
-                            protocol.http1_only(true);
-                        }
-                        HttpVersions::Http2Only => {
-                            protocol.http2_only(true);
-                        }
-                        _ => {}
-                    }
-
-                    move |conn, remote_addr, watch| {
-                        let mk_svc_fut = make_service
-                            .make_service(&mut MakeContext::new(&remote_addr))
-                            .map_err(|e| log::error!("make service error: {}", e.into()));
-                        let mk_conn_fut = tls_wrapper
-                            .wrap(conn)
-                            .map_err(|e| log::error!("tls error: {}", e.into()));
-                        let protocol = protocol.clone();
-                        (mk_svc_fut, mk_conn_fut) //
-                            .into_future()
-                            .and_then(move |(service, (conn, sni_hostname))| {
-                                Watching::new(
-                                    watch,
-                                    protocol
-                                        .serve_connection(
-                                            conn,
-                                            IzanamiService {
-                                                service,
-                                                remote_addr,
-                                                sni_hostname,
-                                            },
-                                        )
-                                        .with_upgrades(),
-                                    |conn| conn.graceful_shutdown(),
-                                )
-                                .map_err(|e| log::error!("connection error: {}", e))
-                            })
-                    }
-                },
+                serve_connection_fn,
             },
-        });
+        };
+
+        runtime.spawn(watch.watching(spawn_all, |s| s.shutdown()));
     }};
 }
 
