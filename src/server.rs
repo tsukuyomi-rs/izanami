@@ -13,7 +13,7 @@ use {
     izanami_util::http::{RemoteAddr, SniHostname},
 };
 
-type SpawnFn<Rt, F> = dyn FnMut(&mut Rt, &F, &Watch) -> crate::Result<()> + 'static;
+type SpawnFn<Rt, F> = dyn FnMut(&mut Rt, &F, &Watch) -> crate::Result<()> + Send + 'static;
 
 #[derive(Debug, Copy, Clone)]
 enum HttpVersions {
@@ -22,12 +22,9 @@ enum HttpVersions {
     Fallback,
 }
 
-/// An HTTP server running on `System`.
+/// An HTTP server running on a specific runtime.
 #[allow(missing_debug_implementations)]
-pub struct HttpServer<F, Rt>
-where
-    Rt: Runtime,
-{
+pub struct HttpServer<F, Rt> {
     service_factory: F,
     signal: Signal,
     watch: Watch,
@@ -86,7 +83,8 @@ where
     /// Associate the specified I/O with this server.
     pub fn bind<B>(self, bind: B) -> crate::Result<Self>
     where
-        B: Bind + 'static,
+        B: Bind,
+        B::Listener: Send + 'static,
         HttpServerTask<S, B::Listener, NoTls>: Spawn<Rt>,
     {
         self.bind_tls(bind, NoTls::default())
@@ -95,8 +93,10 @@ where
     /// Associate the specified I/O and SSL/TLS configuration with this server.
     pub fn bind_tls<B, T>(mut self, bind: B, tls: T) -> crate::Result<Self>
     where
-        B: Bind + 'static,
-        T: TlsConfig<B::Conn> + 'static,
+        B: Bind,
+        B::Listener: Send + 'static,
+        T: TlsConfig<B::Conn>,
+        T::Wrapper: Send + 'static,
         HttpServerTask<S, B::Listener, T::Wrapper>: Spawn<Rt>,
     {
         let mut listeners = bind.into_listeners()?;
@@ -111,9 +111,9 @@ where
         let tls_wrapper = tls.into_wrapper(alpn_protocols)?;
 
         self.spawn_fns
-            .push(Box::new(move |sys, service_factory, watch| {
+            .push(Box::new(move |rt, service_factory, watch| {
                 for listener in listeners.drain(..) {
-                    sys.spawn(HttpServerTask {
+                    rt.spawn(HttpServerTask {
                         listener,
                         tls_wrapper: tls_wrapper.clone(),
                         make_service: (*service_factory)(),
@@ -247,7 +247,7 @@ macro_rules! spawn_inner {
 
 impl<S, L, T> Spawn<tokio::runtime::Runtime> for HttpServerTask<S, L, T>
 where
-    S: MakeHttpService + Send + Sync + 'static,
+    S: MakeHttpService + Send + 'static,
     S::Future: Send + 'static,
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
