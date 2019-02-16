@@ -13,6 +13,7 @@
 
 pub mod buf_stream;
 pub mod http;
+pub mod net;
 pub mod rt;
 
 mod either;

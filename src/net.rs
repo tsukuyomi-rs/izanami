@@ -2,7 +2,7 @@
 
 use {
     futures::Poll,
-    izanami_util::http::RemoteAddr,
+    izanami_util::net::RemoteAddr,
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };
@@ -53,7 +53,7 @@ pub trait Listener {
     type Conn: AsyncRead + AsyncWrite;
 
     /// Acquires a connection to the peer.
-    fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error>;
+    fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error>;
 }
 
 pub mod tcp {
@@ -71,9 +71,9 @@ pub mod tcp {
         type Conn = TcpStream;
 
         #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
+        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
             self.poll_accept()
-                .map_async(|(conn, addr)| (conn, addr.into()))
+                .map_async(|(conn, addr)| (conn, Some(addr.into())))
         }
     }
 
@@ -129,7 +129,7 @@ pub mod tcp {
         type Conn = TcpStream;
 
         #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
+        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
             self.listener
                 .poll_incoming() //
                 .map_async(|(stream, addr)| {
@@ -202,9 +202,9 @@ pub mod unix {
         type Conn = UnixStream;
 
         #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
+        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
             self.poll_accept()
-                .map_async(|(conn, addr)| (conn, addr.into()))
+                .map_async(|(conn, addr)| (conn, Some(addr.into())))
         }
     }
 
@@ -244,7 +244,7 @@ pub mod unix {
         type Conn = UnixStream;
 
         #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
+        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
             self.listener.poll_incoming()
         }
     }
@@ -316,7 +316,7 @@ mod sleep_on_errors {
         type Conn = T::Conn;
 
         #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
+        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
             if let Some(timeout) = &mut self.timeout {
                 match timeout.poll() {
                     Ok(Async::Ready(())) => {}
@@ -379,10 +379,9 @@ mod sleep_on_errors {
         impl Listener for DummyListener {
             type Conn = DummyConnection;
 
-            fn poll_incoming(&mut self) -> Poll<(Self::Conn, RemoteAddr), io::Error> {
+            fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
                 let conn = self.inner.pop_front().expect("queue is empty")?;
-                let addr = RemoteAddr::unknown();
-                Ok((conn, addr).into())
+                Ok((conn, None).into())
             }
         }
 

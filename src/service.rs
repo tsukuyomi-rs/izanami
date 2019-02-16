@@ -9,7 +9,8 @@ use {
     izanami_service::{MakeService, Service},
     izanami_util::{
         buf_stream::{BufStream, SizeHint},
-        http::{HasTrailers, RemoteAddr, Upgrade},
+        http::{HasTrailers, Upgrade},
+        net::RemoteAddr,
     },
     std::{io, marker::PhantomData},
     tokio::io::{AsyncRead, AsyncWrite},
@@ -18,20 +19,20 @@ use {
 /// The context value used when creating the service.
 #[derive(Debug)]
 pub struct MakeContext<'a> {
-    remote_addr: &'a RemoteAddr,
+    remote_addr: &'a Option<RemoteAddr>,
     _anchor: PhantomData<std::rc::Rc<()>>,
 }
 
 impl<'a> MakeContext<'a> {
-    pub(crate) fn new(remote_addr: &'a RemoteAddr) -> Self {
+    pub(crate) fn new(remote_addr: &'a Option<RemoteAddr>) -> Self {
         Self {
             remote_addr,
             _anchor: PhantomData,
         }
     }
 
-    pub fn remote_addr(&self) -> &RemoteAddr {
-        &*self.remote_addr
+    pub fn remote_addr(&self) -> Option<&RemoteAddr> {
+        self.remote_addr.as_ref()
     }
 }
 

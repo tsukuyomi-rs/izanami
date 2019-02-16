@@ -44,13 +44,11 @@ impl<T> Future for AcceptWithSni<T>
 where
     T: AsyncRead + AsyncWrite,
 {
-    type Item = (TlsStream<T>, SniHostname);
+    type Item = (TlsStream<T>, Option<ServerName>);
     type Error = ::native_tls::Error;
 
     #[inline]
     fn poll(&mut self) -> futures::Poll<Self::Item, Self::Error> {
-        self.inner
-            .poll()
-            .map_async(|conn| (conn, SniHostname::unknown()))
+        self.inner.poll().map_async(|conn| (conn, None))
     }
 }

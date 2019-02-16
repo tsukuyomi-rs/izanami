@@ -10,7 +10,7 @@ use {
     },
     futures::{future::Executor, Async, Future, IntoFuture, Poll},
     http::{Request, Response},
-    izanami_util::http::{RemoteAddr, SniHostname},
+    izanami_util::net::{RemoteAddr, ServerName},
 };
 
 type SpawnFn<Rt, F> = dyn FnMut(&mut Rt, &F, &Watch) -> crate::Result<()> + Send + 'static;
@@ -215,11 +215,11 @@ macro_rules! spawn_inner {
             let protocol = protocol.clone();
             (mk_svc_fut, mk_conn_fut) //
                 .into_future()
-                .and_then(move |(service, (stream, sni_hostname))| {
+                .and_then(move |(service, (stream, server_name))| {
                     let service = IzanamiService {
                         service,
                         remote_addr,
-                        sni_hostname,
+                        server_name,
                     };
                     let conn = protocol.serve_connection(stream, service).with_upgrades();
                     watch
@@ -301,7 +301,7 @@ impl<L, E, F, Fut> SpawnAll<L, E, F>
 where
     L: Listener,
     E: Executor<Fut>,
-    F: FnMut(L::Conn, RemoteAddr, Watch) -> Fut,
+    F: FnMut(L::Conn, Option<RemoteAddr>, Watch) -> Fut,
     Fut: Future<Item = (), Error = ()> + 'static,
 {
     fn poll_watching(&mut self, watch: &Watch) -> Poll<(), ()> {
@@ -332,8 +332,8 @@ where
 #[allow(missing_debug_implementations)]
 struct IzanamiService<S> {
     service: S,
-    remote_addr: RemoteAddr,
-    sni_hostname: SniHostname,
+    remote_addr: Option<RemoteAddr>,
+    server_name: Option<ServerName>,
 }
 
 impl<S> hyper::service::Service for IzanamiService<S>
@@ -348,8 +348,12 @@ where
     #[inline]
     fn call(&mut self, request: Request<hyper::Body>) -> Self::Future {
         let mut request = request.map(RequestBody::from_hyp);
-        request.extensions_mut().insert(self.remote_addr.clone());
-        request.extensions_mut().insert(self.sni_hostname.clone());
+        if let Some(addr) = &self.remote_addr {
+            request.extensions_mut().insert(addr.clone());
+        }
+        if let Some(sni) = &self.server_name {
+            request.extensions_mut().insert(sni.clone());
+        }
 
         LiftedHttpServiceFuture(self.service.call(request))
     }

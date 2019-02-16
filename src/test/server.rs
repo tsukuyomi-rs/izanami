@@ -1,7 +1,7 @@
 use {
     super::{client::Client, service::MakeTestService},
     futures::Future,
-    izanami_util::http::RemoteAddr,
+    izanami_util::net::RemoteAddr,
 };
 
 /// A type that simulates an HTTP server without using the low-level I/O.
@@ -18,7 +18,7 @@ where
     pub fn new(make_service: S) -> Self {
         Self {
             make_service,
-            remote_addr: RemoteAddr::tcp(([127, 0, 0, 1], 12345).into()),
+            remote_addr: RemoteAddr::Tcp(([127, 0, 0, 1], 12345).into()),
         }
     }
 

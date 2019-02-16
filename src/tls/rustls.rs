@@ -61,12 +61,16 @@ impl<T> Future for AcceptWithSni<T>
 where
     T: AsyncRead + AsyncWrite,
 {
-    type Item = (TlsStream<T, ServerSession>, SniHostname);
+    type Item = (TlsStream<T, ServerSession>, Option<ServerName>);
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.inner.poll().map_async(|conn| {
-            let sni_hostname = conn.get_ref().1.get_sni_hostname().into();
+            let sni_hostname = conn
+                .get_ref()
+                .1
+                .get_sni_hostname()
+                .map(|sni| ServerName::Dns(sni.into()));
             (conn, sni_hostname)
         })
     }

@@ -3,7 +3,7 @@
 use {
     super::{TlsConfig, TlsWrapper},
     futures::{Async, Future, Poll},
-    izanami_util::http::SniHostname,
+    izanami_util::net::ServerName,
     openssl::ssl::{AlpnError, SslAcceptor, SslAcceptorBuilder},
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
@@ -114,7 +114,7 @@ impl<T> Future for AcceptAsync<T>
 where
     T: AsyncRead + AsyncWrite,
 {
-    type Item = (SslStream<T>, SniHostname);
+    type Item = (SslStream<T>, Option<ServerName>);
     type Error = io::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
@@ -124,7 +124,7 @@ where
                     .get_ref()
                     .ssl()
                     .servername(openssl::ssl::NameType::HOST_NAME)
-                    .into();
+                    .map(|sni| ServerName::Dns(sni.into()));
                 Ok(Async::Ready((conn, sni_hostname)))
             }
             Ok(Async::NotReady) => Ok(Async::NotReady),

@@ -7,7 +7,7 @@ mod rustls;
 
 use {
     futures::Future,
-    izanami_util::http::SniHostname,
+    izanami_util::net::ServerName,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
@@ -27,7 +27,7 @@ pub trait TlsWrapper<T> {
 
     type Error: Into<crate::error::BoxedStdError>;
 
-    type Future: Future<Item = (Self::Wrapped, SniHostname), Error = Self::Error>;
+    type Future: Future<Item = (Self::Wrapped, Option<ServerName>), Error = Self::Error>;
 
     /// Wraps the specified I/O object in the SSL/TLS stream.
     fn wrap(&self, io: T) -> Self::Future;
@@ -56,10 +56,10 @@ where
 {
     type Wrapped = T;
     type Error = std::io::Error;
-    type Future = futures::future::FutureResult<(Self::Wrapped, SniHostname), Self::Error>;
+    type Future = futures::future::FutureResult<(Self::Wrapped, Option<ServerName>), Self::Error>;
 
     #[inline]
     fn wrap(&self, io: T) -> Self::Future {
-        futures::future::ok((io, SniHostname::unknown()))
+        futures::future::ok((io, None))
     }
 }
