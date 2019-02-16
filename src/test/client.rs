@@ -34,7 +34,7 @@ where
     }
 
     /// Applies an HTTP request to this client and await its response.
-    pub fn respond(
+    pub fn request(
         &mut self,
         request: Request<impl Into<MockRequestBody>>,
     ) -> impl Future<Item = ClientResponse<S>, Error = S::Error> {

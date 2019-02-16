@@ -59,7 +59,7 @@
 //! // just before starting to send the response body.
 //! let response = rt.block_on(
 //!     client
-//!         .respond(
+//!         .request(
 //!             Request::get("/").body(())?
 //!         )
 //! )?;

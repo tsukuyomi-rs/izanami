@@ -16,7 +16,7 @@ fn test_empty_routes() -> izanami::Result<()> {
 
     let mut client = rt.block_on(server.client())?;
     let response = rt.block_on(
-        client.respond(
+        client.request(
             Request::get("/") //
                 .body(())?,
         ),
@@ -43,7 +43,7 @@ fn test_single_route() -> izanami::Result<()> {
     let mut client = rt.block_on(server.client())?;
 
     let response = rt.block_on(
-        client.respond(
+        client.request(
             Request::get("/") //
                 .body(())?,
         ),
@@ -84,7 +84,7 @@ fn test_capture_param() -> izanami::Result<()> {
     let mut client = rt.block_on(server.client())?;
 
     let response = rt.block_on(
-        client.respond(
+        client.request(
             Request::get("/42") //
                 .body(())?,
         ),
@@ -95,7 +95,7 @@ fn test_capture_param() -> izanami::Result<()> {
     assert_eq!(body.to_utf8()?, "id=42");
 
     let response = rt.block_on(
-        client.respond(
+        client.request(
             Request::get("/fox") //
                 .body(())?,
         ),
