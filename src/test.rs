@@ -10,7 +10,10 @@
 //! use {
 //!     http::{Request, Response},
 //!     izanami_service::Service,
-//!     izanami::test::Server,
+//!     izanami::{
+//!         runtime::Block,
+//!         test::Server,
+//!     },
 //! };
 //! # use {
 //! #   std::io,
@@ -50,23 +53,22 @@
 //!
 //! // create a `Client` to test an established connection
 //! // with the peer.
-//! let mut client = rt.block_on(server.client())?;
+//! let mut client = server.client().block(&mut rt)?;
 //!
 //! // applies an HTTP request to the client and await
 //! // its response.
 //! //
 //! // the method simulates the behavior of service until
 //! // just before starting to send the response body.
-//! let response = rt.block_on(
-//!     client
-//!         .request(
-//!             Request::get("/").body(())?
-//!         )
-//! )?;
+//! let response = client
+//!     .request(
+//!         Request::get("/").body(())?
+//!     )
+//!     .block(&mut rt)?;
 //! assert_eq!(response.status(), 200);
 //!
 //! // drive the response body and await its result.
-//! let body = rt.block_on(response.send_body())?;
+//! let body = response.send_body().block(&mut rt)?;
 //! assert_eq!(body.to_utf8()?, "hello");
 //! # Ok(())
 //! # }

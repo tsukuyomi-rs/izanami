@@ -1,7 +1,7 @@
 use {
     echo_service::Echo,
     http::{Request, Response},
-    izanami::test::Server,
+    izanami::{runtime::Block, test::Server},
     tokio::runtime::current_thread::Runtime,
 };
 
@@ -14,13 +14,16 @@ fn test_empty_routes() -> izanami::Result<()> {
             .build(),
     );
 
-    let mut client = rt.block_on(server.client())?;
-    let response = rt.block_on(
-        client.request(
+    let mut client = server
+        .client() //
+        .block(&mut rt)?;
+
+    let response = client
+        .request(
             Request::get("/") //
                 .body(())?,
-        ),
-    )?;
+        )
+        .block(&mut rt)?;
     assert_eq!(response.status(), 404);
 
     Ok(())
@@ -40,17 +43,21 @@ fn test_single_route() -> izanami::Result<()> {
             .build(),
     );
 
-    let mut client = rt.block_on(server.client())?;
+    let mut client = server
+        .client() //
+        .block(&mut rt)?;
 
-    let response = rt.block_on(
-        client.request(
+    let response = client
+        .request(
             Request::get("/") //
                 .body(())?,
-        ),
-    )?;
+        )
+        .block(&mut rt)?;
     assert_eq!(response.status(), 200);
 
-    let body = rt.block_on(response.send_body())?;
+    let body = response
+        .send_body() //
+        .block(&mut rt)?;
     assert_eq!(body.to_utf8()?, "hello");
 
     Ok(())
@@ -81,25 +88,29 @@ fn test_capture_param() -> izanami::Result<()> {
             .build(),
     );
 
-    let mut client = rt.block_on(server.client())?;
+    let mut client = server
+        .client() //
+        .block(&mut rt)?;
 
-    let response = rt.block_on(
-        client.request(
+    let response = client
+        .request(
             Request::get("/42") //
                 .body(())?,
-        ),
-    )?;
+        )
+        .block(&mut rt)?;
     assert_eq!(response.status(), 200);
 
-    let body = rt.block_on(response.send_body())?;
+    let body = response
+        .send_body() //
+        .block(&mut rt)?;
     assert_eq!(body.to_utf8()?, "id=42");
 
-    let response = rt.block_on(
-        client.request(
+    let response = client
+        .request(
             Request::get("/fox") //
                 .body(())?,
-        ),
-    )?;
+        )
+        .block(&mut rt)?;
     assert_eq!(response.status(), 404);
 
     Ok(())

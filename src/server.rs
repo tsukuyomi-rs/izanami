@@ -4,7 +4,7 @@ use {
     crate::{
         drain::{Signal, Watch},
         net::{Bind, Listener},
-        runtime::{BlockOn, Runtime, Spawn},
+        runtime::{Block, Runtime, Spawn},
         service::{HttpService, MakeContext, MakeHttpService, RequestBody, ResponseBody},
         tls::{NoTls, TlsConfig, TlsWrapper},
     },
@@ -143,10 +143,9 @@ where
     /// Run this server onto the specified runtime.
     pub fn run(self, rt: &mut Rt) -> crate::Result<()>
     where
-        Handle: BlockOn<Rt>,
+        Handle: Block<Rt>,
     {
-        let server = self.start(rt)?;
-        let _ = rt.block_on(server);
+        let _ = self.start(rt)?.block(rt);
         Ok(())
     }
 }

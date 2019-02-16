@@ -19,9 +19,9 @@ pub trait Runtime: self::sealed::Sealed {
     /// Run the specified future onto this runtime and await its result.
     fn block_on<F>(&mut self, future: F) -> F::Output
     where
-        F: BlockOn<Self>,
+        F: Block<Self>,
     {
-        future.block_on(self)
+        future.block(self)
     }
 }
 
@@ -43,15 +43,15 @@ impl Runtime for tokio::runtime::current_thread::Runtime {
 
 /// Trait representing the value that drives on the specific runtime
 /// and returns a result.
-pub trait BlockOn<Rt: Runtime + ?Sized> {
+pub trait Block<Rt: Runtime + ?Sized> {
     /// The result type obtained by driving this value.
     type Output;
 
     /// Run this value onto the specified runtime until it completes.
-    fn block_on(self, rt: &mut Rt) -> Self::Output;
+    fn block(self, rt: &mut Rt) -> Self::Output;
 }
 
-impl<F> BlockOn<tokio::runtime::Runtime> for F
+impl<F> Block<tokio::runtime::Runtime> for F
 where
     F: Future + Send + 'static,
     F::Item: Send + 'static,
@@ -59,18 +59,18 @@ where
 {
     type Output = Result<F::Item, F::Error>;
 
-    fn block_on(self, rt: &mut tokio::runtime::Runtime) -> Self::Output {
+    fn block(self, rt: &mut tokio::runtime::Runtime) -> Self::Output {
         rt.block_on(self)
     }
 }
 
-impl<F> BlockOn<tokio::runtime::current_thread::Runtime> for F
+impl<F> Block<tokio::runtime::current_thread::Runtime> for F
 where
     F: Future,
 {
     type Output = Result<F::Item, F::Error>;
 
-    fn block_on(self, rt: &mut tokio::runtime::current_thread::Runtime) -> Self::Output {
+    fn block(self, rt: &mut tokio::runtime::current_thread::Runtime) -> Self::Output {
         rt.block_on(self)
     }
 }
