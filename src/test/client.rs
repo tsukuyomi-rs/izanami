@@ -5,7 +5,7 @@ use {
     },
     bytes::{Buf, Bytes},
     futures::{Async, Future, Poll},
-    http::{Request, Response},
+    http::{Request, Response, Uri},
     std::{borrow::Cow, str},
 };
 
@@ -33,7 +33,7 @@ where
         &mut self.service
     }
 
-    /// Applies an HTTP request to this client and await its response.
+    /// Send an HTTP request to this client and await its response.
     pub fn request(
         &mut self,
         request: Request<impl Into<MockRequestBody>>,
@@ -41,6 +41,13 @@ where
         self.service
             .call(request.map(Into::into))
             .map(|inner| ClientResponse { inner })
+    }
+
+    /// Send a GET request to this client and await its response.
+    pub fn get(&mut self, uri: Uri) -> impl Future<Item = ClientResponse<S>, Error = S::Error> {
+        let mut request = Request::new(MockRequestBody::empty());
+        *request.uri_mut() = uri;
+        self.request(request)
     }
 }
 

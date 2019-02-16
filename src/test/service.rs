@@ -66,6 +66,13 @@ enum Inner {
 }
 
 impl MockRequestBody {
+    pub fn empty() -> Self {
+        Self {
+            inner: Inner::Sized(None),
+            _anchor: PhantomData,
+        }
+    }
+
     pub fn sized(data: impl Into<Bytes>) -> Self {
         Self {
             inner: Inner::Sized(Some(data.into())),
@@ -74,9 +81,15 @@ impl MockRequestBody {
     }
 }
 
+impl Default for MockRequestBody {
+    fn default() -> Self {
+        Self::empty()
+    }
+}
+
 impl From<()> for MockRequestBody {
     fn from(_: ()) -> Self {
-        Self::sized(Bytes::new())
+        Self::empty()
     }
 }
 

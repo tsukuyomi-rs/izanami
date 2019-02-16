@@ -1,6 +1,6 @@
 use {
     echo_service::Echo,
-    http::{Request, Response},
+    http::{Response, Uri},
     izanami::{runtime::Block, test::Server},
     tokio::runtime::current_thread::Runtime,
 };
@@ -18,12 +18,7 @@ fn test_empty_routes() -> izanami::Result<()> {
         .client() //
         .block(&mut rt)?;
 
-    let response = client
-        .request(
-            Request::get("/") //
-                .body(())?,
-        )
-        .block(&mut rt)?;
+    let response = client.get(Uri::from_static("/")).block(&mut rt)?;
     assert_eq!(response.status(), 404);
 
     Ok(())
@@ -47,12 +42,7 @@ fn test_single_route() -> izanami::Result<()> {
         .client() //
         .block(&mut rt)?;
 
-    let response = client
-        .request(
-            Request::get("/") //
-                .body(())?,
-        )
-        .block(&mut rt)?;
+    let response = client.get(Uri::from_static("/")).block(&mut rt)?;
     assert_eq!(response.status(), 200);
 
     let body = response
@@ -92,12 +82,7 @@ fn test_capture_param() -> izanami::Result<()> {
         .client() //
         .block(&mut rt)?;
 
-    let response = client
-        .request(
-            Request::get("/42") //
-                .body(())?,
-        )
-        .block(&mut rt)?;
+    let response = client.get(Uri::from_static("/42")).block(&mut rt)?;
     assert_eq!(response.status(), 200);
 
     let body = response
@@ -105,12 +90,7 @@ fn test_capture_param() -> izanami::Result<()> {
         .block(&mut rt)?;
     assert_eq!(body.to_utf8()?, "id=42");
 
-    let response = client
-        .request(
-            Request::get("/fox") //
-                .body(())?,
-        )
-        .block(&mut rt)?;
+    let response = client.get(Uri::from_static("/fox")).block(&mut rt)?;
     assert_eq!(response.status(), 404);
 
     Ok(())
