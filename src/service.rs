@@ -3,10 +3,10 @@
 use {
     crate::error::BoxedStdError,
     bytes::{Buf, BufMut, Bytes},
-    futures::{Future, Poll},
-    http::{HeaderMap, Request, Response},
+    futures::{Async, Future, Poll},
+    http::HeaderMap,
     hyper::body::Payload as _Payload,
-    izanami_service::{MakeService, Service},
+    izanami_service::Service,
     izanami_util::{
         buf_stream::{BufStream, SizeHint},
         http::{HasTrailers, Upgrade},
@@ -15,7 +15,7 @@ use {
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
-/// An asynchronous stream of chunks that represents the HTTP request body.
+/// The message body of an incoming HTTP request.
 #[derive(Debug)]
 pub struct RequestBody(Inner);
 
@@ -120,10 +120,13 @@ impl Upgrade for RequestBody {
     }
 }
 
+/// Asyncrhonous I/O object used after upgrading the protocol from HTTP.
 #[derive(Debug)]
 pub struct Upgraded(hyper::upgrade::Upgraded);
 
 impl Upgraded {
+    /// Acquire the instance of actual I/O object that has
+    /// the specified concrete type, if available.
     #[inline]
     pub fn downcast<T>(self) -> Result<(T, Bytes), Self>
     where
@@ -179,98 +182,149 @@ impl AsyncWrite for Upgraded {
     }
 }
 
-pub trait MakeHttpService {
-    type ResponseBody: ResponseBody + Send + 'static;
-    type Error: Into<BoxedStdError>;
-    type Service: HttpService<ResponseBody = Self::ResponseBody, Error = Self::Error>;
-    type MakeError: Into<BoxedStdError>;
-    type Future: Future<Item = Self::Service, Error = Self::MakeError>;
+/// Type alias representing the HTTP request passed to the services.
+pub type HttpRequest = http::Request<RequestBody>;
 
-    fn make_service(&mut self) -> Self::Future;
+pub trait HttpService {
+    type Connection: HttpConnection;
+    type Error: Into<BoxedStdError>;
+    type Future: Future<Item = Self::Connection, Error = Self::Error>;
+
+    #[doc(hidden)]
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(Async::Ready(()))
+    }
+
+    fn connect(&mut self) -> Self::Future;
 }
 
-impl<S, Bd> MakeHttpService for S
+impl<S> HttpService for S
 where
-    S: MakeService<(), Request<RequestBody>, Response = Response<Bd>>,
+    S: Service<()>,
+    S::Response: HttpConnection,
     S::Error: Into<BoxedStdError>,
-    S::MakeError: Into<BoxedStdError>,
-    Bd: ResponseBody + Send + 'static,
 {
-    type ResponseBody = Bd;
+    type Connection = S::Response;
     type Error = S::Error;
-    type Service = S::Service;
-    type MakeError = S::MakeError;
     type Future = S::Future;
 
-    fn make_service(&mut self) -> Self::Future {
-        MakeService::make_service(self, ())
+    #[inline]
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Service::poll_ready(self)
+    }
+
+    #[inline]
+    fn connect(&mut self) -> Self::Future {
+        Service::call(self, ())
     }
 }
 
-pub trait HttpService {
-    type ResponseBody: ResponseBody + Send + 'static;
+pub trait HttpConnection {
+    type Response: HttpResponse;
     type Error: Into<BoxedStdError>;
-    type Future: Future<Item = Response<Self::ResponseBody>, Error = Self::Error>;
+    type Future: Future<Item = Self::Response, Error = Self::Error>;
 
-    fn call(&mut self, request: Request<RequestBody>) -> Self::Future;
+    #[doc(hidden)]
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(Async::Ready(()))
+    }
+
+    fn respond(&mut self, request: HttpRequest) -> Self::Future;
 }
 
-impl<S, Bd> HttpService for S
+impl<S> HttpConnection for S
 where
-    S: Service<Request<RequestBody>, Response = Response<Bd>>,
+    S: Service<HttpRequest>,
+    S::Response: HttpResponse,
     S::Error: Into<BoxedStdError>,
-    Bd: ResponseBody + Send + 'static,
 {
-    type ResponseBody = Bd;
+    type Response = S::Response;
     type Error = S::Error;
     type Future = S::Future;
 
-    fn call(&mut self, request: Request<RequestBody>) -> Self::Future {
+    #[inline]
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Service::poll_ready(self)
+    }
+
+    #[inline]
+    fn respond(&mut self, request: HttpRequest) -> Self::Future {
         Service::call(self, request)
     }
 }
 
-pub trait ResponseBody {
-    type Item: Buf + Send;
-    type Error: Into<BoxedStdError>;
-    type TrailersError: Into<BoxedStdError>;
+pub trait HttpResponse: imp::HttpResponseImpl {}
 
-    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error>;
+impl<Bd> HttpResponse for http::Response<Bd> where Bd: ResponseBody {}
 
-    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError>;
-
-    fn size_hint(&self) -> SizeHint;
-}
+pub trait ResponseBody: imp::ResponseBodyImpl {}
 
 impl<Bd> ResponseBody for Bd
 where
-    Bd: BufStream + HasTrailers,
+    Bd: BufStream + HasTrailers + Send + 'static,
     Bd::Item: Send,
     Bd::Error: Into<BoxedStdError>,
     Bd::TrailersError: Into<BoxedStdError>,
 {
-    type Item = Bd::Item;
-    type Error = Bd::Error;
-    type TrailersError = Bd::TrailersError;
-
-    #[inline]
-    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        BufStream::poll_buf(self)
-    }
-
-    #[inline]
-    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
-        HasTrailers::poll_trailers(self)
-    }
-
-    #[inline]
-    fn size_hint(&self) -> SizeHint {
-        BufStream::size_hint(self)
-    }
 }
 
 fn already_upgraded() -> BoxedStdError {
     failure::format_err!("the request body has already been upgraded")
         .compat()
         .into()
+}
+
+pub(crate) mod imp {
+    use super::*;
+
+    pub trait HttpResponseImpl {
+        type Data: Buf + Send;
+        type Body: ResponseBody<Data = Self::Data>;
+        fn into_response(self) -> http::Response<Self::Body>;
+    }
+
+    impl<Bd> HttpResponseImpl for http::Response<Bd>
+    where
+        Bd: ResponseBody,
+    {
+        type Data = Bd::Data;
+        type Body = Bd;
+
+        #[inline]
+        fn into_response(self) -> http::Response<Self::Body> {
+            self
+        }
+    }
+
+    pub trait ResponseBodyImpl: Send + 'static {
+        type Data: Buf + Send;
+        fn poll_data(&mut self) -> Poll<Option<Self::Data>, BoxedStdError>;
+        fn poll_trailers(&mut self) -> Poll<Option<http::HeaderMap>, BoxedStdError>;
+        fn size_hint(&self) -> SizeHint;
+    }
+
+    impl<Bd> ResponseBodyImpl for Bd
+    where
+        Bd: BufStream + HasTrailers + Send + 'static,
+        Bd::Item: Send,
+        Bd::Error: Into<BoxedStdError>,
+        Bd::TrailersError: Into<BoxedStdError>,
+    {
+        type Data = Bd::Item;
+
+        #[inline]
+        fn poll_data(&mut self) -> Poll<Option<Self::Data>, BoxedStdError> {
+            BufStream::poll_buf(self).map_err(Into::into)
+        }
+
+        #[inline]
+        fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, BoxedStdError> {
+            HasTrailers::poll_trailers(self).map_err(Into::into)
+        }
+
+        #[inline]
+        fn size_hint(&self) -> SizeHint {
+            BufStream::size_hint(self)
+        }
+    }
 }

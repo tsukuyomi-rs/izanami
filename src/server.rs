@@ -3,10 +3,15 @@
 use {
     crate::{
         drain::{Signal, Watch},
+        error::BoxedStdError,
         net::{Bind, Listener},
         runtime::{Block, Runtime, Spawn},
-        service::{HttpService, MakeHttpService, RequestBody, ResponseBody},
+        service::{
+            imp::{HttpResponseImpl, ResponseBodyImpl},
+            HttpConnection, HttpService, RequestBody,
+        },
         tls::{NoTls, TlsConfig, TlsWrapper},
+        util::MapAsyncExt,
     },
     futures::{future::Executor, Async, Future, IntoFuture, Poll},
     http::{Request, Response},
@@ -36,7 +41,7 @@ pub struct HttpServer<F, Rt> {
 impl<F, S, Rt> HttpServer<F, Rt>
 where
     F: Fn() -> S,
-    S: MakeHttpService,
+    S: HttpService,
     Rt: Runtime,
 {
     /// Creates a `HttpServer` using the specified service factory.
@@ -114,9 +119,9 @@ where
             .push(Box::new(move |rt, service_factory, watch| {
                 for listener in listeners.drain(..) {
                     rt.spawn(HttpServerTask {
+                        service: (*service_factory)(),
                         listener,
                         tls_wrapper: tls_wrapper.clone(),
-                        make_service: (*service_factory)(),
                         watch: watch.clone(),
                         http_versions,
                     });
@@ -173,7 +178,7 @@ impl Future for Handle {
 
 #[allow(missing_debug_implementations)]
 pub struct HttpServerTask<S, L, T> {
-    make_service: S,
+    service: S,
     listener: L,
     tls_wrapper: T,
     watch: Watch,
@@ -182,12 +187,12 @@ pub struct HttpServerTask<S, L, T> {
 
 /// A helper macro for creating a server task.
 macro_rules! spawn_inner {
-    ($self:expr, $runtime:expr) => {{
+    (<$S:ty> $self:expr, $runtime:expr) => {{
         let self_ = $self;
         let runtime = $runtime;
 
         let watch = self_.watch;
-        let mut make_service = self_.make_service;
+        let mut service = self_.service;
         let tls_wrapper = self_.tls_wrapper;
         let mut executor = runtime.executor();
 
@@ -203,21 +208,21 @@ macro_rules! spawn_inner {
             _ => {}
         }
 
-        let serve_connection_fn = move |conn, remote_addr, watch: Watch| {
-            let mk_svc_fut = make_service
-                .make_service()
-                .map_err(|e| log::error!("make service error: {}", e.into()));
+        let serve_connection_fn = move |io, remote_addr, watch: Watch| {
+            let mk_conn_fut = service
+                .connect()
+                .map_err(|e| log::error!("HttpService::connect error: {}", e.into()));
 
-            let mk_conn_fut = tls_wrapper
-                .wrap(conn)
+            let mk_stream_fut = tls_wrapper
+                .wrap(io)
                 .map_err(|e| log::error!("tls error: {}", e.into()));
 
             let protocol = protocol.clone();
-            (mk_svc_fut, mk_conn_fut) //
+            (mk_conn_fut, mk_stream_fut) //
                 .into_future()
-                .and_then(move |(service, (stream, server_name))| {
-                    let service = IzanamiService {
-                        service,
+                .and_then(move |(connection, (stream, server_name))| {
+                    let service = InnerService::<$S> {
+                        connection,
                         remote_addr,
                         server_name,
                     };
@@ -247,10 +252,10 @@ macro_rules! spawn_inner {
 
 impl<S, L, T> Spawn<tokio::runtime::Runtime> for HttpServerTask<S, L, T>
 where
-    S: MakeHttpService + Send + 'static,
+    S: HttpService + Send + 'static,
     S::Future: Send + 'static,
-    S::Service: Send + 'static,
-    <S::Service as HttpService>::Future: Send + 'static,
+    S::Connection: Send + 'static,
+    <S::Connection as HttpConnection>::Future: Send + 'static,
     L: Listener + Send + 'static,
     T: TlsWrapper<L::Conn> + Send + 'static,
     T::Wrapped: Send + 'static,
@@ -258,14 +263,14 @@ where
 {
     #[allow(unused_mut)]
     fn spawn(self, rt: &mut tokio::runtime::Runtime) {
-        spawn_inner!(self, rt)
+        spawn_inner!(<S> self, rt)
     }
 }
 
 impl<S, L, T> Spawn<tokio::runtime::current_thread::Runtime> for HttpServerTask<S, L, T>
 where
-    S: MakeHttpService + 'static,
-    S::Service: 'static,
+    S: HttpService + 'static,
+    S::Connection: 'static,
     S::Future: 'static,
     L: Listener + 'static,
     T: TlsWrapper<L::Conn> + 'static,
@@ -274,7 +279,7 @@ where
 {
     #[allow(unused_mut)]
     fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime) {
-        spawn_inner!(self, rt)
+        spawn_inner!(<S> self, rt)
     }
 }
 
@@ -330,20 +335,20 @@ where
 }
 
 #[allow(missing_debug_implementations)]
-struct IzanamiService<S> {
-    service: S,
+struct InnerService<S: HttpService> {
+    connection: S::Connection,
     remote_addr: Option<RemoteAddr>,
     server_name: Option<ServerName>,
 }
 
-impl<S> hyper::service::Service for IzanamiService<S>
+impl<S> hyper::service::Service for InnerService<S>
 where
-    S: HttpService,
+    S: HttpService + 'static,
 {
     type ReqBody = hyper::Body;
-    type ResBody = InnerBody<S::ResponseBody>;
-    type Error = S::Error;
-    type Future = LiftedHttpServiceFuture<S::Future>;
+    type ResBody = InnerBody<S>;
+    type Error = BoxedStdError;
+    type Future = InnerServiceFuture<S>;
 
     #[inline]
     fn call(&mut self, request: Request<hyper::Body>) -> Self::Future {
@@ -355,49 +360,60 @@ where
             request.extensions_mut().insert(sni.clone());
         }
 
-        LiftedHttpServiceFuture(self.service.call(request))
+        InnerServiceFuture {
+            inner: self.connection.respond(request),
+        }
     }
 }
 
 #[allow(missing_debug_implementations)]
-struct LiftedHttpServiceFuture<Fut>(Fut);
+struct InnerServiceFuture<S: HttpService> {
+    inner: <S::Connection as HttpConnection>::Future,
+}
 
-impl<Fut, Bd> Future for LiftedHttpServiceFuture<Fut>
+impl<S> Future for InnerServiceFuture<S>
 where
-    Fut: Future<Item = Response<Bd>>,
-    Bd: ResponseBody + Send + 'static,
+    S: HttpService,
 {
-    type Item = Response<InnerBody<Bd>>;
-    type Error = Fut::Error;
+    type Item = Response<InnerBody<S>>;
+    type Error = BoxedStdError;
 
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0
+        self.inner
             .poll()
-            .map(|x| x.map(|response| response.map(InnerBody)))
+            .map_async(|response| response.into_response().map(|inner| InnerBody { inner }))
+            .map_err(Into::into)
     }
 }
 
+type AssocResponse<S> = <<S as HttpService>::Connection as HttpConnection>::Response;
+
 #[allow(missing_debug_implementations)]
-struct InnerBody<Bd>(Bd);
+struct InnerBody<S: HttpService> {
+    inner: <AssocResponse<S> as HttpResponseImpl>::Body,
+}
 
-impl<Bd> hyper::body::Payload for InnerBody<Bd>
+impl<S> hyper::body::Payload for InnerBody<S>
 where
-    Bd: ResponseBody + Send + 'static,
+    S: HttpService + 'static,
 {
-    type Data = Bd::Item;
-    type Error = crate::error::BoxedStdError;
+    type Data = <AssocResponse<S> as HttpResponseImpl>::Data;
+    type Error = BoxedStdError;
 
+    #[inline]
     fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
-        self.0.poll_buf().map_err(Into::into)
+        ResponseBodyImpl::poll_data(&mut self.inner)
     }
 
+    #[inline]
     fn poll_trailers(&mut self) -> Poll<Option<http::HeaderMap>, Self::Error> {
-        self.0.poll_trailers().map_err(Into::into)
+        ResponseBodyImpl::poll_trailers(&mut self.inner)
     }
 
+    #[inline]
     fn content_length(&self) -> Option<u64> {
-        let hint = self.0.size_hint();
+        let hint = ResponseBodyImpl::size_hint(&self.inner);
         match (hint.lower(), hint.upper()) {
             (lower, Some(upper)) if lower == upper => Some(upper),
             _ => None,
