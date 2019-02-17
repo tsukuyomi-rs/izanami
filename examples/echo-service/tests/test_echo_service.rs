@@ -1,7 +1,8 @@
 use {
     echo_service::Echo,
-    http::{Response, Uri},
-    izanami::{runtime::Block, test::Server},
+    http::{Request, Response},
+    izanami::runtime::Block,
+    izanami_service::{MakeService, Service},
     tokio::runtime::current_thread::Runtime,
 };
 
@@ -9,16 +10,15 @@ use {
 fn test_empty_routes() -> izanami::Result<()> {
     let mut rt = Runtime::new()?;
 
-    let mut server = Server::new(
-        Echo::builder() //
-            .build(),
-    );
+    let mut echo = Echo::builder().build();
 
-    let mut client = server
-        .client() //
+    let mut service = echo
+        .make_service(()) //
         .block(&mut rt)?;
 
-    let response = client.get(Uri::from_static("/")).block(&mut rt)?;
+    let response = service
+        .call(Request::get("/").body(())?) //
+        .block(&mut rt)?;
     assert_eq!(response.status(), 404);
 
     Ok(())
@@ -28,27 +28,26 @@ fn test_empty_routes() -> izanami::Result<()> {
 fn test_single_route() -> izanami::Result<()> {
     let mut rt = Runtime::new()?;
 
-    let mut server = Server::new(
-        Echo::builder() //
-            .add_route("/", |_| {
-                Response::builder() //
-                    .body("hello")
-                    .unwrap()
-            })?
-            .build(),
-    );
+    let mut echo = Echo::builder() //
+        .add_route("/", |_| {
+            Response::builder() //
+                .body("hello")
+                .unwrap()
+        })?
+        .build();
 
-    let mut client = server
-        .client() //
+    let mut service = echo
+        .make_service(()) //
         .block(&mut rt)?;
 
-    let response = client.get(Uri::from_static("/")).block(&mut rt)?;
+    let response = service
+        .call(
+            Request::get("/") //
+                .body(())?,
+        )
+        .block(&mut rt)?;
     assert_eq!(response.status(), 200);
-
-    let body = response
-        .send_body() //
-        .block(&mut rt)?;
-    assert_eq!(body.to_utf8()?, "hello");
+    assert_eq!(std::str::from_utf8(&*response.body())?, "hello");
 
     Ok(())
 }
@@ -57,40 +56,38 @@ fn test_single_route() -> izanami::Result<()> {
 fn test_capture_param() -> izanami::Result<()> {
     let mut rt = Runtime::new()?;
 
-    let mut server = Server::new(
-        Echo::builder() //
-            .add_route("/([0-9]+)", |cx| {
-                match cx
-                    .captures()
-                    .and_then(|c| c.get(1))
-                    .and_then(|m| m.as_str().parse::<u32>().ok())
-                {
-                    Some(id) => Response::builder()
-                        .status(200)
-                        .body(format!("id={}", id))
-                        .unwrap(),
-                    None => Response::builder()
-                        .status(400)
-                        .body("missing or invalid id".into())
-                        .unwrap(),
-                }
-            })?
-            .build(),
-    );
+    let mut echo = Echo::builder() //
+        .add_route("/([0-9]+)", |cx| {
+            match cx
+                .captures()
+                .and_then(|c| c.get(1))
+                .and_then(|m| m.as_str().parse::<u32>().ok())
+            {
+                Some(id) => Response::builder()
+                    .status(200)
+                    .body(format!("id={}", id))
+                    .unwrap(),
+                None => Response::builder()
+                    .status(400)
+                    .body("missing or invalid id".into())
+                    .unwrap(),
+            }
+        })?
+        .build();
 
-    let mut client = server
-        .client() //
+    let mut service = echo
+        .make_service(()) //
         .block(&mut rt)?;
 
-    let response = client.get(Uri::from_static("/42")).block(&mut rt)?;
+    let response = service
+        .call(Request::get("/42").body(())?) //
+        .block(&mut rt)?;
     assert_eq!(response.status(), 200);
+    assert_eq!(std::str::from_utf8(&*response.body())?, "id=42");
 
-    let body = response
-        .send_body() //
+    let response = service
+        .call(Request::get("/fox").body(())?)
         .block(&mut rt)?;
-    assert_eq!(body.to_utf8()?, "id=42");
-
-    let response = client.get(Uri::from_static("/fox")).block(&mut rt)?;
     assert_eq!(response.status(), 404);
 
     Ok(())

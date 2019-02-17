@@ -18,7 +18,6 @@ pub mod net;
 pub mod runtime;
 pub mod server;
 pub mod service;
-pub mod test;
 pub mod tls;
 
 #[doc(inline)]
