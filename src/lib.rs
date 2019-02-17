@@ -1,4 +1,4 @@
-//! A lightweight implementation of HTTP server based on Hyper.
+//! An HTTP server implementation powered by `hyper` and `tower-service`.
 
 #![doc(html_root_url = "https://docs.rs/izanami/0.1.0-preview.2")]
 #![deny(

@@ -5,21 +5,18 @@
 
 > This library is in the experimental stage, and it cannot be used for production use.
 
-A *meta* library for creating Web frameworks.
-
-The ultimate goal of this library is to provide an HTTP server
-that Web frameworks can use in common and a utility for testing
-the Web services.
+An HTTP server implementation powered by `hyper` and `tower-service`.
 
 ## Features
 
-* Asynchronous HTTP server powered by [`tokio`] and [`hyper`]
-  * Supports both of [TCP](./examples/tcp-server) and [Unix domain socket](./examples/uds-server)
-  * TLS support
-    - [`native-tls`](./examples/native-tls-server)
-    - [`openssl`](./examples/openssl-server)
-    - [`rustls`](./examples/rustls-server)
-* Utility for testing HTTP services
+* Supports Both of HTTP/1.x and HTTP/2.0 protocols with the power of `hyper`
+* [Unix domain socket](./examples/uds-server) support (only on Unix platform)
+* Built-in SSL/TLS support ([`native-tls`](./examples/native-tls-server), [`openssl`](./examples/openssl-server)
+ or [`rustls`](./examples/rustls-server) at your option)
+
+Note that this project does **not** aim to grow itself to a Web framework.
+The *goal* of Izanami is to provide a foundation for Web frameworks that can
+be used in common (it just corresponds to the position of Werkzeug against Flask).
 
 ## Resources
 

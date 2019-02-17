@@ -1,12 +1,12 @@
 [package]
-name = "example-uds-server"
+name = "example-unix-server"
 version = "0.0.0"
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 publish = false
 
 [[bin]]
-name = "example_uds_server"
+name = "example_unix_server"
 path = "src/main.rs"
 doc = false
 

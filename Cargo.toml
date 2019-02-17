@@ -6,7 +6,7 @@ authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ubnt-intrepid/izanami.git"
 readme = "README.md"
-description = "A meta library for creating Web frameworks."
+description = "An HTTP server implementation powered by hyper and tower-service."
 
 include = [
   "/Cargo.toml",
@@ -60,5 +60,5 @@ members = [
   "examples/openssl-server",
   "examples/rustls-server",
   "examples/tcp-server",
-  "examples/uds-server",
+  "examples/unix-server",
 ]
