@@ -5,7 +5,7 @@ use {
         drain::{Signal, Watch},
         net::{Bind, Listener},
         runtime::{Block, Runtime, Spawn},
-        service::{HttpService, MakeContext, MakeHttpService, RequestBody, ResponseBody},
+        service::{HttpService, MakeHttpService, RequestBody, ResponseBody},
         tls::{NoTls, TlsConfig, TlsWrapper},
     },
     futures::{future::Executor, Async, Future, IntoFuture, Poll},
@@ -205,7 +205,7 @@ macro_rules! spawn_inner {
 
         let serve_connection_fn = move |conn, remote_addr, watch: Watch| {
             let mk_svc_fut = make_service
-                .make_service(&mut MakeContext::new(&remote_addr))
+                .make_service()
                 .map_err(|e| log::error!("make service error: {}", e.into()));
 
             let mk_conn_fut = tls_wrapper

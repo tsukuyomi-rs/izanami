@@ -10,31 +10,10 @@ use {
     izanami_util::{
         buf_stream::{BufStream, SizeHint},
         http::{HasTrailers, Upgrade},
-        net::RemoteAddr,
     },
-    std::{io, marker::PhantomData},
+    std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };
-
-/// The context value used when creating the service.
-#[derive(Debug)]
-pub struct MakeContext<'a> {
-    remote_addr: &'a Option<RemoteAddr>,
-    _anchor: PhantomData<std::rc::Rc<()>>,
-}
-
-impl<'a> MakeContext<'a> {
-    pub(crate) fn new(remote_addr: &'a Option<RemoteAddr>) -> Self {
-        Self {
-            remote_addr,
-            _anchor: PhantomData,
-        }
-    }
-
-    pub fn remote_addr(&self) -> Option<&RemoteAddr> {
-        self.remote_addr.as_ref()
-    }
-}
 
 /// An asynchronous stream of chunks that represents the HTTP request body.
 #[derive(Debug)]
@@ -207,34 +186,24 @@ pub trait MakeHttpService {
     type MakeError: Into<BoxedStdError>;
     type Future: Future<Item = Self::Service, Error = Self::MakeError>;
 
-    fn make_service(&mut self, cx: &mut MakeContext<'_>) -> Self::Future;
+    fn make_service(&mut self) -> Self::Future;
 }
 
-impl<S, Bd, SvcErr, MkErr, Svc, Fut> MakeHttpService for S
+impl<S, Bd> MakeHttpService for S
 where
-    S: for<'cx, 'srv> MakeService<
-        &'cx mut MakeContext<'srv>, //
-        Request<RequestBody>,
-        Response = Response<Bd>,
-        Error = SvcErr,
-        Service = Svc,
-        MakeError = MkErr,
-        Future = Fut,
-    >,
-    SvcErr: Into<BoxedStdError>,
-    MkErr: Into<BoxedStdError>,
-    Svc: Service<Request<RequestBody>, Response = Response<Bd>, Error = SvcErr>,
-    Fut: Future<Item = Svc, Error = MkErr>,
+    S: MakeService<(), Request<RequestBody>, Response = Response<Bd>>,
+    S::Error: Into<BoxedStdError>,
+    S::MakeError: Into<BoxedStdError>,
     Bd: ResponseBody + Send + 'static,
 {
     type ResponseBody = Bd;
-    type Error = SvcErr;
-    type Service = Svc;
-    type MakeError = MkErr;
-    type Future = Fut;
+    type Error = S::Error;
+    type Service = S::Service;
+    type MakeError = S::MakeError;
+    type Future = S::Future;
 
-    fn make_service(&mut self, cx: &mut MakeContext<'_>) -> Self::Future {
-        MakeService::make_service(self, cx)
+    fn make_service(&mut self) -> Self::Future {
+        MakeService::make_service(self, ())
     }
 }
 
