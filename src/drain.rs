@@ -62,21 +62,13 @@ impl Future for Draining {
     }
 }
 
-#[derive(Clone)]
-#[allow(missing_debug_implementations)]
+#[derive(Clone, Debug)]
 pub(crate) struct Watch {
     rx: Shared<oneshot::Receiver<()>>,
     tx_drained: mpsc::Sender<Never>,
 }
 
 impl Watch {
-    fn watch(&mut self) -> bool {
-        match self.rx.poll() {
-            Ok(Async::Ready(..)) | Err(..) => true,
-            Ok(Async::NotReady) => false,
-        }
-    }
-
     pub(crate) fn watching<Fut, FnPoll, FnShutdown, T, E>(
         self,
         future: Fut,
@@ -114,18 +106,18 @@ where
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            match self.on_drain.take() {
-                Some(on_drain) => {
-                    if self.watch.watch() {
+            if let Some(on_drain) = self.on_drain.take() {
+                match self.watch.rx.poll() {
+                    Ok(Async::Ready(..)) | Err(..) => {
                         on_drain(&mut self.future);
                         continue;
-                    } else {
+                    }
+                    Ok(Async::NotReady) => {
                         self.on_drain = Some(on_drain);
-                        return (self.on_poll)(&mut self.future, &self.watch);
                     }
                 }
-                None => return (self.on_poll)(&mut self.future, &self.watch),
             }
+            return (self.on_poll)(&mut self.future, &self.watch);
         }
     }
 }

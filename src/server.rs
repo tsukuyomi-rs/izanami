@@ -1,167 +1,91 @@
-//! HTTP server.
+//! The implementation of HTTP server.
 
 use {
     crate::{
         drain::{Signal, Watch},
         error::BoxedStdError,
-        net::{Bind, Listener},
-        runtime::{Block, Runtime, Spawn},
+        runtime::{Runtime, Spawn},
         service::{
             imp::{HttpResponseImpl, ResponseBodyImpl},
-            HttpConnection, HttpService, RequestBody,
+            HttpService, MakeHttpService, RequestBody,
         },
-        tls::{NoTls, TlsConfig, TlsWrapper},
-        util::MapAsyncExt,
+        tls::{MakeTlsTransport, NoTls},
+        util::*,
     },
-    futures::{future::Executor, Async, Future, IntoFuture, Poll},
+    futures::{future::Executor, Async, Future, IntoFuture, Poll, Stream},
     http::{Request, Response},
-    izanami_util::net::{RemoteAddr, ServerName},
+    hyper::server::conn::Http,
+    izanami_service::StreamService,
+    std::io,
+    tokio::io::{AsyncRead, AsyncWrite},
 };
 
-type SpawnFn<Rt, F> = dyn FnMut(&mut Rt, &F, &Watch) -> crate::Result<()> + Send + 'static;
-
-#[derive(Debug, Copy, Clone)]
-enum HttpVersions {
-    Http1Only,
-    Http2Only,
-    Fallback,
+/// A builder for creating an `Server`.
+#[derive(Debug)]
+pub struct Builder<S> {
+    stream_service: S,
+    protocol: Http,
 }
 
-/// An HTTP server running on a specific runtime.
-#[allow(missing_debug_implementations)]
-pub struct HttpServer<F, Rt> {
-    service_factory: F,
-    signal: Signal,
-    watch: Watch,
-    spawn_fns: Vec<Box<SpawnFn<Rt, F>>>,
-    http_versions: HttpVersions,
-    alpn_protocols: Option<Vec<String>>,
-}
-
-impl<F, S, Rt> HttpServer<F, Rt>
+impl<S, T, C> Builder<S>
 where
-    F: Fn() -> S,
-    S: HttpService,
-    Rt: Runtime,
+    S: StreamService<Response = (T, C)>,
+    T: AsyncRead + AsyncWrite,
+    C: HttpService,
 {
-    /// Creates a `HttpServer` using the specified service factory.
-    pub fn new(service_factory: F) -> Self {
+    /// Creates a `Builder` using a streamed service.
+    pub fn new(stream_service: S, protocol: Http) -> Self {
+        Self {
+            stream_service,
+            protocol,
+        }
+    }
+
+    /// Specifies that the server uses only HTTP/1.
+    pub fn http1_only(mut self) -> Self {
+        self.protocol.http1_only(true);
+        self
+    }
+
+    /// Specifies that the server uses only HTTP/2.
+    pub fn http2_only(mut self) -> Self {
+        self.protocol.http2_only(true);
+        self
+    }
+
+    /// Consumes itself and create an instance of `Server`.
+    ///
+    /// It also returns a `Handle` used by controlling the spawned server.
+    pub fn build(self) -> (Server<S>, Handle) {
         let (signal, watch) = crate::drain::channel();
-        Self {
-            service_factory,
-            signal,
+        let task = Server {
+            stream_service: self.stream_service,
             watch,
-            spawn_fns: vec![],
-            http_versions: HttpVersions::Fallback,
-            alpn_protocols: None,
-        }
-    }
-
-    /// Sets whether to use HTTP/1 is required or not.
-    ///
-    /// By default, the server try HTTP/2 at first and switches to HTTP/1 if failed.
-    pub fn http1_only(self) -> Self {
-        Self {
-            http_versions: HttpVersions::Http1Only,
-            ..self
-        }
-    }
-
-    /// Sets whether to use HTTP/2 is required or not.
-    ///
-    /// By default, the server try HTTP/2 at first and switches to HTTP/1 if failed.
-    pub fn http2_only(self) -> Self {
-        Self {
-            http_versions: HttpVersions::Http2Only,
-            ..self
-        }
-    }
-
-    /// Specifies the list of protocols used by ALPN.
-    pub fn alpn_protocols(self, protocols: Vec<String>) -> Self {
-        Self {
-            alpn_protocols: Some(protocols),
-            ..self
-        }
-    }
-
-    /// Associate the specified I/O with this server.
-    pub fn bind<B>(self, bind: B) -> crate::Result<Self>
-    where
-        B: Bind,
-        B::Listener: Send + 'static,
-        HttpServerTask<S, B::Listener, NoTls>: Spawn<Rt>,
-    {
-        self.bind_tls(bind, NoTls::default())
-    }
-
-    /// Associate the specified I/O and SSL/TLS configuration with this server.
-    pub fn bind_tls<B, T>(mut self, bind: B, tls: T) -> crate::Result<Self>
-    where
-        B: Bind,
-        B::Listener: Send + 'static,
-        T: TlsConfig<B::Conn>,
-        T::Wrapper: Send + 'static,
-        HttpServerTask<S, B::Listener, T::Wrapper>: Spawn<Rt>,
-    {
-        let mut listeners = bind.into_listeners()?;
-        let http_versions = self.http_versions;
-
-        let alpn_protocols = match (&self.alpn_protocols, http_versions) {
-            (Some(protocols), _) => protocols.clone(),
-            (None, HttpVersions::Http1Only) => vec!["http/1.1".into()],
-            (None, HttpVersions::Http2Only) => vec!["h2".into()],
-            (None, HttpVersions::Fallback) => vec!["h2".into(), "http/1.1".into()],
+            protocol: self.protocol,
         };
-        let tls_wrapper = tls.into_wrapper(alpn_protocols)?;
-
-        self.spawn_fns
-            .push(Box::new(move |rt, service_factory, watch| {
-                for listener in listeners.drain(..) {
-                    rt.spawn(HttpServerTask {
-                        service: (*service_factory)(),
-                        listener,
-                        tls_wrapper: tls_wrapper.clone(),
-                        watch: watch.clone(),
-                        http_versions,
-                    });
-                }
-                Ok(())
-            }));
-
-        Ok(self)
+        let handle = Handle { signal };
+        (task, handle)
     }
 
-    /// Start all tasks registered on this server onto the specified runtime.
-    ///
-    /// This method returns a `Handle` to notify a shutdown signal to the all
-    /// of spawned tasks and track their completion.
-    pub fn start(self, rt: &mut Rt) -> crate::Result<Handle> {
-        for mut spawn_fn in self.spawn_fns {
-            (spawn_fn)(rt, &self.service_factory, &self.watch)?;
-        }
-        Ok(Handle {
-            signal: self.signal,
-        })
-    }
-
-    /// Run this server onto the specified runtime.
-    pub fn run(self, rt: &mut Rt) -> crate::Result<()>
+    /// Starts the configured HTTP server onto the specified spawner and returns its handle.
+    pub fn start<Spawner: ?Sized>(self, spawner: &mut Spawner) -> Handle
     where
-        Handle: Block<Rt>,
+        Server<S>: Spawn<Spawner>,
     {
-        let _ = self.start(rt)?.block(rt);
-        Ok(())
+        let (server, handle) = self.build();
+        server.spawn(spawner);
+        handle
     }
 }
 
+/// A handle associated with `Server`.
 #[derive(Debug)]
 pub struct Handle {
     signal: Signal,
 }
 
 impl Handle {
-    /// Send a shutdown signal to the background tasks.
+    /// Send a shutdown signal to the background task and await its completion.
     pub fn shutdown(self) -> impl Future<Item = (), Error = ()> {
         self.signal.drain()
     }
@@ -176,56 +100,95 @@ impl Future for Handle {
     }
 }
 
-#[allow(missing_debug_implementations)]
-pub struct HttpServerTask<S, L, T> {
-    service: S,
-    listener: L,
-    tls_wrapper: T,
+/// An HTTP server.
+#[derive(Debug)]
+pub struct Server<S> {
+    stream_service: S,
     watch: Watch,
-    http_versions: HttpVersions,
+    protocol: Http,
+}
+
+impl<S, T, C> Server<S>
+where
+    S: StreamService<Response = (T, C)>,
+    T: AsyncRead + AsyncWrite,
+    C: HttpService,
+{
+    /// Creates a `Builder` using a streamed service.
+    pub fn builder(stream_service: S) -> Builder<S> {
+        Builder::new(stream_service, Http::new())
+    }
+
+    /// Spawns this server onto the specified spawner.
+    pub fn spawn<Sp: ?Sized>(self, spawner: &mut Sp)
+    where
+        Self: Spawn<Sp>,
+    {
+        Spawn::spawn(self, spawner)
+    }
+}
+
+impl<S, T> Server<Incoming<crate::net::tcp::AddrIncoming, S, T>>
+where
+    S: MakeHttpService<crate::net::tcp::AddrStream>,
+    T: MakeTlsTransport<crate::net::tcp::AddrStream>,
+{
+    pub fn bind<A>(
+        make_service: S,
+        addr: A,
+        tls: T,
+    ) -> io::Result<Builder<Incoming<crate::net::tcp::AddrIncoming, S, T>>>
+    where
+        A: std::net::ToSocketAddrs,
+    {
+        let incoming = crate::net::tcp::AddrIncoming::bind(addr)?;
+        Ok(Server::builder(Incoming::new(incoming, make_service, tls)))
+    }
+
+    #[doc(hidden)]
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.stream_service.incoming.local_addr()
+    }
+}
+
+#[cfg(unix)]
+impl<S, T> Server<Incoming<crate::net::unix::AddrIncoming, S, T>>
+where
+    S: MakeHttpService<crate::net::unix::AddrStream>,
+    T: MakeTlsTransport<crate::net::unix::AddrStream>,
+{
+    pub fn bind_unix<P>(
+        make_service: S,
+        path: P,
+        tls: T,
+    ) -> io::Result<Builder<Incoming<crate::net::unix::AddrIncoming, S, T>>>
+    where
+        P: AsRef<std::path::Path>,
+    {
+        let incoming = crate::net::unix::AddrIncoming::bind(path)?;
+        Ok(Server::builder(Incoming::new(incoming, make_service, tls)))
+    }
+
+    #[doc(hidden)]
+    pub fn local_addr(&self) -> &std::os::unix::net::SocketAddr {
+        self.stream_service.incoming.local_addr()
+    }
 }
 
 /// A helper macro for creating a server task.
-macro_rules! spawn_inner {
-    (<$S:ty> $self:expr, $runtime:expr) => {{
-        let self_ = $self;
-        let runtime = $runtime;
+macro_rules! spawn_all_task {
+    (<$S:ty> $self:expr, $executor:expr) => {{
+        let this = $self;
+        let executor = $executor;
 
-        let watch = self_.watch;
-        let mut service = self_.service;
-        let tls_wrapper = self_.tls_wrapper;
-        let mut executor = runtime.executor();
-
-        let mut protocol = hyper::server::conn::Http::new() //
-            .with_executor(executor.clone());
-        match self_.http_versions {
-            HttpVersions::Http1Only => {
-                protocol.http1_only(true);
-            }
-            HttpVersions::Http2Only => {
-                protocol.http2_only(true);
-            }
-            _ => {}
-        }
-
-        let serve_connection_fn = move |io, remote_addr, watch: Watch| {
-            let mk_conn_fut = service
-                .connect()
-                .map_err(|e| log::error!("HttpService::connect error: {}", e.into()));
-
-            let mk_stream_fut = tls_wrapper
-                .wrap(io)
-                .map_err(|e| log::error!("tls error: {}", e.into()));
-
+        let watch = this.watch;
+        let stream_service = this.stream_service;
+        let protocol = this.protocol.with_executor(executor.clone());
+        let serve_connection_fn = move |fut: <$S as StreamService>::Future, watch: Watch| {
             let protocol = protocol.clone();
-            (mk_conn_fut, mk_stream_fut) //
-                .into_future()
-                .and_then(move |(connection, (stream, server_name))| {
-                    let service = InnerService::<$S> {
-                        connection,
-                        remote_addr,
-                        server_name,
-                    };
+            fut.map_err(|_e| log::error!("stream service error"))
+                .and_then(move |(stream, service)| {
+                    let service = InnerService(service);
                     let conn = protocol.serve_connection(stream, service).with_upgrades();
                     watch
                         .watching(conn, |c, _| c.poll(), |c| c.graceful_shutdown())
@@ -234,60 +197,98 @@ macro_rules! spawn_inner {
         };
 
         let spawn_all = SpawnAll {
-            listener: self_.listener,
-            executor: runtime.executor(),
+            stream_service,
+            executor,
             serve_connection_fn,
             state: SpawnAllState::Running,
         };
 
-        let watching = watch.watching(
+        watch.watching(
             spawn_all,
             |s, watch| s.poll_watching(watch),
             |s| s.shutdown(),
-        );
-
-        runtime.spawn(watching);
+        )
     }};
 }
 
-impl<S, L, T> Spawn<tokio::runtime::Runtime> for HttpServerTask<S, L, T>
+impl<S, T, C> Spawn<tokio::runtime::Runtime> for Server<S>
 where
-    S: HttpService + Send + 'static,
+    S: StreamService<Response = (T, C)> + Send + 'static,
     S::Future: Send + 'static,
-    S::Connection: Send + 'static,
-    <S::Connection as HttpConnection>::Future: Send + 'static,
-    L: Listener + Send + 'static,
-    T: TlsWrapper<L::Conn> + Send + 'static,
-    T::Wrapped: Send + 'static,
-    T::Future: Send + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+    C: HttpService + Send + 'static,
+    C::Future: Send + 'static,
 {
-    #[allow(unused_mut)]
     fn spawn(self, rt: &mut tokio::runtime::Runtime) {
-        spawn_inner!(<S> self, rt)
+        let task = spawn_all_task!(<S> self, rt.executor());
+        rt.spawn(task);
     }
 }
 
-impl<S, L, T> Spawn<tokio::runtime::current_thread::Runtime> for HttpServerTask<S, L, T>
+impl<S, T, C> Spawn<tokio::executor::DefaultExecutor> for Server<S>
 where
-    S: HttpService + 'static,
-    S::Connection: 'static,
-    S::Future: 'static,
-    L: Listener + 'static,
-    T: TlsWrapper<L::Conn> + 'static,
-    T::Wrapped: Send + 'static,
-    T::Future: 'static,
+    S: StreamService<Response = (T, C)> + Send + 'static,
+    S::Future: Send + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+    C: HttpService + Send + 'static,
+    C::Future: Send + 'static,
 {
-    #[allow(unused_mut)]
+    fn spawn(self, spawner: &mut tokio::executor::DefaultExecutor) {
+        use tokio::executor::Executor;
+        let task = spawn_all_task!(<S> self, spawner.clone());
+        spawner
+            .spawn(Box::new(task))
+            .expect("failed to spawn a task");
+    }
+}
+
+impl<S, T, C> Spawn<tokio::runtime::TaskExecutor> for Server<S>
+where
+    S: StreamService<Response = (T, C)> + Send + 'static,
+    S::Future: Send + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+    C: HttpService + Send + 'static,
+    C::Future: Send + 'static,
+{
+    fn spawn(self, spawner: &mut tokio::runtime::TaskExecutor) {
+        let task = spawn_all_task!(<S> self, spawner.clone());
+        spawner.spawn(task);
+    }
+}
+
+impl<S, T, C> Spawn<tokio::runtime::current_thread::Runtime> for Server<S>
+where
+    S: StreamService<Response = (T, C)> + 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+    C: HttpService + 'static,
+{
     fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime) {
-        spawn_inner!(<S> self, rt)
+        let task = spawn_all_task!(<S> self, rt.executor());
+        rt.spawn(task);
+    }
+}
+
+impl<S, T, C> Spawn<tokio::runtime::current_thread::TaskExecutor> for Server<S>
+where
+    S: StreamService<Response = (T, C)> + 'static,
+    S::Future: 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+    C: HttpService + 'static,
+{
+    fn spawn(self, spawner: &mut tokio::runtime::current_thread::TaskExecutor) {
+        let task = spawn_all_task!(<S> self, spawner.clone());
+        spawner
+            .spawn_local(Box::new(task))
+            .expect("failed to spawn a task");
     }
 }
 
 #[allow(unused)]
-struct SpawnAll<L, E, F> {
-    listener: L,
-    executor: E,
+struct SpawnAll<S, F, E> {
+    stream_service: S,
     serve_connection_fn: F,
+    executor: E,
     state: SpawnAllState,
 }
 
@@ -296,50 +297,50 @@ enum SpawnAllState {
     Done,
 }
 
-impl<L, E, F> SpawnAll<L, E, F> {
+impl<S, F, E> SpawnAll<S, F, E> {
     fn shutdown(&mut self) {
         self.state = SpawnAllState::Done;
     }
 }
 
-impl<L, E, F, Fut> SpawnAll<L, E, F>
+impl<S, T, C, F, Fut, E> SpawnAll<S, F, E>
 where
-    L: Listener,
+    S: StreamService<Response = (T, C)>,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+    C: HttpService,
+    F: FnMut(S::Future, Watch) -> Fut,
+    Fut: Future<Item = (), Error = ()>,
     E: Executor<Fut>,
-    F: FnMut(L::Conn, Option<RemoteAddr>, Watch) -> Fut,
-    Fut: Future<Item = (), Error = ()> + 'static,
 {
     fn poll_watching(&mut self, watch: &Watch) -> Poll<(), ()> {
         loop {
             match self.state {
-                SpawnAllState::Running => match self.listener.poll_incoming() {
-                    Ok(Async::Ready((conn, addr))) => {
-                        let serve_connection =
-                            (self.serve_connection_fn)(conn, addr, watch.clone());
+                SpawnAllState::Running => match self.stream_service.poll_next_service() {
+                    Ok(Async::Ready(Some(fut))) => {
+                        let serve_connection = (self.serve_connection_fn)(fut, watch.clone());
                         self.executor
                             .execute(serve_connection)
                             .unwrap_or_else(|_e| log::error!("executor error"));
-                        continue;
+                    }
+                    Ok(Async::Ready(None)) => {
+                        self.state = SpawnAllState::Done;
+                        return Ok(Async::Ready(()));
                     }
                     Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Err(e) => {
-                        log::error!("accept error: {}", e);
+                    Err(_err) => {
+                        log::error!("stream service error");
                         self.state = SpawnAllState::Done;
                         return Ok(Async::Ready(()));
                     }
                 },
                 SpawnAllState::Done => return Ok(Async::Ready(())),
-            };
+            }
         }
     }
 }
 
 #[allow(missing_debug_implementations)]
-struct InnerService<S: HttpService> {
-    connection: S::Connection,
-    remote_addr: Option<RemoteAddr>,
-    server_name: Option<ServerName>,
-}
+struct InnerService<S: HttpService>(S);
 
 impl<S> hyper::service::Service for InnerService<S>
 where
@@ -352,23 +353,16 @@ where
 
     #[inline]
     fn call(&mut self, request: Request<hyper::Body>) -> Self::Future {
-        let mut request = request.map(RequestBody::from_hyp);
-        if let Some(addr) = &self.remote_addr {
-            request.extensions_mut().insert(addr.clone());
-        }
-        if let Some(sni) = &self.server_name {
-            request.extensions_mut().insert(sni.clone());
-        }
-
+        let request = request.map(RequestBody::from_hyp);
         InnerServiceFuture {
-            inner: self.connection.respond(request),
+            inner: self.0.respond(request),
         }
     }
 }
 
 #[allow(missing_debug_implementations)]
 struct InnerServiceFuture<S: HttpService> {
-    inner: <S::Connection as HttpConnection>::Future,
+    inner: S::Future,
 }
 
 impl<S> Future for InnerServiceFuture<S>
@@ -387,18 +381,16 @@ where
     }
 }
 
-type AssocResponse<S> = <<S as HttpService>::Connection as HttpConnection>::Response;
-
 #[allow(missing_debug_implementations)]
 struct InnerBody<S: HttpService> {
-    inner: <AssocResponse<S> as HttpResponseImpl>::Body,
+    inner: <S::Response as HttpResponseImpl>::Body,
 }
 
 impl<S> hyper::body::Payload for InnerBody<S>
 where
     S: HttpService + 'static,
 {
-    type Data = <AssocResponse<S> as HttpResponseImpl>::Data;
+    type Data = <S::Response as HttpResponseImpl>::Data;
     type Error = BoxedStdError;
 
     #[inline]
@@ -418,5 +410,88 @@ where
             (lower, Some(upper)) if lower == upper => Some(upper),
             _ => None,
         }
+    }
+}
+
+#[derive(Debug)]
+pub struct Incoming<I, S, T = NoTls> {
+    incoming: I,
+    make_service: S,
+    tls: T,
+}
+
+impl<I, S, T> Incoming<I, S, T>
+where
+    I: Stream,
+    I::Error: Into<BoxedStdError>,
+    S: MakeHttpService<I::Item>,
+    T: MakeTlsTransport<I::Item>,
+    T::Transport: AsyncRead + AsyncWrite,
+{
+    pub(crate) fn new(incoming: I, make_service: S, tls: T) -> Self {
+        Self {
+            incoming,
+            make_service,
+            tls,
+        }
+    }
+}
+
+impl<I, S, T> StreamService for Incoming<I, S, T>
+where
+    I: Stream,
+    I::Error: Into<BoxedStdError>,
+    S: MakeHttpService<I::Item>,
+    T: MakeTlsTransport<I::Item>,
+{
+    type Response = (T::Transport, S::Service);
+    type Error = BoxedStdError;
+    type Future = IncomingFuture<T::Future, S::Future>;
+
+    fn poll_next_service(&mut self) -> Poll<Option<Self::Future>, Self::Error> {
+        let stream = match futures::try_ready!(self.incoming.poll().map_err(Into::into)) {
+            Some(stream) => stream,
+            None => return Ok(Async::Ready(None)),
+        };
+        let make_service_future = self.make_service.make_service(&stream);
+        let make_transport_future = self.tls.make_transport(stream);
+        Ok(Async::Ready(Some(IncomingFuture {
+            inner: (
+                make_transport_future.map_err(Into::into as fn(_) -> _),
+                make_service_future.map_err(Into::into as fn(_) -> _),
+            )
+                .into_future(),
+        })))
+    }
+}
+
+#[doc(hidden)]
+#[allow(missing_debug_implementations, clippy::type_complexity)]
+pub struct IncomingFuture<FutT, FutS>
+where
+    FutT: Future,
+    FutT::Error: Into<BoxedStdError>,
+    FutS: Future,
+    FutS::Error: Into<BoxedStdError>,
+{
+    inner: futures::future::Join<
+        futures::future::MapErr<FutT, fn(FutT::Error) -> BoxedStdError>, //
+        futures::future::MapErr<FutS, fn(FutS::Error) -> BoxedStdError>,
+    >,
+}
+
+impl<FutT, FutS> Future for IncomingFuture<FutT, FutS>
+where
+    FutT: Future,
+    FutT::Error: Into<BoxedStdError>,
+    FutS: Future,
+    FutS::Error: Into<BoxedStdError>,
+{
+    type Item = (FutT::Item, FutS::Item);
+    type Error = BoxedStdError;
+
+    #[inline]
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.inner.poll()
     }
 }

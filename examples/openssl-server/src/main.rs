@@ -1,13 +1,11 @@
 use {
     echo_service::Echo,
     http::Response,
-    izanami::HttpServer,
     openssl::{
         pkey::PKey,
         ssl::{SslAcceptor, SslMethod},
         x509::X509,
     },
-    tokio::runtime::Runtime,
 };
 
 const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
@@ -29,11 +27,8 @@ fn main() -> izanami::Result<()> {
         builder.set_certificate(&cert)?;
         builder.set_private_key(&pkey)?;
         builder.check_private_key()?;
-        builder
+        builder.build()
     };
 
-    let mut rt = Runtime::new()?;
-    HttpServer::new(move || echo.clone()) //
-        .bind_tls("127.0.0.1:4000", ssl)?
-        .run(&mut rt)
+    izanami::run("127.0.0.1:4000", ssl, echo)
 }

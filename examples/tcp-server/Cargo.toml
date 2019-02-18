@@ -14,4 +14,3 @@ doc = false
 izanami = { path = "../.." }
 echo-service = { path = "../echo-service" }
 http = "0.1"
-tokio = "0.1"

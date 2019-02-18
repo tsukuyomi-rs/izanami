@@ -1,9 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::HttpServer,
-    std::path::Path,
-    tokio::runtime::Runtime,
+    izanami::tls::no_tls,
 };
 
 #[cfg(unix)]
@@ -16,10 +14,7 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    let mut rt = Runtime::new()?;
-    HttpServer::new(move || echo.clone()) //
-        .bind(Path::new("/tmp/echo-service.sock"))?
-        .run(&mut rt)
+    izanami::run_unix("/tmp/echo-service.sock", no_tls(), echo)
 }
 
 #[cfg(not(unix))]

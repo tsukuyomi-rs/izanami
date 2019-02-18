@@ -2,10 +2,9 @@ use {
     echo_service::Echo,
     failure::format_err,
     http::Response,
-    izanami::HttpServer,
     rustls::{NoClientAuth, ServerConfig},
     std::io,
-    tokio::runtime::Runtime,
+    tokio_rustls::TlsAcceptor,
 };
 
 const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
@@ -41,11 +40,9 @@ fn main() -> izanami::Result<()> {
 
         let mut config = ServerConfig::new(NoClientAuth::new());
         config.set_single_cert(certs, priv_key)?;
-        config
+
+        TlsAcceptor::from(std::sync::Arc::new(config))
     };
 
-    let mut rt = Runtime::new()?;
-    HttpServer::new(move || echo.clone()) //
-        .bind_tls("127.0.0.1:4000", rustls)?
-        .run(&mut rt)
+    izanami::run("127.0.0.1:4000", rustls, echo)
 }

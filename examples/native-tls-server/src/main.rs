@@ -1,9 +1,8 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::HttpServer,
-    native_tls::{Identity, TlsAcceptor},
-    tokio::runtime::Runtime,
+    native_tls::{Identity, TlsAcceptor as NativeTlsAcceptor},
+    tokio_tls::TlsAcceptor,
 };
 
 const IDENTITY: &[u8] = include_bytes!("../../../test/identity.pfx");
@@ -18,10 +17,7 @@ fn main() -> izanami::Result<()> {
         .build();
 
     let der = Identity::from_pkcs12(IDENTITY, "mypass")?;
-    let native_tls = TlsAcceptor::builder(der).build()?;
+    let tls: TlsAcceptor = NativeTlsAcceptor::builder(der).build()?.into();
 
-    let mut rt = Runtime::new()?;
-    HttpServer::new(move || echo.clone()) //
-        .bind_tls("127.0.0.1:4000", native_tls)?
-        .run(&mut rt)
+    izanami::run("127.0.0.1:4000", tls, echo)
 }

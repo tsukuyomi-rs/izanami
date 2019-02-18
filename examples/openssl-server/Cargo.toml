@@ -16,4 +16,3 @@ openssl = "0.10"
 
 echo-service = { path = "../echo-service" }
 http = "0.1"
-tokio = "0.1"

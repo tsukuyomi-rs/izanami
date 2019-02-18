@@ -120,36 +120,32 @@ pub struct EchoService<Bd> {
     inner: Arc<Inner<Bd>>,
 }
 
-mod imp {
-    use super::*;
+impl<Bd> Service<Request<Bd>> for EchoService<Bd> {
+    type Response = Response<Bytes>;
+    type Error = std::io::Error;
+    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
 
-    impl<Bd> Service<Request<Bd>> for EchoService<Bd> {
-        type Response = Response<Bytes>;
-        type Error = std::io::Error;
-        type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        Ok(Async::Ready(()))
+    }
 
-        fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-            Ok(Async::Ready(()))
-        }
-
-        fn call(&mut self, request: Request<Bd>) -> Self::Future {
-            if let Some((regex, handler)) = self
-                .inner
-                .regex_set
-                .matches(request.uri().path())
-                .iter()
-                .next()
-                .and_then(|i| self.inner.routes.get(i))
-            {
-                futures::future::ok((*handler)(Context { request, regex }))
-            } else {
-                futures::future::ok(
-                    Response::builder()
-                        .status(StatusCode::NOT_FOUND)
-                        .body("not found".into())
-                        .expect("should be a valid response"),
-                )
-            }
+    fn call(&mut self, request: Request<Bd>) -> Self::Future {
+        if let Some((regex, handler)) = self
+            .inner
+            .regex_set
+            .matches(request.uri().path())
+            .iter()
+            .next()
+            .and_then(|i| self.inner.routes.get(i))
+        {
+            futures::future::ok((*handler)(Context { request, regex }))
+        } else {
+            futures::future::ok(
+                Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .body("not found".into())
+                    .expect("should be a valid response"),
+            )
         }
     }
 }

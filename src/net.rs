@@ -1,79 +1,69 @@
 //! Abstraction around low-level network I/O.
 
-use {
-    futures::Poll,
-    izanami_util::net::RemoteAddr,
-    std::io,
-    tokio::io::{AsyncRead, AsyncWrite},
-};
-
-/// A trait representing the conversion to an I/O object bound to the specified address.
-pub trait Bind {
-    /// The type of established connection.
-    type Conn: AsyncRead + AsyncWrite;
-
-    /// The type of listener returned from `bind`.
-    type Listener: Listener<Conn = Self::Conn>;
-
-    /// Create an I/O object bound to the specified address.
-    fn into_listeners(self) -> io::Result<Vec<Self::Listener>>;
-}
-
-impl<T> Bind for T
-where
-    T: Listener,
-{
-    type Conn = T::Conn;
-    type Listener = T;
-
-    fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
-        Ok(vec![self])
-    }
-}
-
-impl<B> Bind for Vec<B>
-where
-    B: Bind,
-{
-    type Conn = B::Conn;
-    type Listener = B::Listener;
-
-    fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
-        let mut listeners = vec![];
-        for bind in self {
-            listeners.extend(bind.into_listeners()?);
-        }
-        Ok(listeners)
-    }
-}
-
-/// A trait abstracting I/O objects that listens for incoming connections.
-pub trait Listener {
-    /// The type of established connection returned from `poll_incoming`.
-    type Conn: AsyncRead + AsyncWrite;
-
-    /// Acquires a connection to the peer.
-    fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error>;
-}
-
 pub mod tcp {
     use {
-        super::{sleep_on_errors::SleepOnErrors, *},
-        crate::util::MapAsyncExt,
+        super::sleep_on_errors::{Listener, SleepOnErrors},
+        crate::util::*,
+        futures::{Poll, Stream},
         std::{
-            net::{SocketAddr, ToSocketAddrs},
+            io,
+            net::{SocketAddr, TcpListener as StdTcpListener, ToSocketAddrs},
             time::Duration,
         },
-        tokio::net::{TcpListener, TcpStream},
+        tokio::{
+            io::{AsyncRead, AsyncWrite},
+            net::{TcpListener, TcpStream},
+            reactor::Handle,
+        },
     };
 
     impl Listener for TcpListener {
-        type Conn = TcpStream;
+        type Conn = (TcpStream, SocketAddr);
+        #[inline]
+        fn poll_accept(&mut self) -> Poll<Self::Conn, io::Error> {
+            self.poll_accept()
+        }
+    }
+
+    /// A TCP stream connected to a remote endpoint.
+    #[derive(Debug)]
+    pub struct AddrStream {
+        stream: TcpStream,
+        remote_addr: SocketAddr,
+    }
+
+    impl AddrStream {
+        /// Returns the remote peer's address returned from `TcpListener::poll_accept`.
+        pub fn remote_addr(&self) -> SocketAddr {
+            self.remote_addr
+        }
+    }
+
+    impl io::Read for AddrStream {
+        #[inline]
+        fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+            self.stream.read(dst)
+        }
+    }
+
+    impl io::Write for AddrStream {
+        #[inline]
+        fn write(&mut self, src: &[u8]) -> io::Result<usize> {
+            self.stream.write(src)
+        }
 
         #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
-            self.poll_accept()
-                .map_async(|(conn, addr)| (conn, Some(addr.into())))
+        fn flush(&mut self) -> io::Result<()> {
+            self.stream.flush()
+        }
+    }
+
+    impl AsyncRead for AddrStream {}
+
+    impl AsyncWrite for AddrStream {
+        #[inline]
+        fn shutdown(&mut self) -> Poll<(), io::Error> {
+            AsyncWrite::shutdown(&mut self.stream)
         }
     }
 
@@ -87,7 +77,7 @@ pub mod tcp {
     }
 
     impl AddrIncoming {
-        fn new(listener: TcpListener) -> io::Result<Self> {
+        pub fn new(listener: TcpListener) -> io::Result<Self> {
             let local_addr = listener.local_addr()?;
             Ok(Self {
                 listener: SleepOnErrors::new(listener),
@@ -97,8 +87,13 @@ pub mod tcp {
             })
         }
 
-        pub(crate) fn bind(addr: &SocketAddr) -> io::Result<Self> {
-            Self::new(TcpListener::bind(addr)?)
+        pub fn bind<A>(addr: A) -> io::Result<Self>
+        where
+            A: ToSocketAddrs,
+        {
+            let std_listener = StdTcpListener::bind(addr)?;
+            let listener = TcpListener::from_std(std_listener, &Handle::default())?;
+            Self::new(listener)
         }
 
         #[inline]
@@ -125,62 +120,29 @@ pub mod tcp {
         }
     }
 
-    impl Listener for AddrIncoming {
-        type Conn = TcpStream;
+    impl Stream for AddrIncoming {
+        type Item = AddrStream;
+        type Error = io::Error;
 
-        #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
+        fn poll(&mut self) -> Poll<Option<Self::Item>, io::Error> {
             self.listener
-                .poll_incoming() //
-                .map_async(|(stream, addr)| {
+                .poll_accept() //
+                .map_async(|(stream, remote_addr)| {
                     if let Some(timeout) = self.tcp_keepalive_timeout {
                         if let Err(e) = stream.set_keepalive(Some(timeout)) {
                             log::trace!("error trying to set TCP keepalive: {}", e);
                         }
                     }
+
                     if let Err(e) = stream.set_nodelay(self.tcp_nodelay) {
                         log::trace!("error trying to set TCP nodelay: {}", e);
                     }
-                    (stream, addr)
+
+                    Some(AddrStream {
+                        stream,
+                        remote_addr,
+                    })
                 })
-        }
-    }
-
-    impl Bind for SocketAddr {
-        type Conn = TcpStream;
-        type Listener = AddrIncoming;
-
-        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
-            (&self).into_listeners()
-        }
-    }
-
-    impl<'a> Bind for &'a SocketAddr {
-        type Conn = TcpStream;
-        type Listener = AddrIncoming;
-
-        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
-            AddrIncoming::bind(self).map(|listener| vec![listener])
-        }
-    }
-
-    impl<'a> Bind for &'a str {
-        type Conn = TcpStream;
-        type Listener = AddrIncoming;
-
-        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
-            self.to_socket_addrs()?
-                .map(|addr| AddrIncoming::bind(&addr))
-                .collect()
-        }
-    }
-
-    impl Bind for String {
-        type Conn = TcpStream;
-        type Listener = AddrIncoming;
-
-        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
-            self.as_str().into_listeners()
         }
     }
 }
@@ -188,23 +150,62 @@ pub mod tcp {
 #[cfg(unix)]
 pub mod unix {
     use {
-        super::{sleep_on_errors::SleepOnErrors, *},
+        super::sleep_on_errors::{Listener, SleepOnErrors},
         crate::util::MapAsyncExt,
-        std::{
-            os::unix::net::SocketAddr,
-            path::{Path, PathBuf},
-            time::Duration,
+        futures::{Poll, Stream},
+        std::{io, os::unix::net::SocketAddr, path::Path, time::Duration},
+        tokio::{
+            io::{AsyncRead, AsyncWrite},
+            net::{UnixListener, UnixStream},
         },
-        tokio::net::{UnixListener, UnixStream},
     };
 
     impl Listener for UnixListener {
-        type Conn = UnixStream;
+        type Conn = (UnixStream, SocketAddr);
+        fn poll_accept(&mut self) -> Poll<Self::Conn, io::Error> {
+            UnixListener::poll_accept(self)
+        }
+    }
+
+    /// An Unix domain socket stream connected to a remote endpoint.
+    #[derive(Debug)]
+    pub struct AddrStream {
+        stream: UnixStream,
+        remote_addr: SocketAddr,
+    }
+
+    impl AddrStream {
+        /// Returns the remote peer's address returned from `UnixListener::poll_accept`.
+        pub fn remote_addr(&self) -> &SocketAddr {
+            &self.remote_addr
+        }
+    }
+
+    impl io::Read for AddrStream {
+        #[inline]
+        fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+            self.stream.read(dst)
+        }
+    }
+
+    impl io::Write for AddrStream {
+        #[inline]
+        fn write(&mut self, src: &[u8]) -> io::Result<usize> {
+            self.stream.write(src)
+        }
 
         #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
-            self.poll_accept()
-                .map_async(|(conn, addr)| (conn, Some(addr.into())))
+        fn flush(&mut self) -> io::Result<()> {
+            self.stream.flush()
+        }
+    }
+
+    impl AsyncRead for AddrStream {}
+
+    impl AsyncWrite for AddrStream {
+        #[inline]
+        fn shutdown(&mut self) -> Poll<(), io::Error> {
+            AsyncWrite::shutdown(&mut self.stream)
         }
     }
 
@@ -216,7 +217,7 @@ pub mod unix {
     }
 
     impl AddrIncoming {
-        fn new(listener: UnixListener) -> io::Result<Self> {
+        pub fn new(listener: UnixListener) -> io::Result<Self> {
             let local_addr = listener.local_addr()?;
             Ok(Self {
                 listener: SleepOnErrors::new(listener),
@@ -224,8 +225,11 @@ pub mod unix {
             })
         }
 
-        pub(crate) fn bind(sock_path: &Path) -> io::Result<Self> {
-            Self::new(UnixListener::bind(sock_path)?)
+        pub fn bind<P>(path: P) -> io::Result<Self>
+        where
+            P: AsRef<Path>,
+        {
+            Self::new(UnixListener::bind(path)?)
         }
 
         #[inline]
@@ -240,53 +244,41 @@ pub mod unix {
         }
     }
 
-    impl Listener for AddrIncoming {
-        type Conn = UnixStream;
+    impl Stream for AddrIncoming {
+        type Item = AddrStream;
+        type Error = io::Error;
 
         #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
-            self.listener.poll_incoming()
-        }
-    }
-
-    impl Bind for PathBuf {
-        type Conn = UnixStream;
-        type Listener = AddrIncoming;
-
-        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
-            self.as_path().into_listeners()
-        }
-    }
-
-    impl<'a> Bind for &'a PathBuf {
-        type Conn = UnixStream;
-        type Listener = AddrIncoming;
-
-        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
-            self.as_path().into_listeners()
-        }
-    }
-
-    impl<'a> Bind for &'a Path {
-        type Conn = UnixStream;
-        type Listener = AddrIncoming;
-
-        fn into_listeners(self) -> io::Result<Vec<Self::Listener>> {
-            AddrIncoming::bind(self).map(|listener| vec![listener])
+        fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+            self.listener
+                .poll_accept()
+                .map_async(|(stream, remote_addr)| {
+                    Some(AddrStream {
+                        stream,
+                        remote_addr,
+                    })
+                })
         }
     }
 }
 
 mod sleep_on_errors {
     use {
-        super::*,
-        futures::{Async, Future},
-        std::time::{Duration, Instant},
+        futures::{Async, Future, Poll},
+        std::{
+            io,
+            time::{Duration, Instant},
+        },
         tokio::timer::Delay,
     };
 
+    pub(super) trait Listener {
+        type Conn;
+        fn poll_accept(&mut self) -> Poll<Self::Conn, io::Error>;
+    }
+
     #[derive(Debug)]
-    pub(crate) struct SleepOnErrors<T> {
+    pub(super) struct SleepOnErrors<T> {
         listener: T,
         duration: Option<Duration>,
         timeout: Option<Delay>,
@@ -296,7 +288,7 @@ mod sleep_on_errors {
     where
         T: Listener,
     {
-        pub(crate) fn new(listener: T) -> Self {
+        pub(super) fn new(listener: T) -> Self {
             Self {
                 listener,
                 duration: Some(Duration::from_secs(1)),
@@ -304,19 +296,12 @@ mod sleep_on_errors {
             }
         }
 
-        pub(crate) fn set_sleep_on_errors(&mut self, duration: Option<Duration>) {
+        pub(super) fn set_sleep_on_errors(&mut self, duration: Option<Duration>) {
             self.duration = duration;
         }
-    }
-
-    impl<T> Listener for SleepOnErrors<T>
-    where
-        T: Listener,
-    {
-        type Conn = T::Conn;
 
         #[inline]
-        fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
+        pub(super) fn poll_accept(&mut self) -> Poll<T::Conn, io::Error> {
             if let Some(timeout) = &mut self.timeout {
                 match timeout.poll() {
                     Ok(Async::Ready(())) => {}
@@ -327,7 +312,7 @@ mod sleep_on_errors {
             }
 
             loop {
-                match self.listener.poll_incoming() {
+                match self.listener.poll_accept() {
                     Ok(ok) => return Ok(ok),
                     Err(ref err) if is_connection_error(err) => {
                         log::trace!("connection error: {}", err);
@@ -379,9 +364,9 @@ mod sleep_on_errors {
         impl Listener for DummyListener {
             type Conn = DummyConnection;
 
-            fn poll_incoming(&mut self) -> Poll<(Self::Conn, Option<RemoteAddr>), io::Error> {
+            fn poll_accept(&mut self) -> Poll<Self::Conn, io::Error> {
                 let conn = self.inner.pop_front().expect("queue is empty")?;
-                Ok((conn, None).into())
+                Ok(conn.into())
             }
         }
 
@@ -406,7 +391,7 @@ mod sleep_on_errors {
             let result = rt.block_on(
                 futures::future::poll_fn({
                     let listener = &mut listener;
-                    move || listener.poll_incoming()
+                    move || listener.poll_accept()
                 })
                 .timeout(Duration::from_millis(1)),
             );
@@ -434,7 +419,7 @@ mod sleep_on_errors {
             let result = rt.block_on(
                 futures::future::poll_fn({
                     let listener = &mut listener;
-                    move || listener.poll_incoming()
+                    move || listener.poll_accept()
                 })
                 .timeout(Duration::from_millis(1)),
             );
@@ -462,7 +447,7 @@ mod sleep_on_errors {
             let result = rt.block_on(
                 futures::future::poll_fn({
                     let listener = &mut listener;
-                    move || listener.poll_incoming()
+                    move || listener.poll_accept()
                 })
                 .timeout(Duration::from_millis(1)),
             );

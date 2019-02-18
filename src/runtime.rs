@@ -75,27 +75,18 @@ where
     }
 }
 
-/// Trait representing the value to be spawned onto the specific runtime.
-///
-/// The role of this trait is similar to `Future`, but there are
-/// the following differences:
-///
-/// * The implementor of this trait might spawns multiple tasks
-///   with a single call.
-/// * Unlike `Future<Item = (), Error= ()>`, this trait explicitly
-///   specifies a reference to the runtime and can use its runtime
-///   when constructing the task(s) to be spawned.
-pub trait Spawn<Rt: Runtime + ?Sized> {
+/// Trait representing the value to be spawned onto the specific executor.
+pub trait Spawn<Spawner: ?Sized> {
     /// Spawns itself onto the specified runtime.
-    fn spawn(self, rt: &mut Rt);
+    fn spawn(self, spawner: &mut Spawner);
 }
 
 impl<F> Spawn<tokio::runtime::Runtime> for F
 where
     F: Future<Item = (), Error = ()> + Send + 'static,
 {
-    fn spawn(self, rt: &mut tokio::runtime::Runtime) {
-        rt.spawn(self);
+    fn spawn(self, spawner: &mut tokio::runtime::Runtime) {
+        spawner.spawn(self);
     }
 }
 
@@ -103,8 +94,8 @@ impl<F> Spawn<tokio::runtime::current_thread::Runtime> for F
 where
     F: Future<Item = (), Error = ()> + 'static,
 {
-    fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime) {
-        rt.spawn(self);
+    fn spawn(self, spawner: &mut tokio::runtime::current_thread::Runtime) {
+        spawner.spawn(self);
     }
 }
 

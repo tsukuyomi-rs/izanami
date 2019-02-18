@@ -1,8 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::HttpServer,
-    tokio::runtime::Runtime,
+    izanami::tls::no_tls,
 };
 
 fn main() -> izanami::Result<()> {
@@ -14,8 +13,5 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    let mut rt = Runtime::new()?;
-    HttpServer::new(move || echo.clone()) //
-        .bind(vec!["127.0.0.1:5000", "127.0.0.1:6000"])?
-        .run(&mut rt)
+    izanami::run("127.0.0.1:5000", no_tls(), echo)
 }
