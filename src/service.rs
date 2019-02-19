@@ -6,7 +6,7 @@ use {
     futures::{Async, Future, Poll},
     http::HeaderMap,
     hyper::body::Payload as _Payload,
-    izanami_service::{MakeService, Service},
+    izanami_service::Service,
     izanami_util::{
         buf_stream::{BufStream, SizeHint},
         http::{HasTrailers, Upgrade},
@@ -185,52 +185,70 @@ impl AsyncWrite for Upgraded {
 /// Type alias representing the HTTP request passed to the services.
 pub type HttpRequest = http::Request<RequestBody>;
 
-pub trait MakeHttpService<T> {
+pub trait NewHttpService<T> {
     type Response: HttpResponse;
     type Error: Into<BoxedStdError>;
     type Service: HttpService<Response = Self::Response, Error = Self::Error>;
+    type IntoService: IntoHttpService<
+        T,
+        Response = Self::Response,
+        Error = Self::Error,
+        Service = Self::Service,
+    >;
     type MakeError: Into<BoxedStdError>;
-    type Future: Future<Item = Self::Service, Error = Self::MakeError>;
+    type Future: Future<Item = Self::IntoService, Error = Self::MakeError>;
 
     #[doc(hidden)]
     fn poll_ready(&mut self) -> Poll<(), Self::MakeError> {
         Ok(Async::Ready(()))
     }
 
-    fn make_service(&mut self, target: &T) -> Self::Future;
+    fn new_service(&mut self) -> Self::Future;
 }
 
-impl<S, T, Res, Err, Svc, MkErr, Fut> MakeHttpService<T> for S
+impl<S, T> NewHttpService<T> for S
 where
-    S: for<'a> MakeService<
-        &'a T,
-        HttpRequest,
-        Response = Res,
-        Error = Err,
-        Service = Svc,
-        MakeError = MkErr,
-        Future = Fut,
-    >,
-    Res: HttpResponse,
-    Err: Into<BoxedStdError>,
-    Svc: Service<HttpRequest, Response = Res, Error = Err>,
-    MkErr: Into<BoxedStdError>,
-    Fut: Future<Item = Svc, Error = MkErr>,
+    S: Service<()>,
+    S::Response: IntoHttpService<T>,
+    S::Error: Into<BoxedStdError>,
 {
-    type Response = Res;
-    type Error = Err;
-    type Service = Svc;
-    type MakeError = MkErr;
-    type Future = Fut;
+    type Response = <S::Response as IntoHttpService<T>>::Response;
+    type Error = <S::Response as IntoHttpService<T>>::Error;
+    type Service = <S::Response as IntoHttpService<T>>::Service;
+    type IntoService = S::Response;
+    type MakeError = S::Error;
+    type Future = S::Future;
 
     #[inline]
     fn poll_ready(&mut self) -> Poll<(), Self::MakeError> {
-        MakeService::poll_ready(self)
+        Service::poll_ready(self)
     }
 
     #[inline]
-    fn make_service(&mut self, target: &T) -> Self::Future {
-        MakeService::make_service(self, target)
+    fn new_service(&mut self) -> Self::Future {
+        Service::call(self, ())
+    }
+}
+
+pub trait IntoHttpService<T> {
+    type Response: HttpResponse;
+    type Error: Into<BoxedStdError>;
+    type Service: HttpService<Response = Self::Response, Error = Self::Error>;
+
+    fn into_service(self, target: &T) -> Self::Service;
+}
+
+impl<S, T> IntoHttpService<T> for S
+where
+    S: HttpService,
+{
+    type Response = S::Response;
+    type Error = S::Error;
+    type Service = S;
+
+    #[inline]
+    fn into_service(self, _: &T) -> Self::Service {
+        self
     }
 }
 

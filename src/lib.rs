@@ -29,32 +29,39 @@ use {
     crate::{
         runtime::Block,
         server::Incoming,
-        service::{HttpService, MakeHttpService},
+        service::{HttpService, NewHttpService},
         tls::MakeTlsTransport,
     },
-    futures::Future,
     izanami_service::StreamService,
     std::net::ToSocketAddrs,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
-/// Start an HTTP server using an TCP listener bound to the specified address.
-pub fn run<A, T, S>(addr: A, tls: T, make_service: S) -> crate::Result<()>
+/// Start an HTTP server using an TCP listener.
+///
+/// This function internally uses the multi-threaded Tokio runtime with the default configuration.
+pub fn run_tcp<A, T, S>(addr: A, tls: T, make_service: S) -> crate::Result<()>
 where
     A: ToSocketAddrs,
     T: MakeTlsTransport<crate::net::tcp::AddrStream> + Send + 'static,
     T::Future: Send + 'static,
     T::Transport: Send + 'static,
-    S: MakeHttpService<crate::net::tcp::AddrStream> + Send + 'static,
+    S: NewHttpService<T::Transport> + Send + 'static,
     S::Future: Send + 'static,
+    S::IntoService: Send + 'static,
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
 {
-    let incoming = crate::net::tcp::AddrIncoming::bind(addr)?;
-    run_incoming(Incoming::new(incoming, make_service, tls))
+    let incoming = Incoming::bind_tcp(make_service, addr, tls)?;
+    run_incoming(incoming);
+    Ok(())
 }
 
-/// Start an HTTP server using an Unix domain socket listener bounded to the specified path.
+/// Start an HTTP server using an Unix domain socket listener.
+///
+/// This function internally uses the multi-threaded Tokio runtime with the default configuration.
+///
+/// This function is available only on Unix platform.
 #[cfg(unix)]
 pub fn run_unix<P, T, S>(path: P, tls: T, make_service: S) -> crate::Result<()>
 where
@@ -62,30 +69,32 @@ where
     T: MakeTlsTransport<crate::net::unix::AddrStream> + Send + 'static,
     T::Future: Send + 'static,
     T::Transport: Send + 'static,
-    S: MakeHttpService<crate::net::unix::AddrStream> + Send + 'static,
+    S: NewHttpService<T::Transport> + Send + 'static,
     S::Future: Send + 'static,
+    S::IntoService: Send + 'static,
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
 {
-    let incoming = crate::net::unix::AddrIncoming::bind(path)?;
-    run_incoming(Incoming::new(incoming, make_service, tls))
+    let incoming = Incoming::bind_unix(make_service, path, tls)?;
+    run_incoming(incoming);
+    Ok(())
 }
 
-fn run_incoming<S, T, C>(stream_service: S) -> crate::Result<()>
+fn run_incoming<S, T, C>(stream_service: S)
 where
-    S: StreamService<Response = (T, C)> + Send + 'static,
-    S::Future: Send + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
-    C: HttpService + Send + 'static,
-    C::Future: Send + 'static,
+    S: StreamService<Response = (C, T)>,
+    C: HttpService,
+    T: AsyncRead + AsyncWrite,
+    Server<S>: Block<tokio::runtime::Runtime>,
 {
-    let mut rt = tokio::runtime::Runtime::new()?;
+    let (server, _handle) = Server::builder(stream_service).build();
 
-    let (server, handle) = crate::server::Server::builder(stream_service).build();
-    server.spawn(&mut rt);
+    let mut entered = tokio_executor::enter().expect("nested runtime use");
+    let mut runtime = tokio::runtime::Runtime::new().expect("failed to start new Runtime");
 
-    let _ = handle.block(&mut rt);
-    rt.shutdown_on_idle().wait().unwrap();
+    server.block(&mut runtime);
 
-    Ok(())
+    entered
+        .block_on(runtime.shutdown_on_idle())
+        .expect("shutdown cannot error");
 }

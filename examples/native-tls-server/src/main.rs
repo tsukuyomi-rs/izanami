@@ -19,5 +19,5 @@ fn main() -> izanami::Result<()> {
     let der = Identity::from_pkcs12(IDENTITY, "mypass")?;
     let tls: TlsAcceptor = NativeTlsAcceptor::builder(der).build()?.into();
 
-    izanami::run("127.0.0.1:4000", tls, echo)
+    izanami::run_tcp("127.0.0.1:4000", tls, echo)
 }

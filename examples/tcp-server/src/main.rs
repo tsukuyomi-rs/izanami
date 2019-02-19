@@ -13,5 +13,5 @@ fn main() -> izanami::Result<()> {
         })?
         .build();
 
-    izanami::run("127.0.0.1:5000", no_tls(), echo)
+    izanami::run_tcp("127.0.0.1:5000", no_tls(), echo)
 }

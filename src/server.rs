@@ -4,10 +4,10 @@ use {
     crate::{
         drain::{Signal, Watch},
         error::BoxedStdError,
-        runtime::{Runtime, Spawn},
+        runtime::{Block, Runtime, Spawn},
         service::{
             imp::{HttpResponseImpl, ResponseBodyImpl},
-            HttpService, MakeHttpService, RequestBody,
+            HttpService, IntoHttpService, NewHttpService, RequestBody,
         },
         tls::{MakeTlsTransport, NoTls},
         util::*,
@@ -27,11 +27,11 @@ pub struct Builder<S> {
     protocol: Http,
 }
 
-impl<S, T, C> Builder<S>
+impl<S, C, T> Builder<S>
 where
-    S: StreamService<Response = (T, C)>,
-    T: AsyncRead + AsyncWrite,
+    S: StreamService<Response = (C, T)>,
     C: HttpService,
+    T: AsyncRead + AsyncWrite,
 {
     /// Creates a `Builder` using a streamed service.
     pub fn new(stream_service: S, protocol: Http) -> Self {
@@ -108,11 +108,11 @@ pub struct Server<S> {
     protocol: Http,
 }
 
-impl<S, T, C> Server<S>
+impl<S, C, T> Server<S>
 where
-    S: StreamService<Response = (T, C)>,
-    T: AsyncRead + AsyncWrite,
+    S: StreamService<Response = (C, T)>,
     C: HttpService,
+    T: AsyncRead + AsyncWrite,
 {
     /// Creates a `Builder` using a streamed service.
     pub fn builder(stream_service: S) -> Builder<S> {
@@ -128,45 +128,51 @@ where
     }
 }
 
-impl<S, T> Server<Incoming<crate::net::tcp::AddrIncoming, S, T>>
+impl<S, T> Server<Incoming<S, crate::net::tcp::AddrIncoming, T>>
 where
-    S: MakeHttpService<crate::net::tcp::AddrStream>,
+    S: NewHttpService<T::Transport>,
     T: MakeTlsTransport<crate::net::tcp::AddrStream>,
 {
-    pub fn bind<A>(
+    pub fn bind_tcp<A>(
         make_service: S,
         addr: A,
         tls: T,
-    ) -> io::Result<Builder<Incoming<crate::net::tcp::AddrIncoming, S, T>>>
+    ) -> io::Result<Builder<Incoming<S, crate::net::tcp::AddrIncoming, T>>>
     where
         A: std::net::ToSocketAddrs,
     {
-        let incoming = crate::net::tcp::AddrIncoming::bind(addr)?;
-        Ok(Server::builder(Incoming::new(incoming, make_service, tls)))
+        Ok(Server::builder(Incoming::bind_tcp(
+            make_service,
+            addr,
+            tls,
+        )?))
     }
 
     #[doc(hidden)]
     pub fn local_addr(&self) -> std::net::SocketAddr {
-        self.stream_service.incoming.local_addr()
+        self.stream_service.local_addr()
     }
 }
 
 #[cfg(unix)]
-impl<S, T> Server<Incoming<crate::net::unix::AddrIncoming, S, T>>
+impl<S, T> Server<Incoming<S, crate::net::unix::AddrIncoming, T>>
 where
-    S: MakeHttpService<crate::net::unix::AddrStream>,
+    S: NewHttpService<T::Transport>,
     T: MakeTlsTransport<crate::net::unix::AddrStream>,
 {
     pub fn bind_unix<P>(
         make_service: S,
         path: P,
         tls: T,
-    ) -> io::Result<Builder<Incoming<crate::net::unix::AddrIncoming, S, T>>>
+    ) -> io::Result<Builder<Incoming<S, crate::net::unix::AddrIncoming, T>>>
     where
         P: AsRef<std::path::Path>,
     {
-        let incoming = crate::net::unix::AddrIncoming::bind(path)?;
-        Ok(Server::builder(Incoming::new(incoming, make_service, tls)))
+        Ok(Server::builder(Incoming::bind_unix(
+            make_service,
+            path,
+            tls,
+        )?))
     }
 
     #[doc(hidden)]
@@ -187,7 +193,7 @@ macro_rules! spawn_all_task {
         let serve_connection_fn = move |fut: <$S as StreamService>::Future, watch: Watch| {
             let protocol = protocol.clone();
             fut.map_err(|_e| log::error!("stream service error"))
-                .and_then(move |(stream, service)| {
+                .and_then(move |(service, stream)| {
                     let service = InnerService(service);
                     let conn = protocol.serve_connection(stream, service).with_upgrades();
                     watch
@@ -211,13 +217,13 @@ macro_rules! spawn_all_task {
     }};
 }
 
-impl<S, T, C> Spawn<tokio::runtime::Runtime> for Server<S>
+impl<S, C, T> Spawn<tokio::runtime::Runtime> for Server<S>
 where
-    S: StreamService<Response = (T, C)> + Send + 'static,
+    S: StreamService<Response = (C, T)> + Send + 'static,
     S::Future: Send + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
     C: HttpService + Send + 'static,
     C::Future: Send + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
 {
     fn spawn(self, rt: &mut tokio::runtime::Runtime) {
         let task = spawn_all_task!(<S> self, rt.executor());
@@ -225,13 +231,13 @@ where
     }
 }
 
-impl<S, T, C> Spawn<tokio::executor::DefaultExecutor> for Server<S>
+impl<S, C, T> Spawn<tokio::executor::DefaultExecutor> for Server<S>
 where
-    S: StreamService<Response = (T, C)> + Send + 'static,
+    S: StreamService<Response = (C, T)> + Send + 'static,
     S::Future: Send + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
     C: HttpService + Send + 'static,
     C::Future: Send + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
 {
     fn spawn(self, spawner: &mut tokio::executor::DefaultExecutor) {
         use tokio::executor::Executor;
@@ -242,13 +248,13 @@ where
     }
 }
 
-impl<S, T, C> Spawn<tokio::runtime::TaskExecutor> for Server<S>
+impl<S, C, T> Spawn<tokio::runtime::TaskExecutor> for Server<S>
 where
-    S: StreamService<Response = (T, C)> + Send + 'static,
+    S: StreamService<Response = (C, T)> + Send + 'static,
     S::Future: Send + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
     C: HttpService + Send + 'static,
     C::Future: Send + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
 {
     fn spawn(self, spawner: &mut tokio::runtime::TaskExecutor) {
         let task = spawn_all_task!(<S> self, spawner.clone());
@@ -256,12 +262,12 @@ where
     }
 }
 
-impl<S, T, C> Spawn<tokio::runtime::current_thread::Runtime> for Server<S>
+impl<S, C, T> Spawn<tokio::runtime::current_thread::Runtime> for Server<S>
 where
-    S: StreamService<Response = (T, C)> + 'static,
+    S: StreamService<Response = (C, T)> + 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
     C: HttpService + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
 {
     fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime) {
         let task = spawn_all_task!(<S> self, rt.executor());
@@ -269,18 +275,49 @@ where
     }
 }
 
-impl<S, T, C> Spawn<tokio::runtime::current_thread::TaskExecutor> for Server<S>
+impl<S, C, T> Spawn<tokio::runtime::current_thread::TaskExecutor> for Server<S>
 where
-    S: StreamService<Response = (T, C)> + 'static,
+    S: StreamService<Response = (C, T)> + 'static,
     S::Future: 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
     C: HttpService + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
 {
     fn spawn(self, spawner: &mut tokio::runtime::current_thread::TaskExecutor) {
         let task = spawn_all_task!(<S> self, spawner.clone());
         spawner
             .spawn_local(Box::new(task))
             .expect("failed to spawn a task");
+    }
+}
+
+impl<S, C, T> Block<tokio::runtime::Runtime> for Server<S>
+where
+    S: StreamService<Response = (C, T)> + Send + 'static,
+    S::Future: Send + 'static,
+    C: HttpService + Send + 'static,
+    C::Future: Send + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+{
+    type Output = ();
+
+    fn block(self, rt: &mut tokio::runtime::Runtime) -> Self::Output {
+        let task = spawn_all_task!(<S> self, rt.executor());
+        let _ = rt.block_on(task);
+    }
+}
+
+impl<S, C, T> Block<tokio::runtime::current_thread::Runtime> for Server<S>
+where
+    S: StreamService<Response = (C, T)>,
+    S::Future: 'static,
+    C: HttpService + 'static,
+    T: AsyncRead + AsyncWrite + Send + 'static,
+{
+    type Output = ();
+
+    fn block(self, rt: &mut tokio::runtime::current_thread::Runtime) -> Self::Output {
+        let task = spawn_all_task!(<S> self, rt.executor());
+        let _ = rt.block_on(task);
     }
 }
 
@@ -303,11 +340,11 @@ impl<S, F, E> SpawnAll<S, F, E> {
     }
 }
 
-impl<S, T, C, F, Fut, E> SpawnAll<S, F, E>
+impl<S, C, T, F, Fut, E> SpawnAll<S, F, E>
 where
-    S: StreamService<Response = (T, C)>,
-    T: AsyncRead + AsyncWrite + Send + 'static,
+    S: StreamService<Response = (C, T)>,
     C: HttpService,
+    T: AsyncRead + AsyncWrite + Send + 'static,
     F: FnMut(S::Future, Watch) -> Fut,
     Fut: Future<Item = (), Error = ()>,
     E: Executor<Fut>,
@@ -413,52 +450,93 @@ where
     }
 }
 
+/// An implementation of `StreamService` consisting of a pair of an I/O stream
+/// and `MakeService`.
 #[derive(Debug)]
-pub struct Incoming<I, S, T = NoTls> {
-    incoming: I,
+pub struct Incoming<S, I, T = NoTls> {
     make_service: S,
+    incoming: I,
     tls: T,
 }
 
-impl<I, S, T> Incoming<I, S, T>
+impl<S, I, T> Incoming<S, I, T>
 where
+    S: NewHttpService<T::Transport>,
     I: Stream,
     I::Error: Into<BoxedStdError>,
-    S: MakeHttpService<I::Item>,
     T: MakeTlsTransport<I::Item>,
-    T::Transport: AsyncRead + AsyncWrite,
 {
-    pub(crate) fn new(incoming: I, make_service: S, tls: T) -> Self {
+    /// Create a new `Incoming` using the specified values.
+    pub fn new(make_service: S, incoming: I, tls: T) -> Self {
         Self {
-            incoming,
             make_service,
+            incoming,
             tls,
         }
     }
 }
 
-impl<I, S, T> StreamService for Incoming<I, S, T>
+impl<S, T> Incoming<S, crate::net::tcp::AddrIncoming, T>
 where
+    S: NewHttpService<T::Transport>,
+    T: MakeTlsTransport<crate::net::tcp::AddrStream>,
+{
+    pub fn bind_tcp<A>(make_service: S, addr: A, tls: T) -> io::Result<Self>
+    where
+        A: std::net::ToSocketAddrs,
+    {
+        let incoming = crate::net::tcp::AddrIncoming::bind(addr)?;
+        Ok(Incoming::new(make_service, incoming, tls))
+    }
+
+    #[doc(hidden)]
+    pub fn local_addr(&self) -> std::net::SocketAddr {
+        self.incoming.local_addr()
+    }
+}
+
+#[cfg(unix)]
+impl<S, T> Incoming<S, crate::net::unix::AddrIncoming, T>
+where
+    S: NewHttpService<T::Transport>,
+    T: MakeTlsTransport<crate::net::unix::AddrStream>,
+{
+    pub fn bind_unix<P>(make_service: S, path: P, tls: T) -> io::Result<Self>
+    where
+        P: AsRef<std::path::Path>,
+    {
+        let incoming = crate::net::unix::AddrIncoming::bind(path)?;
+        Ok(Incoming::new(make_service, incoming, tls))
+    }
+
+    #[doc(hidden)]
+    pub fn local_addr(&self) -> &std::os::unix::net::SocketAddr {
+        self.incoming.local_addr()
+    }
+}
+
+impl<S, I, T> StreamService for Incoming<S, I, T>
+where
+    S: NewHttpService<T::Transport>,
     I: Stream,
     I::Error: Into<BoxedStdError>,
-    S: MakeHttpService<I::Item>,
     T: MakeTlsTransport<I::Item>,
 {
-    type Response = (T::Transport, S::Service);
+    type Response = (S::Service, T::Transport);
     type Error = BoxedStdError;
-    type Future = IncomingFuture<T::Future, S::Future>;
+    type Future = IncomingFuture<S::Future, T::Future>;
 
     fn poll_next_service(&mut self) -> Poll<Option<Self::Future>, Self::Error> {
         let stream = match futures::try_ready!(self.incoming.poll().map_err(Into::into)) {
             Some(stream) => stream,
             None => return Ok(Async::Ready(None)),
         };
-        let make_service_future = self.make_service.make_service(&stream);
+        let make_service_future = self.make_service.new_service();
         let make_transport_future = self.tls.make_transport(stream);
         Ok(Async::Ready(Some(IncomingFuture {
             inner: (
-                make_transport_future.map_err(Into::into as fn(_) -> _),
                 make_service_future.map_err(Into::into as fn(_) -> _),
+                make_transport_future.map_err(Into::into as fn(_) -> _),
             )
                 .into_future(),
         })))
@@ -467,31 +545,37 @@ where
 
 #[doc(hidden)]
 #[allow(missing_debug_implementations, clippy::type_complexity)]
-pub struct IncomingFuture<FutT, FutS>
+pub struct IncomingFuture<FutS, FutT>
 where
-    FutT: Future,
-    FutT::Error: Into<BoxedStdError>,
     FutS: Future,
     FutS::Error: Into<BoxedStdError>,
+    FutT: Future,
+    FutT::Error: Into<BoxedStdError>,
 {
     inner: futures::future::Join<
-        futures::future::MapErr<FutT, fn(FutT::Error) -> BoxedStdError>, //
         futures::future::MapErr<FutS, fn(FutS::Error) -> BoxedStdError>,
+        futures::future::MapErr<FutT, fn(FutT::Error) -> BoxedStdError>, //
     >,
 }
 
-impl<FutT, FutS> Future for IncomingFuture<FutT, FutS>
+impl<FutS, FutT> Future for IncomingFuture<FutS, FutT>
 where
+    FutS: Future,
+    FutS::Item: IntoHttpService<FutT::Item>,
+    FutS::Error: Into<BoxedStdError>,
     FutT: Future,
     FutT::Error: Into<BoxedStdError>,
-    FutS: Future,
-    FutS::Error: Into<BoxedStdError>,
 {
-    type Item = (FutT::Item, FutS::Item);
+    type Item = (
+        <FutS::Item as IntoHttpService<FutT::Item>>::Service,
+        FutT::Item,
+    );
     type Error = BoxedStdError;
 
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.inner.poll()
+        let (into_service, transport) = futures::try_ready!(self.inner.poll());
+        let service = into_service.into_service(&transport);
+        Ok(Async::Ready((service, transport)))
     }
 }

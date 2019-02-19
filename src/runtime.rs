@@ -75,10 +75,10 @@ where
     }
 }
 
-/// Trait representing the value to be spawned onto the specific executor.
-pub trait Spawn<Spawner: ?Sized> {
-    /// Spawns itself onto the specified runtime.
-    fn spawn(self, spawner: &mut Spawner);
+/// Trait representing the value to be spawned.
+pub trait Spawn<Sp: ?Sized> {
+    /// Spawns itself onto the specified spawner.
+    fn spawn(self, spawner: &mut Sp);
 }
 
 impl<F> Spawn<tokio::runtime::Runtime> for F
@@ -96,6 +96,38 @@ where
 {
     fn spawn(self, spawner: &mut tokio::runtime::current_thread::Runtime) {
         spawner.spawn(self);
+    }
+}
+
+impl<F> Spawn<tokio::executor::DefaultExecutor> for F
+where
+    F: Future<Item = (), Error = ()> + Send + 'static,
+{
+    fn spawn(self, spawner: &mut tokio::executor::DefaultExecutor) {
+        use tokio::executor::Executor;
+        spawner
+            .spawn(Box::new(self))
+            .expect("failed to spawn the task");
+    }
+}
+
+impl<F> Spawn<tokio::runtime::TaskExecutor> for F
+where
+    F: Future<Item = (), Error = ()> + Send + 'static,
+{
+    fn spawn(self, spawner: &mut tokio::runtime::TaskExecutor) {
+        spawner.spawn(self);
+    }
+}
+
+impl<F> Spawn<tokio::runtime::current_thread::TaskExecutor> for F
+where
+    F: Future<Item = (), Error = ()> + 'static,
+{
+    fn spawn(self, spawner: &mut tokio::runtime::current_thread::TaskExecutor) {
+        spawner
+            .spawn_local(Box::new(self))
+            .expect("failed to spawn the task");
     }
 }
 

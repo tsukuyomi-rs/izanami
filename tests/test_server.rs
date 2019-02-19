@@ -64,7 +64,7 @@ mod tcp {
     fn tcp_server() -> izanami::Result<()> {
         let mut rt = Runtime::new()?;
 
-        let (server, handle) = Server::bind(
+        let (server, handle) = Server::bind_tcp(
             super::Echo::default(), //
             "127.0.0.1:0",
             no_tls(),
@@ -216,7 +216,7 @@ mod native_tls {
             ::native_tls::TlsAcceptor::builder(der).build()?.into()
         };
 
-        let (server, handle) = Server::bind(
+        let (server, handle) = Server::bind_tcp(
             super::Echo::default(), //
             "127.0.0.1:0",
             tls,
@@ -326,7 +326,7 @@ mod openssl {
             builder.build()
         };
 
-        let (server, handle) = Server::bind(
+        let (server, handle) = Server::bind_tcp(
             super::Echo::default(), //
             "127.0.0.1:0",
             tls,
@@ -450,7 +450,7 @@ mod rustls {
             Arc::new(config).into()
         };
 
-        let (server, handle) = Server::bind(
+        let (server, handle) = Server::bind_tcp(
             super::Echo::default(), //
             "127.0.0.1:0",
             tls,

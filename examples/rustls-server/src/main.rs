@@ -44,5 +44,5 @@ fn main() -> izanami::Result<()> {
         TlsAcceptor::from(std::sync::Arc::new(config))
     };
 
-    izanami::run("127.0.0.1:4000", rustls, echo)
+    izanami::run_tcp("127.0.0.1:4000", rustls, echo)
 }
