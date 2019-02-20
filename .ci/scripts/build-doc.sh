@@ -8,6 +8,7 @@ cargo doc --no-deps -p tokio-rustls
 cargo doc --no-deps -p tower-service
 
 cargo doc --no-deps -p izanami-buf
+cargo doc --no-deps -p izanami-http
 cargo doc --no-deps -p izanami-net --all-features
 cargo doc --no-deps -p izanami-rt
 cargo doc --no-deps -p izanami-service

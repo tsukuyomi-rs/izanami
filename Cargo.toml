@@ -16,6 +16,7 @@ include = [
 
 [dependencies]
 izanami-buf = { version = "0.1.0-preview.1", path = "izanami-buf" }
+izanami-http = { version = "0.1.0-preview.1", path = "izanami-http" }
 izanami-net = { version = "0.1.0-preview.1", path = "izanami-net" }
 izanami-rt = { version = "0.1.0-preview.1", path = "izanami-rt" }
 izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
@@ -54,6 +55,7 @@ rustls = ["izanami-net/rustls"]
 [workspace]
 members = [
   "izanami-buf",
+  "izanami-http",
   "izanami-net",
   "izanami-rt",
   "izanami-service",

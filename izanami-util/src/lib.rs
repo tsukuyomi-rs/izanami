@@ -10,9 +10,3 @@
     unused
 )]
 #![forbid(clippy::unimplemented)]
-
-mod either;
-pub mod http;
-mod util;
-
-pub use crate::either::Either;

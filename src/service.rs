@@ -1,58 +1,35 @@
 //! Abstraction around HTTP services.
 
 use {
-    crate::error::BoxedStdError,
+    crate::{error::BoxedStdError, util::*},
     bytes::{Buf, BufMut, Bytes},
     futures::{Async, Future, Poll},
     http::HeaderMap,
     hyper::body::Payload as _Payload,
     izanami_buf::{BufStream, SizeHint},
+    izanami_http::{BodyTrailers, Upgrade},
     izanami_service::{IntoService, Service, ServiceRef},
-    izanami_util::http::{HasTrailers, Upgrade},
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
 /// The message body of an incoming HTTP request.
 #[derive(Debug)]
-pub struct RequestBody(Inner);
-
-#[derive(Debug)]
-enum Inner {
-    Stream(hyper::Body),
-    OnUpgrade(hyper::upgrade::OnUpgrade),
-}
+pub struct RequestBody(hyper::Body);
 
 impl RequestBody {
     pub(crate) fn from_hyp(body: hyper::Body) -> Self {
-        RequestBody(Inner::Stream(body))
+        RequestBody(body)
     }
 
     /// Returns whether the body is complete or not.
     pub fn is_end_stream(&self) -> bool {
-        match &self.0 {
-            Inner::Stream(body) => body.is_end_stream(),
-            _ => true,
-        }
-    }
-
-    /// Returns whether this stream has already been upgraded.
-    ///
-    /// If this method returns `true`, the result from `BufStream::poll_buf`
-    /// or `HasTrailers::poll_trailers` becomes an error.
-    pub fn is_upgraded(&self) -> bool {
-        match self.0 {
-            Inner::OnUpgrade(..) => true,
-            _ => false,
-        }
+        self.0.is_end_stream()
     }
 
     /// Returns a length of the total bytes, if possible.
     pub fn content_length(&self) -> Option<u64> {
-        match &self.0 {
-            Inner::Stream(body) => body.content_length(),
-            _ => None,
-        }
+        self.0.content_length()
     }
 }
 
@@ -61,60 +38,50 @@ impl BufStream for RequestBody {
     type Error = BoxedStdError;
 
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match &mut self.0 {
-            Inner::Stream(body) => body
-                .poll_data()
-                .map(|x| x.map(|opt| opt.map(|chunk| io::Cursor::new(chunk.into_bytes()))))
-                .map_err(Into::into),
-            Inner::OnUpgrade(..) => Err(already_upgraded()),
-        }
+        self.0
+            .poll_data()
+            .map(|x| x.map(|opt| opt.map(|chunk| io::Cursor::new(chunk.into_bytes()))))
+            .map_err(Into::into)
     }
 
     fn size_hint(&self) -> SizeHint {
-        match &self.0 {
-            Inner::Stream(body) => {
-                let mut hint = SizeHint::new();
-                if let Some(len) = body.content_length() {
-                    hint.set_upper(len);
-                    hint.set_lower(len);
-                }
-                hint
-            }
-            Inner::OnUpgrade(..) => SizeHint::new(),
+        let mut hint = SizeHint::new();
+        if let Some(len) = self.0.content_length() {
+            hint.set_upper(len);
+            hint.set_lower(len);
         }
+        hint
     }
 }
 
-impl HasTrailers for RequestBody {
+impl BodyTrailers for RequestBody {
     type TrailersError = BoxedStdError;
 
     fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
-        match &mut self.0 {
-            Inner::Stream(body) => body.poll_trailers().map_err(Into::into),
-            Inner::OnUpgrade(..) => Err(already_upgraded()),
-        }
+        self.0.poll_trailers().map_err(Into::into)
     }
 }
 
 impl Upgrade for RequestBody {
     type Upgraded = Upgraded;
     type Error = BoxedStdError;
+    type Future = OnUpgrade;
 
-    fn poll_upgrade(&mut self) -> Poll<Self::Upgraded, Self::Error> {
-        loop {
-            self.0 = match &mut self.0 {
-                Inner::Stream(body) => {
-                    let body = std::mem::replace(body, hyper::Body::empty());
-                    Inner::OnUpgrade(body.on_upgrade())
-                }
-                Inner::OnUpgrade(on_upgrade) => {
-                    return on_upgrade
-                        .poll()
-                        .map(|x| x.map(Upgraded))
-                        .map_err(Into::into);
-                }
-            };
-        }
+    fn on_upgrade(self) -> Self::Future {
+        OnUpgrade(self.0.on_upgrade())
+    }
+}
+
+#[derive(Debug)]
+pub struct OnUpgrade(hyper::upgrade::OnUpgrade);
+
+impl Future for OnUpgrade {
+    type Item = Upgraded;
+    type Error = BoxedStdError;
+
+    #[inline]
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.0.poll().map_async(Upgraded).map_err(Into::into)
     }
 }
 
@@ -309,17 +276,11 @@ pub trait ResponseBody: imp::ResponseBodyImpl {}
 
 impl<Bd> ResponseBody for Bd
 where
-    Bd: BufStream + HasTrailers + Send + 'static,
+    Bd: BufStream + BodyTrailers + Send + 'static,
     Bd::Item: Send,
     Bd::Error: Into<BoxedStdError>,
     Bd::TrailersError: Into<BoxedStdError>,
 {
-}
-
-fn already_upgraded() -> BoxedStdError {
-    failure::format_err!("the request body has already been upgraded")
-        .compat()
-        .into()
 }
 
 pub(crate) mod imp {
@@ -384,7 +345,7 @@ pub(crate) mod imp {
 
     impl<Bd> ResponseBodyImpl for Bd
     where
-        Bd: BufStream + HasTrailers + Send + 'static,
+        Bd: BufStream + BodyTrailers + Send + 'static,
         Bd::Item: Send,
         Bd::Error: Into<BoxedStdError>,
         Bd::TrailersError: Into<BoxedStdError>,
@@ -398,7 +359,7 @@ pub(crate) mod imp {
 
         #[inline]
         fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, BoxedStdError> {
-            HasTrailers::poll_trailers(self).map_err(Into::into)
+            BodyTrailers::poll_trailers(self).map_err(Into::into)
         }
 
         #[inline]

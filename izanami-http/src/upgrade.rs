@@ -1,81 +1,33 @@
-//! Supplemental abstractions around HTTP message bodies.
+//! HTTP/1 upgrade.
 
 use {
-    futures::{Async, Future, Poll},
-    http::{HeaderMap, Request},
+    futures::Future,
+    http::Request,
     std::any::TypeId,
     tokio_io::{AsyncRead, AsyncWrite},
 };
-
-/// A trait representing that it is possible that the stream
-/// will return a `HeaderMap` after completing the output of bytes.
-pub trait HasTrailers {
-    /// The type of errors that will be returned from `poll_trailers`.
-    type TrailersError;
-
-    /// Polls if this stream is ready to return a `HeaderMap`.
-    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
-        Ok(Async::Ready(None))
-    }
-}
-
-mod impl_has_trailers {
-    use super::*;
-
-    impl HasTrailers for String {
-        type TrailersError = std::io::Error; // FIXME: replace with `!`
-    }
-
-    impl<'a> HasTrailers for &'a str {
-        type TrailersError = std::io::Error; // FIXME: replace with `!`
-    }
-
-    impl HasTrailers for Vec<u8> {
-        type TrailersError = std::io::Error; // FIXME: replace with `!`
-    }
-
-    impl<'a> HasTrailers for &'a [u8] {
-        type TrailersError = std::io::Error; // FIXME: replace with `!`
-    }
-
-    impl<'a> HasTrailers for std::borrow::Cow<'a, str> {
-        type TrailersError = std::io::Error; // FIXME: replace with `!`
-    }
-
-    impl<'a> HasTrailers for std::borrow::Cow<'a, [u8]> {
-        type TrailersError = std::io::Error; // FIXME: replace with `!`
-    }
-
-    impl HasTrailers for bytes::Bytes {
-        type TrailersError = std::io::Error; // FIXME: replace with `!`
-    }
-
-    impl HasTrailers for bytes::BytesMut {
-        type TrailersError = std::io::Error; // FIXME: replace with `!`
-    }
-}
 
 /// A trait that abstracts the HTTP upgrade.
 ///
 /// Typically, this trait is implemented by the types that represents
 /// the request body.
 pub trait Upgrade {
-    /// The type of upgraded I/O.
+    /// An upgraded I/O.
     type Upgraded: Upgraded;
 
-    /// The type of error that will be returned from `Future`.
+    /// The error type on upgrade.
     type Error;
 
-    /// Checks if the upgraded I/O is ready, and returns its value if possible.
-    fn poll_upgrade(&mut self) -> Poll<Self::Upgraded, Self::Error>;
+    /// The future that returns an upgraded I/O from HTTP.
+    type Future: Future<Item = Self::Upgraded, Error = Self::Error>;
 
-    /// Converts itself into a `Future` that will return an upgraded I/O.
-    fn on_upgrade(self) -> OnUpgrade<Self>
-    where
-        Self: Sized,
-    {
-        OnUpgrade(self)
-    }
+    /// Consume itself and create a `Future` that returns the upgraded I/O.
+    ///
+    /// Typically, the future returned from this method will not be ready
+    /// until the server completes to send the handshake response to client.
+    /// DO NOT poll this value on the same task as the future returning the
+    /// response.
+    fn on_upgrade(self) -> Self::Future;
 }
 
 /// A trait that represents an upgraded I/O.
@@ -184,31 +136,15 @@ impl dyn Upgraded + Send + 'static {
     }
 }
 
-/// A `Future` that checks if the upgraded I/O is ready.
-#[derive(Debug)]
-pub struct OnUpgrade<T>(T);
-
-impl<T> Future for OnUpgrade<T>
-where
-    T: Upgrade,
-{
-    type Item = T::Upgraded;
-    type Error = T::Error;
-
-    #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0.poll_upgrade()
-    }
-}
-
 impl<T> Upgrade for Request<T>
 where
     T: Upgrade,
 {
     type Upgraded = T::Upgraded;
     type Error = T::Error;
+    type Future = T::Future;
 
-    fn poll_upgrade(&mut self) -> Poll<Self::Upgraded, Self::Error> {
-        self.body_mut().poll_upgrade()
+    fn on_upgrade(self) -> Self::Future {
+        self.into_body().on_upgrade()
     }
 }

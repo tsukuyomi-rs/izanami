@@ -7,9 +7,4 @@ publish = false
 
 [dependencies]
 bytes = "0.4"
-either = { version = "1.5", optional = true }
 futures = "0.1.25"
-
-[features]
-default = ["ext"]
-ext = ["bytes/either", "either"]
