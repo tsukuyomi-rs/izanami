@@ -6,7 +6,7 @@ use {
         error::BoxedStdError,
         service::{
             imp::{HttpResponseImpl, ResponseBodyImpl},
-            HttpService, IntoHttpService, NewHttpService, RequestBody,
+            HttpService, IntoHttpService, MakeHttpService, RequestBody,
         },
         tls::{MakeTlsTransport, NoTls},
         util::*,
@@ -142,7 +142,7 @@ where
 
 impl<S, T> Server<Incoming<S, crate::net::tcp::AddrIncoming, T>>
 where
-    S: NewHttpService<T::Transport>,
+    S: MakeHttpService<crate::net::tcp::AddrStream, T::Transport>,
     T: MakeTlsTransport<crate::net::tcp::AddrStream>,
 {
     /// Create a `Builder` bound to the specified address.
@@ -165,7 +165,7 @@ where
 #[cfg(unix)]
 impl<S, T> Server<Incoming<S, crate::net::unix::AddrIncoming, T>>
 where
-    S: NewHttpService<T::Transport>,
+    S: MakeHttpService<crate::net::unix::AddrStream, T::Transport>,
     T: MakeTlsTransport<crate::net::unix::AddrStream>,
 {
     /// Create a `Builder` bound to the specified socket path.
@@ -512,7 +512,7 @@ pub struct Incoming<S, I, T = NoTls> {
 
 impl<S, I, T> Incoming<S, I, T>
 where
-    S: NewHttpService<T::Transport>,
+    S: MakeHttpService<I::Item, T::Transport>,
     I: Stream,
     I::Error: Into<BoxedStdError>,
     T: MakeTlsTransport<I::Item>,
@@ -529,7 +529,7 @@ where
 
 impl<S, T> Incoming<S, crate::net::tcp::AddrIncoming, T>
 where
-    S: NewHttpService<T::Transport>,
+    S: MakeHttpService<crate::net::tcp::AddrStream, T::Transport>,
     T: MakeTlsTransport<crate::net::tcp::AddrStream>,
 {
     pub fn bind_tcp<A>(make_service: S, addr: A, tls: T) -> io::Result<Self>
@@ -549,7 +549,7 @@ where
 #[cfg(unix)]
 impl<S, T> Incoming<S, crate::net::unix::AddrIncoming, T>
 where
-    S: NewHttpService<T::Transport>,
+    S: MakeHttpService<crate::net::unix::AddrStream, T::Transport>,
     T: MakeTlsTransport<crate::net::unix::AddrStream>,
 {
     pub fn bind_unix<P>(make_service: S, path: P, tls: T) -> io::Result<Self>
@@ -568,7 +568,7 @@ where
 
 impl<S, I, T> StreamService for Incoming<S, I, T>
 where
-    S: NewHttpService<T::Transport>,
+    S: MakeHttpService<I::Item, T::Transport>,
     I: Stream,
     I::Error: Into<BoxedStdError>,
     T: MakeTlsTransport<I::Item>,
@@ -582,7 +582,7 @@ where
             Some(stream) => stream,
             None => return Ok(Async::Ready(None)),
         };
-        let make_service_future = self.make_service.new_service();
+        let make_service_future = self.make_service.make_service(&stream);
         let make_transport_future = self.tls.make_transport(stream);
         Ok(Async::Ready(Some(IncomingFuture {
             inner: (

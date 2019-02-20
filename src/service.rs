@@ -7,7 +7,7 @@ use {
     http::HeaderMap,
     hyper::body::Payload as _Payload,
     izanami_buf::{BufStream, SizeHint},
-    izanami_service::Service,
+    izanami_service::{IntoService, Service, ServiceRef},
     izanami_util::http::{HasTrailers, Upgrade},
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
@@ -183,12 +183,13 @@ impl AsyncWrite for Upgraded {
 /// Type alias representing the HTTP request passed to the services.
 pub type HttpRequest = http::Request<RequestBody>;
 
-pub trait NewHttpService<T> {
+/// An asynchronous factory of `HttpService`s.
+pub trait MakeHttpService<T1, T2>: self::imp::MakeHttpServiceSealed<T1, T2> {
     type Response: HttpResponse;
     type Error: Into<BoxedStdError>;
     type Service: HttpService<Response = Self::Response, Error = Self::Error>;
     type IntoService: IntoHttpService<
-        T,
+        T2,
         Response = Self::Response,
         Error = Self::Error,
         Service = Self::Service,
@@ -201,34 +202,34 @@ pub trait NewHttpService<T> {
         Ok(Async::Ready(()))
     }
 
-    fn new_service(&mut self) -> Self::Future;
+    fn make_service(&mut self, target: &T1) -> Self::Future;
 }
 
-impl<S, T> NewHttpService<T> for S
+impl<S, T1, T2> MakeHttpService<T1, T2> for S
 where
-    S: Service<()>,
-    S::Response: IntoHttpService<T>,
+    S: ServiceRef<T1>,
+    S::Response: IntoHttpService<T2>,
     S::Error: Into<BoxedStdError>,
 {
-    type Response = <S::Response as IntoHttpService<T>>::Response;
-    type Error = <S::Response as IntoHttpService<T>>::Error;
-    type Service = <S::Response as IntoHttpService<T>>::Service;
+    type Response = <S::Response as IntoHttpService<T2>>::Response;
+    type Error = <S::Response as IntoHttpService<T2>>::Error;
+    type Service = <S::Response as IntoHttpService<T2>>::Service;
     type IntoService = S::Response;
     type MakeError = S::Error;
     type Future = S::Future;
 
     #[inline]
     fn poll_ready(&mut self) -> Poll<(), Self::MakeError> {
-        Service::poll_ready(self)
+        ServiceRef::poll_ready(self)
     }
 
     #[inline]
-    fn new_service(&mut self) -> Self::Future {
-        Service::call(self, ())
+    fn make_service(&mut self, target: &T1) -> Self::Future {
+        ServiceRef::call(self, target)
     }
 }
 
-pub trait IntoHttpService<T> {
+pub trait IntoHttpService<T>: self::imp::IntoHttpServiceSealed<T> {
     type Response: HttpResponse;
     type Error: Into<BoxedStdError>;
     type Service: HttpService<Response = Self::Response, Error = Self::Error>;
@@ -236,23 +237,38 @@ pub trait IntoHttpService<T> {
     fn into_service(self, target: &T) -> Self::Service;
 }
 
-impl<S, T> IntoHttpService<T> for S
+impl<S, T, Res, Err, Svc> IntoHttpService<T> for S
 where
-    S: HttpService,
+    S: for<'a> IntoService<&'a T, HttpRequest, Response = Res, Error = Err, Service = Svc>,
+    Res: HttpResponse,
+    Err: Into<BoxedStdError>,
+    Svc: Service<HttpRequest, Response = Res, Error = Err>,
 {
-    type Response = S::Response;
-    type Error = S::Error;
-    type Service = S;
+    type Response = Res;
+    type Error = Err;
+    type Service = Svc;
 
     #[inline]
-    fn into_service(self, _: &T) -> Self::Service {
-        self
+    fn into_service(self, target: &T) -> Self::Service {
+        IntoService::into_service(self, target)
     }
 }
 
-pub trait HttpService {
+/// An asynchronous service that handles HTTP requests on a transport.
+///
+/// The implementation of this trait is automatically provided when the
+/// type has an implementation of `Service`.
+pub trait HttpService: self::imp::HttpServiceSealed {
+    /// The type of HTTP response returned from `respond`.
     type Response: HttpResponse;
+
+    /// The error type which will be returned from this service.
+    ///
+    /// Returning an error means that the server will abruptly abort
+    /// the connection rather than sending 4xx or 5xx response.
     type Error: Into<BoxedStdError>;
+
+    /// The future that handles an incoming HTTP request.
     type Future: Future<Item = Self::Response, Error = Self::Error>;
 
     #[doc(hidden)]
@@ -260,6 +276,7 @@ pub trait HttpService {
         Ok(Async::Ready(()))
     }
 
+    /// Handles an incoming HTTP request and returns its response asynchronously.
     fn respond(&mut self, request: HttpRequest) -> Self::Future;
 }
 
@@ -307,6 +324,37 @@ fn already_upgraded() -> BoxedStdError {
 
 pub(crate) mod imp {
     use super::*;
+
+    pub trait HttpServiceSealed {}
+
+    impl<S> HttpServiceSealed for S
+    where
+        S: Service<HttpRequest>,
+        S::Response: HttpResponse,
+        S::Error: Into<BoxedStdError>,
+    {
+    }
+
+    pub trait MakeHttpServiceSealed<T1, T2> {}
+
+    impl<S, T1, T2> MakeHttpServiceSealed<T1, T2> for S
+    where
+        S: ServiceRef<T1>,
+        S::Response: IntoHttpService<T2>,
+        S::Error: Into<BoxedStdError>,
+    {
+    }
+
+    pub trait IntoHttpServiceSealed<T> {}
+
+    impl<S, T, Res, Err, Svc> IntoHttpServiceSealed<T> for S
+    where
+        S: for<'a> IntoService<&'a T, HttpRequest, Response = Res, Error = Err, Service = Svc>,
+        Res: HttpResponse,
+        Err: Into<BoxedStdError>,
+        Svc: Service<HttpRequest, Response = Res, Error = Err>,
+    {
+    }
 
     pub trait HttpResponseImpl {
         type Data: Buf + Send;

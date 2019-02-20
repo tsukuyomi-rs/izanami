@@ -13,15 +13,21 @@
 )]
 #![forbid(clippy::unimplemented)]
 
+mod into_service;
 mod make_service;
 mod service_fn;
+mod service_mut;
+mod service_ref;
 mod stream_service;
 
 #[doc(no_inline)]
 pub use tower_service::Service;
 
 pub use crate::{
-    make_service::MakeService, //
+    into_service::IntoService, //
+    make_service::MakeService,
     service_fn::service_fn,
+    service_mut::ServiceMut,
+    service_ref::ServiceRef,
     stream_service::StreamService,
 };

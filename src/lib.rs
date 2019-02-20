@@ -27,7 +27,7 @@ pub use crate::{
 use {
     crate::{
         server::Incoming,
-        service::{HttpService, NewHttpService},
+        service::{HttpService, MakeHttpService},
         tls::MakeTlsTransport,
     },
     izanami_rt::Spawn,
@@ -45,7 +45,7 @@ where
     T: MakeTlsTransport<crate::net::tcp::AddrStream> + Send + 'static,
     T::Future: Send + 'static,
     T::Transport: Send + 'static,
-    S: NewHttpService<T::Transport> + Send + 'static,
+    S: MakeHttpService<crate::net::tcp::AddrStream, T::Transport> + Send + 'static,
     S::Future: Send + 'static,
     S::IntoService: Send + 'static,
     S::Service: Send + 'static,
@@ -69,7 +69,7 @@ where
     T: MakeTlsTransport<crate::net::unix::AddrStream> + Send + 'static,
     T::Future: Send + 'static,
     T::Transport: Send + 'static,
-    S: NewHttpService<T::Transport> + Send + 'static,
+    S: MakeHttpService<crate::net::unix::AddrStream, T::Transport> + Send + 'static,
     S::Future: Send + 'static,
     S::IntoService: Send + 'static,
     S::Service: Send + 'static,
