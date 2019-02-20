@@ -15,7 +15,6 @@ mod error;
 mod util;
 
 pub mod net;
-pub mod runtime;
 pub mod server;
 pub mod service;
 pub mod tls;
@@ -27,11 +26,11 @@ pub use crate::{
 
 use {
     crate::{
-        runtime::Spawn,
         server::Incoming,
         service::{HttpService, NewHttpService},
         tls::MakeTlsTransport,
     },
+    izanami_rt::Spawn,
     izanami_service::StreamService,
     std::net::ToSocketAddrs,
     tokio::io::{AsyncRead, AsyncWrite},

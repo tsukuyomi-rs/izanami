@@ -15,5 +15,5 @@ indexmap = "1"
 regex = "1"
 
 [dev-dependencies]
-izanami = { path = "../.." }
+izanami-rt = { path = "../../izanami-rt" }
 tokio = "0.1"

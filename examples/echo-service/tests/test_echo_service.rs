@@ -1,31 +1,31 @@
 use {
     echo_service::Echo,
     http::{Request, Response},
-    izanami::runtime::Block,
+    izanami_rt::Runnable,
     izanami_service::{MakeService, Service},
     tokio::runtime::current_thread::Runtime,
 };
 
 #[test]
-fn test_empty_routes() -> izanami::Result<()> {
+fn test_empty_routes() -> failure::Fallible<()> {
     let mut rt = Runtime::new()?;
 
     let mut echo = Echo::builder().build();
 
     let mut service = echo
         .make_service(()) //
-        .block(&mut rt)?;
+        .run(&mut rt)?;
 
     let response = service
         .call(Request::get("/").body(())?) //
-        .block(&mut rt)?;
+        .run(&mut rt)?;
     assert_eq!(response.status(), 404);
 
     Ok(())
 }
 
 #[test]
-fn test_single_route() -> izanami::Result<()> {
+fn test_single_route() -> failure::Fallible<()> {
     let mut rt = Runtime::new()?;
 
     let mut echo = Echo::builder() //
@@ -38,14 +38,14 @@ fn test_single_route() -> izanami::Result<()> {
 
     let mut service = echo
         .make_service(()) //
-        .block(&mut rt)?;
+        .run(&mut rt)?;
 
     let response = service
         .call(
             Request::get("/") //
                 .body(())?,
         )
-        .block(&mut rt)?;
+        .run(&mut rt)?;
     assert_eq!(response.status(), 200);
     assert_eq!(std::str::from_utf8(&*response.body())?, "hello");
 
@@ -53,7 +53,7 @@ fn test_single_route() -> izanami::Result<()> {
 }
 
 #[test]
-fn test_capture_param() -> izanami::Result<()> {
+fn test_capture_param() -> failure::Fallible<()> {
     let mut rt = Runtime::new()?;
 
     let mut echo = Echo::builder() //
@@ -77,17 +77,15 @@ fn test_capture_param() -> izanami::Result<()> {
 
     let mut service = echo
         .make_service(()) //
-        .block(&mut rt)?;
+        .run(&mut rt)?;
 
     let response = service
         .call(Request::get("/42").body(())?) //
-        .block(&mut rt)?;
+        .run(&mut rt)?;
     assert_eq!(response.status(), 200);
     assert_eq!(std::str::from_utf8(&*response.body())?, "id=42");
 
-    let response = service
-        .call(Request::get("/fox").body(())?)
-        .block(&mut rt)?;
+    let response = service.call(Request::get("/fox").body(())?).run(&mut rt)?;
     assert_eq!(response.status(), 404);
 
     Ok(())

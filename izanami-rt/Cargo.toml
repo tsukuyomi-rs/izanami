@@ -1,0 +1,13 @@
+[package]
+name = "izanami-rt"
+version = "0.1.0-preview.1"
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+futures = "0.1.25"
+tokio = "0.1"
+tokio-threadpool = "0.1"
+
+[dev-dependencies]
+version-sync = "0.7"

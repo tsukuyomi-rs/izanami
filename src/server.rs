@@ -4,7 +4,6 @@ use {
     crate::{
         drain::{Signal, Watch},
         error::BoxedStdError,
-        runtime::{Block, Runtime, Spawn},
         service::{
             imp::{HttpResponseImpl, ResponseBodyImpl},
             HttpService, IntoHttpService, NewHttpService, RequestBody,
@@ -15,6 +14,7 @@ use {
     futures::{future::Executor, Async, Future, IntoFuture, Poll, Stream},
     http::{Request, Response},
     hyper::server::conn::Http,
+    izanami_rt::{Runnable, Runtime, Spawn, Spawner},
     izanami_service::StreamService,
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
@@ -120,9 +120,10 @@ where
     /// Start this server onto the specified spawner.
     ///
     /// This method immediately returns and the server runs on the background.
-    pub fn start<Sp: ?Sized>(self, spawner: &mut Sp)
+    pub fn start<Sp>(self, spawner: &mut Sp)
     where
         Self: Spawn<Sp>,
+        Sp: Spawner + ?Sized,
     {
         Spawn::spawn(self, spawner)
     }
@@ -130,11 +131,12 @@ where
     /// Run this server onto the specified runtime.
     ///
     /// This method runs the server without spawning, and will block the current thread.
-    pub fn run<Rt: Runtime>(self, runtime: &mut Rt) -> <Self as Block<Rt>>::Output
+    pub fn run<Rt>(self, runtime: &mut Rt) -> <Self as Runnable<Rt>>::Output
     where
-        Self: Block<Rt>,
+        Self: Runnable<Rt>,
+        Rt: Runtime + ?Sized,
     {
-        Block::block(self, runtime)
+        Runnable::run(self, runtime)
     }
 }
 
@@ -183,6 +185,46 @@ where
     }
 }
 
+trait HasExecutor {
+    type Executor;
+    fn executor(&self) -> Self::Executor;
+}
+
+impl HasExecutor for tokio::runtime::Runtime {
+    type Executor = tokio::runtime::TaskExecutor;
+    fn executor(&self) -> Self::Executor {
+        self.executor()
+    }
+}
+
+impl HasExecutor for tokio::runtime::TaskExecutor {
+    type Executor = Self;
+    fn executor(&self) -> Self::Executor {
+        self.clone()
+    }
+}
+
+impl HasExecutor for tokio::executor::DefaultExecutor {
+    type Executor = Self;
+    fn executor(&self) -> Self::Executor {
+        self.clone()
+    }
+}
+
+impl HasExecutor for tokio::runtime::current_thread::Runtime {
+    type Executor = tokio::runtime::current_thread::TaskExecutor;
+    fn executor(&self) -> Self::Executor {
+        tokio::runtime::current_thread::TaskExecutor::current()
+    }
+}
+
+impl HasExecutor for tokio::runtime::current_thread::TaskExecutor {
+    type Executor = Self;
+    fn executor(&self) -> Self::Executor {
+        self.clone()
+    }
+}
+
 /// A helper macro for creating a server task.
 macro_rules! spawn_all_task {
     (<$S:ty> $self:expr, $executor:expr) => {{
@@ -219,90 +261,69 @@ macro_rules! spawn_all_task {
     }};
 }
 
-impl<S, C, T, Sig> Spawn<tokio::runtime::Runtime> for Server<S, Sig>
-where
-    S: StreamService<Response = (C, T)> + Send + 'static,
-    S::Future: Send + 'static,
-    C: HttpService + Send + 'static,
-    C::Future: Send + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
-    Sig: Future<Item = ()> + Send + 'static,
-{
-    fn spawn(self, rt: &mut tokio::runtime::Runtime) {
-        let task = spawn_all_task!(<S> self, rt.executor())
-            .map_err(|_e| log::error!("stream service error"));
-        rt.spawn(task);
-    }
+macro_rules! impl_spawn_for_server {
+    ($t:ty) => {
+        impl_spawn_for_server!($t, (rt, task) => { rt.spawn(task); });
+    };
+    ($t:ty, ($rt:ident, $task:ident) => $e:expr) => {
+        impl<S, C, T, Sig> Spawn<$t> for Server<S, Sig>
+        where
+            S: StreamService<Response = (C, T)> + Send + 'static,
+            S::Future: Send + 'static,
+            C: HttpService + Send + 'static,
+            C::Future: Send + 'static,
+            T: AsyncRead + AsyncWrite + Send + 'static,
+            Sig: Future<Item = ()> + Send + 'static,
+        {
+            fn spawn(self, $rt: &mut $t) {
+                let $task = spawn_all_task!(<S> self, $rt.executor())
+                    .map_err(|_e| log::error!("stream service error"));
+                $e;
+            }
+        }
+    };
+
+    (!Send $t:ty) => {
+        impl_spawn_for_server!(!Send $t, (rt, task) => { rt.spawn(task); });
+    };
+    (!Send $t:ty, ($rt:ident, $task:ident) => $e:expr) => {
+        impl<S, C, T, Sig> Spawn<$t> for Server<S, Sig>
+        where
+            S: StreamService<Response = (C, T)> + 'static,
+            S::Future: 'static,
+            C: HttpService + 'static,
+            T: AsyncRead + AsyncWrite + Send + 'static,
+            Sig: Future<Item = ()> + 'static,
+        {
+            fn spawn(self, $rt: &mut $t) {
+                let $task = spawn_all_task!(<S> self, $rt.executor())
+                    .map_err(|_e| log::error!("stream service error"));
+                $e;
+            }
+        }
+    };
 }
 
-impl<S, C, T, Sig> Spawn<tokio::executor::DefaultExecutor> for Server<S, Sig>
-where
-    S: StreamService<Response = (C, T)> + Send + 'static,
-    S::Future: Send + 'static,
-    C: HttpService + Send + 'static,
-    C::Future: Send + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
-    Sig: Future<Item = ()> + Send + 'static,
-{
-    fn spawn(self, spawner: &mut tokio::executor::DefaultExecutor) {
+impl_spawn_for_server!(tokio::runtime::Runtime);
+impl_spawn_for_server!(tokio::runtime::TaskExecutor);
+impl_spawn_for_server!(tokio::executor::DefaultExecutor,
+    (spawner, task) => {
         use tokio::executor::Executor;
-        let task = spawn_all_task!(<S> self, spawner.clone())
-            .map_err(|_e| log::error!("stream service error"));
         spawner
             .spawn(Box::new(task))
             .expect("failed to spawn a task");
     }
-}
-
-impl<S, C, T, Sig> Spawn<tokio::runtime::TaskExecutor> for Server<S, Sig>
-where
-    S: StreamService<Response = (C, T)> + Send + 'static,
-    S::Future: Send + 'static,
-    C: HttpService + Send + 'static,
-    C::Future: Send + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
-    Sig: Future<Item = ()> + Send + 'static,
-{
-    fn spawn(self, spawner: &mut tokio::runtime::TaskExecutor) {
-        let task = spawn_all_task!(<S> self, spawner.clone())
-            .map_err(|_e| log::error!("stream service error"));
-        spawner.spawn(task);
-    }
-}
-
-impl<S, C, T, Sig> Spawn<tokio::runtime::current_thread::Runtime> for Server<S, Sig>
-where
-    S: StreamService<Response = (C, T)> + 'static,
-    S::Future: 'static,
-    C: HttpService + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
-    Sig: Future<Item = ()> + 'static,
-{
-    fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime) {
-        let task = spawn_all_task!(<S> self, rt.executor())
-            .map_err(|_e| log::error!("stream service error"));
-        rt.spawn(task);
-    }
-}
-
-impl<S, C, T, Sig> Spawn<tokio::runtime::current_thread::TaskExecutor> for Server<S, Sig>
-where
-    S: StreamService<Response = (C, T)> + 'static,
-    S::Future: 'static,
-    C: HttpService + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
-    Sig: Future<Item = ()> + 'static,
-{
-    fn spawn(self, spawner: &mut tokio::runtime::current_thread::TaskExecutor) {
-        let task = spawn_all_task!(<S> self, spawner.clone())
-            .map_err(|_e| log::error!("stream service error"));
+);
+impl_spawn_for_server!(!Send tokio::runtime::current_thread::Runtime);
+impl_spawn_for_server!(!Send tokio::runtime::current_thread::TaskExecutor,
+    (spawner, task) => {
         spawner
             .spawn_local(Box::new(task))
             .expect("failed to spawn a task");
     }
-}
+);
 
-impl<S, C, T, Sig> Block<tokio::runtime::Runtime> for Server<S, Sig>
+impl<S, C, T, Sig> Runnable<tokio::runtime::Runtime> for Server<S, Sig>
 where
     S: StreamService<Response = (C, T)> + Send + 'static,
     S::Error: Send + 'static,
@@ -314,13 +335,13 @@ where
 {
     type Output = Result<(), S::Error>;
 
-    fn block(self, rt: &mut tokio::runtime::Runtime) -> Self::Output {
+    fn run(self, rt: &mut tokio::runtime::Runtime) -> Self::Output {
         let task = spawn_all_task!(<S> self, rt.executor());
         rt.block_on(task)
     }
 }
 
-impl<S, C, T, Sig> Block<tokio::runtime::current_thread::Runtime> for Server<S, Sig>
+impl<S, C, T, Sig> Runnable<tokio::runtime::current_thread::Runtime> for Server<S, Sig>
 where
     S: StreamService<Response = (C, T)>,
     S::Future: 'static,
@@ -330,7 +351,7 @@ where
 {
     type Output = Result<(), S::Error>;
 
-    fn block(self, rt: &mut tokio::runtime::current_thread::Runtime) -> Self::Output {
+    fn run(self, rt: &mut tokio::runtime::current_thread::Runtime) -> Self::Output {
         let task = spawn_all_task!(<S> self, rt.executor());
         rt.block_on(task)
     }

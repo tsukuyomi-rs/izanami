@@ -2,6 +2,7 @@
 
 set -ex
 
+cargo doc --no-deps -p izanami-rt
 cargo doc --no-deps -p izanami-service
 cargo doc --no-deps -p izanami-util
 cargo doc --no-deps -p izanami --all-features
