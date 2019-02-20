@@ -1,13 +1,11 @@
 [package]
 name = "izanami-service"
-description = """
-Abstraction of HTTP services based on tower-service.
-"""
+description = "Abstraction of network services based on tower-service."
 version = "0.1.0-preview.1"
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"
-repository = "https://gitlab.com/ubnt-intrepid/izanami.git"
+repository = "https://github.com/ubnt-intrepid/izanami.git"
 
 [dependencies]
 futures = "0.1"

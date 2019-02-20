@@ -1,12 +1,12 @@
 [package]
 name = "izanami"
+description = "An HTTP server implementation powered by hyper and tower-service."
 version = "0.1.0-preview.2"
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ubnt-intrepid/izanami.git"
 readme = "README.md"
-description = "An HTTP server implementation powered by hyper and tower-service."
 
 include = [
   "/Cargo.toml",

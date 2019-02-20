@@ -1,4 +1,4 @@
-//! Abstraction of HTTP services based on [`tower-service`].
+//! Abstraction of network services based on [`tower-service`].
 //!
 //! [`tower-service`]: https://crates.io/crates/tower-service
 

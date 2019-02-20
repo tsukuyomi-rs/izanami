@@ -1,4 +1,4 @@
-//! Abstraction around transport layer.
+//! Network abstraction for izanami.
 
 #![doc(html_root_url = "https://docs.rs/izanami-net/0.1.0-preview.1")]
 #![deny(

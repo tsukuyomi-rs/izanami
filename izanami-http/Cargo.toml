@@ -3,9 +3,10 @@ name = "izanami-http"
 description = "HTTP-specific abstraction for izanami."
 version = "0.1.0-preview.1"
 edition = "2018"
+publish = false
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"
-repository = "https://gitlab.com/ubnt-intrepid/izanami.git"
+repository = "https://github.com/ubnt-intrepid/izanami.git"
 
 [dependencies]
 bytes = "0.4"
