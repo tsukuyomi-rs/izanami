@@ -87,7 +87,7 @@ where
     T: AsyncRead + AsyncWrite,
     Server<S>: Block<tokio::runtime::Runtime>,
 {
-    let (server, _handle) = Server::builder(stream_service).build();
+    let server = Server::builder(stream_service).build();
 
     let mut entered = tokio_executor::enter().expect("nested runtime use");
     let mut runtime = tokio::runtime::Runtime::new().expect("failed to start new Runtime");

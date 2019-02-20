@@ -22,22 +22,25 @@ use {
 
 /// A builder for creating an `Server`.
 #[derive(Debug)]
-pub struct Builder<S> {
+pub struct Builder<S, Sig = futures::future::Empty<(), ()>> {
     stream_service: S,
     protocol: Http,
+    shutdown_signal: Sig,
 }
 
-impl<S, C, T> Builder<S>
+impl<S, C, T, Sig> Builder<S, Sig>
 where
     S: StreamService<Response = (C, T)>,
     C: HttpService,
     T: AsyncRead + AsyncWrite,
+    Sig: Future<Item = ()>,
 {
     /// Creates a `Builder` using a streamed service.
-    pub fn new(stream_service: S, protocol: Http) -> Self {
+    pub fn new(stream_service: S, protocol: Http, shutdown_signal: Sig) -> Self {
         Self {
             stream_service,
             protocol,
+            shutdown_signal,
         }
     }
 
@@ -53,59 +56,36 @@ where
         self
     }
 
+    /// Specifies the signal to shutdown the background tasks gracefully.
+    pub fn shutdown_signal<Sig2>(self, signal: Sig2) -> Builder<S, Sig2>
+    where
+        Sig2: Future<Item = ()>,
+    {
+        Builder {
+            stream_service: self.stream_service,
+            protocol: self.protocol,
+            shutdown_signal: signal,
+        }
+    }
+
     /// Consumes itself and create an instance of `Server`.
     ///
     /// It also returns a `Handle` used by controlling the spawned server.
-    pub fn build(self) -> (Server<S>, Handle) {
-        let (signal, watch) = crate::drain::channel();
-        let task = Server {
+    pub fn build(self) -> Server<S, Sig> {
+        Server {
             stream_service: self.stream_service,
-            watch,
             protocol: self.protocol,
-        };
-        let handle = Handle { signal };
-        (task, handle)
-    }
-
-    /// Starts the configured HTTP server onto the specified spawner and returns its handle.
-    pub fn start<Spawner: ?Sized>(self, spawner: &mut Spawner) -> Handle
-    where
-        Server<S>: Spawn<Spawner>,
-    {
-        let (server, handle) = self.build();
-        server.spawn(spawner);
-        handle
-    }
-}
-
-/// A handle associated with `Server`.
-#[derive(Debug)]
-pub struct Handle {
-    signal: Signal,
-}
-
-impl Handle {
-    /// Send a shutdown signal to the background task and await its completion.
-    pub fn shutdown(self) -> impl Future<Item = (), Error = ()> {
-        self.signal.drain()
-    }
-}
-
-impl Future for Handle {
-    type Item = ();
-    type Error = ();
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.signal.poll()
+            shutdown_signal: self.shutdown_signal,
+        }
     }
 }
 
 /// An HTTP server.
 #[derive(Debug)]
-pub struct Server<S> {
+pub struct Server<S, Sig = futures::future::Empty<(), ()>> {
     stream_service: S,
-    watch: Watch,
     protocol: Http,
+    shutdown_signal: Sig,
 }
 
 impl<S, C, T> Server<S>
@@ -116,7 +96,25 @@ where
 {
     /// Creates a `Builder` using a streamed service.
     pub fn builder(stream_service: S) -> Builder<S> {
-        Builder::new(stream_service, Http::new())
+        Builder::new(stream_service, Http::new(), futures::future::empty())
+    }
+}
+
+impl<S, C, T, Sig> Server<S, Sig>
+where
+    S: StreamService<Response = (C, T)>,
+    C: HttpService,
+    T: AsyncRead + AsyncWrite,
+    Sig: Future<Item = ()>,
+{
+    #[doc(hidden)]
+    pub fn get_ref(&self) -> &S {
+        &self.stream_service
+    }
+
+    #[doc(hidden)]
+    pub fn get_mut(&mut self) -> &mut S {
+        &mut self.stream_service
     }
 
     /// Spawns this server onto the specified spawner.
@@ -147,11 +145,6 @@ where
             tls,
         )?))
     }
-
-    #[doc(hidden)]
-    pub fn local_addr(&self) -> std::net::SocketAddr {
-        self.stream_service.local_addr()
-    }
 }
 
 #[cfg(unix)]
@@ -174,11 +167,6 @@ where
             tls,
         )?))
     }
-
-    #[doc(hidden)]
-    pub fn local_addr(&self) -> &std::os::unix::net::SocketAddr {
-        self.stream_service.incoming.local_addr()
-    }
 }
 
 /// A helper macro for creating a server task.
@@ -187,190 +175,218 @@ macro_rules! spawn_all_task {
         let this = $self;
         let executor = $executor;
 
-        let watch = this.watch;
-        let stream_service = this.stream_service;
-        let protocol = this.protocol.with_executor(executor.clone());
-        let serve_connection_fn = move |fut: <$S as StreamService>::Future, watch: Watch| {
-            let protocol = protocol.clone();
-            fut.map_err(|_e| log::error!("stream service error"))
-                .and_then(move |(service, stream)| {
-                    let service = InnerService(service);
-                    let conn = protocol.serve_connection(stream, service).with_upgrades();
-                    watch
-                        .watching(conn, |c, _| c.poll(), |c| c.graceful_shutdown())
-                        .map_err(|e| log::error!("connection error: {}", e))
-                })
+        let serve_connection_fn = {
+            let protocol = this.protocol.with_executor(executor.clone());
+            move |fut: <$S as StreamService>::Future, watch: Watch| {
+                let protocol = protocol.clone();
+                fut.map_err(|_e| log::error!("stream service error"))
+                    .and_then(move |(service, stream)| {
+                        let conn = protocol
+                            .serve_connection(stream, InnerService(service))
+                            .with_upgrades();
+                        watch
+                            .watching(conn, |c, _| c.poll(), |c| c.graceful_shutdown())
+                            .map_err(|e| log::error!("connection error: {}", e))
+                    })
+            }
         };
 
-        let spawn_all = SpawnAll {
-            stream_service,
-            executor,
-            serve_connection_fn,
-            state: SpawnAllState::Running,
-        };
-
-        watch.watching(
-            spawn_all,
-            |s, watch| s.poll_watching(watch),
-            |s| s.shutdown(),
-        )
+        let (signal, watch) = crate::drain::channel();
+        SpawnAll {
+            state: SpawnAllState::Running {
+                stream_service: this.stream_service,
+                shutdown_signal: this.shutdown_signal,
+                executor,
+                signal: Some(signal),
+                watch,
+                serve_connection_fn,
+            },
+        }
     }};
 }
 
-impl<S, C, T> Spawn<tokio::runtime::Runtime> for Server<S>
+impl<S, C, T, Sig> Spawn<tokio::runtime::Runtime> for Server<S, Sig>
 where
     S: StreamService<Response = (C, T)> + Send + 'static,
     S::Future: Send + 'static,
     C: HttpService + Send + 'static,
     C::Future: Send + 'static,
     T: AsyncRead + AsyncWrite + Send + 'static,
+    Sig: Future<Item = ()> + Send + 'static,
 {
     fn spawn(self, rt: &mut tokio::runtime::Runtime) {
-        let task = spawn_all_task!(<S> self, rt.executor());
+        let task = spawn_all_task!(<S> self, rt.executor())
+            .map_err(|_e| log::error!("stream service error"));
         rt.spawn(task);
     }
 }
 
-impl<S, C, T> Spawn<tokio::executor::DefaultExecutor> for Server<S>
+impl<S, C, T, Sig> Spawn<tokio::executor::DefaultExecutor> for Server<S, Sig>
 where
     S: StreamService<Response = (C, T)> + Send + 'static,
     S::Future: Send + 'static,
     C: HttpService + Send + 'static,
     C::Future: Send + 'static,
     T: AsyncRead + AsyncWrite + Send + 'static,
+    Sig: Future<Item = ()> + Send + 'static,
 {
     fn spawn(self, spawner: &mut tokio::executor::DefaultExecutor) {
         use tokio::executor::Executor;
-        let task = spawn_all_task!(<S> self, spawner.clone());
+        let task = spawn_all_task!(<S> self, spawner.clone())
+            .map_err(|_e| log::error!("stream service error"));
         spawner
             .spawn(Box::new(task))
             .expect("failed to spawn a task");
     }
 }
 
-impl<S, C, T> Spawn<tokio::runtime::TaskExecutor> for Server<S>
+impl<S, C, T, Sig> Spawn<tokio::runtime::TaskExecutor> for Server<S, Sig>
 where
     S: StreamService<Response = (C, T)> + Send + 'static,
     S::Future: Send + 'static,
     C: HttpService + Send + 'static,
     C::Future: Send + 'static,
     T: AsyncRead + AsyncWrite + Send + 'static,
+    Sig: Future<Item = ()> + Send + 'static,
 {
     fn spawn(self, spawner: &mut tokio::runtime::TaskExecutor) {
-        let task = spawn_all_task!(<S> self, spawner.clone());
+        let task = spawn_all_task!(<S> self, spawner.clone())
+            .map_err(|_e| log::error!("stream service error"));
         spawner.spawn(task);
     }
 }
 
-impl<S, C, T> Spawn<tokio::runtime::current_thread::Runtime> for Server<S>
+impl<S, C, T, Sig> Spawn<tokio::runtime::current_thread::Runtime> for Server<S, Sig>
 where
     S: StreamService<Response = (C, T)> + 'static,
     S::Future: 'static,
     C: HttpService + 'static,
     T: AsyncRead + AsyncWrite + Send + 'static,
+    Sig: Future<Item = ()> + 'static,
 {
     fn spawn(self, rt: &mut tokio::runtime::current_thread::Runtime) {
-        let task = spawn_all_task!(<S> self, rt.executor());
+        let task = spawn_all_task!(<S> self, rt.executor())
+            .map_err(|_e| log::error!("stream service error"));
         rt.spawn(task);
     }
 }
 
-impl<S, C, T> Spawn<tokio::runtime::current_thread::TaskExecutor> for Server<S>
+impl<S, C, T, Sig> Spawn<tokio::runtime::current_thread::TaskExecutor> for Server<S, Sig>
 where
     S: StreamService<Response = (C, T)> + 'static,
     S::Future: 'static,
     C: HttpService + 'static,
     T: AsyncRead + AsyncWrite + Send + 'static,
+    Sig: Future<Item = ()> + 'static,
 {
     fn spawn(self, spawner: &mut tokio::runtime::current_thread::TaskExecutor) {
-        let task = spawn_all_task!(<S> self, spawner.clone());
+        let task = spawn_all_task!(<S> self, spawner.clone())
+            .map_err(|_e| log::error!("stream service error"));
         spawner
             .spawn_local(Box::new(task))
             .expect("failed to spawn a task");
     }
 }
 
-impl<S, C, T> Block<tokio::runtime::Runtime> for Server<S>
+impl<S, C, T, Sig> Block<tokio::runtime::Runtime> for Server<S, Sig>
 where
     S: StreamService<Response = (C, T)> + Send + 'static,
+    S::Error: Send + 'static,
     S::Future: Send + 'static,
     C: HttpService + Send + 'static,
     C::Future: Send + 'static,
     T: AsyncRead + AsyncWrite + Send + 'static,
+    Sig: Future<Item = ()> + Send + 'static,
 {
-    type Output = ();
+    type Output = Result<(), S::Error>;
 
     fn block(self, rt: &mut tokio::runtime::Runtime) -> Self::Output {
         let task = spawn_all_task!(<S> self, rt.executor());
-        let _ = rt.block_on(task);
+        rt.block_on(task)
     }
 }
 
-impl<S, C, T> Block<tokio::runtime::current_thread::Runtime> for Server<S>
+impl<S, C, T, Sig> Block<tokio::runtime::current_thread::Runtime> for Server<S, Sig>
 where
     S: StreamService<Response = (C, T)>,
     S::Future: 'static,
     C: HttpService + 'static,
     T: AsyncRead + AsyncWrite + Send + 'static,
+    Sig: Future<Item = ()>,
 {
-    type Output = ();
+    type Output = Result<(), S::Error>;
 
     fn block(self, rt: &mut tokio::runtime::current_thread::Runtime) -> Self::Output {
         let task = spawn_all_task!(<S> self, rt.executor());
-        let _ = rt.block_on(task);
+        rt.block_on(task)
     }
 }
 
-#[allow(unused)]
-struct SpawnAll<S, F, E> {
-    stream_service: S,
-    serve_connection_fn: F,
-    executor: E,
-    state: SpawnAllState,
+struct SpawnAll<S, Sig, F, E> {
+    state: SpawnAllState<S, Sig, F, E>,
 }
 
-enum SpawnAllState {
-    Running,
-    Done,
+enum SpawnAllState<S, Sig, F, E> {
+    Running {
+        stream_service: S,
+        shutdown_signal: Sig,
+        serve_connection_fn: F,
+        signal: Option<Signal>,
+        watch: Watch,
+        executor: E,
+    },
+    Done(crate::drain::Draining),
 }
 
-impl<S, F, E> SpawnAll<S, F, E> {
-    fn shutdown(&mut self) {
-        self.state = SpawnAllState::Done;
-    }
-}
-
-impl<S, C, T, F, Fut, E> SpawnAll<S, F, E>
+impl<S, C, T, Sig, F, Fut, E> Future for SpawnAll<S, Sig, F, E>
 where
     S: StreamService<Response = (C, T)>,
     C: HttpService,
     T: AsyncRead + AsyncWrite + Send + 'static,
+    Sig: Future<Item = ()>,
     F: FnMut(S::Future, Watch) -> Fut,
     Fut: Future<Item = (), Error = ()>,
     E: Executor<Fut>,
 {
-    fn poll_watching(&mut self, watch: &Watch) -> Poll<(), ()> {
+    type Item = ();
+    type Error = S::Error;
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
-            match self.state {
-                SpawnAllState::Running => match self.stream_service.poll_next_service() {
-                    Ok(Async::Ready(Some(fut))) => {
-                        let serve_connection = (self.serve_connection_fn)(fut, watch.clone());
-                        self.executor
-                            .execute(serve_connection)
-                            .unwrap_or_else(|_e| log::error!("executor error"));
+            self.state = match self.state {
+                SpawnAllState::Running {
+                    ref mut stream_service,
+                    ref mut shutdown_signal,
+                    ref mut serve_connection_fn,
+                    ref mut signal,
+                    ref watch,
+                    ref executor,
+                } => match shutdown_signal.poll() {
+                    Ok(Async::Ready(())) | Err(..) => {
+                        let signal = signal.take().expect("unexpected condition");
+                        SpawnAllState::Done(signal.drain())
                     }
-                    Ok(Async::Ready(None)) => {
-                        self.state = SpawnAllState::Done;
-                        return Ok(Async::Ready(()));
-                    }
-                    Ok(Async::NotReady) => return Ok(Async::NotReady),
-                    Err(_err) => {
-                        log::error!("stream service error");
-                        self.state = SpawnAllState::Done;
-                        return Ok(Async::Ready(()));
+                    Ok(Async::NotReady) => {
+                        match futures::try_ready!(stream_service.poll_next_service()) {
+                            Some(fut) => {
+                                let serve_connection = serve_connection_fn(fut, watch.clone());
+                                executor
+                                    .execute(serve_connection)
+                                    .unwrap_or_else(|_e| log::error!("executor error"));
+                                continue;
+                            }
+                            None => {
+                                // should be wait for the background tasks to finish?
+                                return Ok(Async::Ready(()));
+                            }
+                        }
                     }
                 },
-                SpawnAllState::Done => return Ok(Async::Ready(())),
+                SpawnAllState::Done(ref mut draining) => {
+                    return draining
+                        .poll()
+                        .map_err(|_e| unreachable!("draining never fails"));
+                }
             }
         }
     }

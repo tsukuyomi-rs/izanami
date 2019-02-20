@@ -57,20 +57,26 @@ mod tcp {
         },
         izanami::{tls::no_tls, Server},
         std::{io, net::SocketAddr},
-        tokio::{net::TcpStream, runtime::current_thread::Runtime},
+        tokio::{
+            net::TcpStream, //
+            runtime::current_thread::Runtime,
+            sync::oneshot,
+        },
     };
 
     #[test]
     fn tcp_server() -> izanami::Result<()> {
         let mut rt = Runtime::new()?;
 
-        let (server, handle) = Server::bind_tcp(
+        let (tx_shutdown, rx_shutdown) = oneshot::channel();
+        let server = Server::bind_tcp(
             super::Echo::default(), //
             "127.0.0.1:0",
             no_tls(),
-        )? //
+        )?
+        .shutdown_signal(rx_shutdown)
         .build();
-        let local_addr = server.local_addr();
+        let local_addr = server.get_ref().local_addr();
         server.spawn(&mut rt);
 
         let client = Client::builder() //
@@ -87,8 +93,9 @@ mod tcp {
         let body = rt.block_on(response.into_body().concat2())?;
         assert_eq!(body.into_bytes(), "hello");
 
-        rt.block_on(handle.shutdown()).unwrap();
-
+        drop(client);
+        let _ = tx_shutdown.send(());
+        rt.run().unwrap();
         Ok(())
     }
 
@@ -127,7 +134,11 @@ mod unix {
         izanami::{tls::no_tls, Server},
         std::{io, path::PathBuf},
         tempfile::Builder,
-        tokio::{net::UnixStream, runtime::current_thread::Runtime},
+        tokio::{
+            net::UnixStream, //
+            runtime::current_thread::Runtime,
+            sync::oneshot,
+        },
     };
 
     #[test]
@@ -137,12 +148,15 @@ mod unix {
         let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
         let sock_path = sock_tempdir.path().join("connect.sock");
 
+        let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::bind_unix(
             super::Echo::default(), //
             &sock_path,
             no_tls(),
         )?
-        .start(&mut rt);
+        .shutdown_signal(rx_shutdown)
+        .build();
+        server.spawn(&mut rt);
 
         let client = Client::builder() //
             .build(TestConnect {
@@ -160,8 +174,9 @@ mod unix {
         let body = rt.block_on(response.into_body().concat2())?;
         assert_eq!(body.into_bytes(), "hello");
 
-        rt.block_on(server.shutdown()).unwrap();
-
+        drop(client);
+        let _ = tx_shutdown.send(());
+        rt.run().unwrap();
         Ok(())
     }
 
@@ -200,7 +215,11 @@ mod native_tls {
         },
         izanami::Server,
         std::{io, net::SocketAddr},
-        tokio::{net::TcpStream, runtime::current_thread::Runtime},
+        tokio::{
+            net::TcpStream, //
+            runtime::current_thread::Runtime,
+            sync::oneshot,
+        },
         tokio_tls::{TlsAcceptor, TlsStream},
     };
 
@@ -216,13 +235,15 @@ mod native_tls {
             ::native_tls::TlsAcceptor::builder(der).build()?.into()
         };
 
-        let (server, handle) = Server::bind_tcp(
+        let (tx_shutdown, rx_shutdown) = oneshot::channel();
+        let server = Server::bind_tcp(
             super::Echo::default(), //
             "127.0.0.1:0",
             tls,
         )?
+        .shutdown_signal(rx_shutdown)
         .build();
-        let local_addr = server.local_addr();
+        let local_addr = server.get_ref().local_addr();
         server.spawn(&mut rt);
 
         let client = Client::builder() //
@@ -249,8 +270,9 @@ mod native_tls {
         )?;
         assert_eq!(body.into_bytes(), "hello");
 
-        rt.block_on(handle.shutdown()).unwrap();
-
+        drop(client);
+        let _ = tx_shutdown.send(());
+        rt.run().unwrap();
         Ok(())
     }
 
@@ -305,7 +327,11 @@ mod openssl {
             x509::X509,
         },
         std::{io, net::SocketAddr},
-        tokio::{net::TcpStream, runtime::current_thread::Runtime},
+        tokio::{
+            net::TcpStream, //
+            runtime::current_thread::Runtime,
+            sync::oneshot,
+        },
         tokio_openssl::{SslConnectorExt, SslStream},
     };
 
@@ -326,13 +352,15 @@ mod openssl {
             builder.build()
         };
 
-        let (server, handle) = Server::bind_tcp(
+        let (tx_shutdown, rx_shutdown) = oneshot::channel();
+        let server = Server::bind_tcp(
             super::Echo::default(), //
             "127.0.0.1:0",
             tls,
         )?
+        .shutdown_signal(rx_shutdown)
         .build();
-        let local_addr = server.local_addr();
+        let local_addr = server.get_ref().local_addr();
         server.spawn(&mut rt);
 
         let client = Client::builder() //
@@ -364,8 +392,9 @@ mod openssl {
         )?;
         assert_eq!(body.into_bytes(), "hello");
 
-        rt.block_on(handle.shutdown()).unwrap();
-
+        drop(client);
+        let _ = tx_shutdown.send(());
+        rt.run().unwrap();
         Ok(())
     }
 
@@ -412,7 +441,11 @@ mod rustls {
         },
         izanami::Server,
         std::{io, net::SocketAddr, sync::Arc},
-        tokio::{net::TcpStream, runtime::current_thread::Runtime},
+        tokio::{
+            net::TcpStream, //
+            runtime::current_thread::Runtime,
+            sync::oneshot,
+        },
         tokio_rustls::TlsAcceptor,
         tokio_tls::TlsStream,
     };
@@ -450,13 +483,15 @@ mod rustls {
             Arc::new(config).into()
         };
 
-        let (server, handle) = Server::bind_tcp(
+        let (tx_shutdown, rx_shutdown) = oneshot::channel();
+        let server = Server::bind_tcp(
             super::Echo::default(), //
             "127.0.0.1:0",
             tls,
         )?
+        .shutdown_signal(rx_shutdown)
         .build();
-        let local_addr = server.local_addr();
+        let local_addr = server.get_ref().local_addr();
         server.spawn(&mut rt);
 
         // FIXME: use rustls
@@ -484,8 +519,9 @@ mod rustls {
         )?;
         assert_eq!(body.into_bytes(), "hello");
 
-        rt.block_on(handle.shutdown()).unwrap();
-
+        drop(client);
+        let _ = tx_shutdown.send(());
+        rt.run().unwrap();
         Ok(())
     }
 
