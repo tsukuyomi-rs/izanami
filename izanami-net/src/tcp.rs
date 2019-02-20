@@ -7,9 +7,11 @@ use {
         net::{SocketAddr, TcpListener as StdTcpListener, ToSocketAddrs},
         time::Duration,
     },
-    tokio_io::{AsyncRead, AsyncWrite},
-    tokio_reactor::Handle,
-    tokio_tcp::{TcpListener, TcpStream},
+    tokio::{
+        io::{AsyncRead, AsyncWrite},
+        net::{TcpListener, TcpStream},
+        reactor::Handle,
+    },
 };
 
 impl Listener for TcpListener {

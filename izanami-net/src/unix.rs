@@ -5,8 +5,10 @@ use {
     crate::util::MapAsyncExt,
     futures::{Poll, Stream},
     std::{io, os::unix::net::SocketAddr, path::Path, time::Duration},
-    tokio_io::{AsyncRead, AsyncWrite},
-    tokio_uds::{UnixListener, UnixStream},
+    tokio::{
+        io::{AsyncRead, AsyncWrite},
+        net::{UnixListener, UnixStream},
+    },
 };
 
 impl Listener for UnixListener {

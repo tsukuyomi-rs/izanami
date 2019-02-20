@@ -47,9 +47,9 @@ default-features = false
 features = ["user-hooks"]
 
 [features]
-native-tls = ["izanami-net/use-native-tls"]
-openssl = ["izanami-net/use-openssl"]
-rustls = ["izanami-net/use-rustls"]
+native-tls = ["izanami-net/native-tls"]
+openssl = ["izanami-net/openssl"]
+rustls = ["izanami-net/rustls"]
 
 [workspace]
 members = [

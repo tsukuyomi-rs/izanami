@@ -8,28 +8,26 @@ publish = false
 [dependencies]
 futures = "0.1"
 log = "0.4"
-tokio-io = "0.1"
-tokio-timer = "0.2"
-tokio-tcp = "0.1"
-tokio-reactor = "0.1"
 
-[target.'cfg(unix)'.dependencies]
-tokio-uds = "0.2"
-
-native-tls = { version = "0.2", optional = true }
+native-tls-crate = { package = "native-tls", version = "0.2", optional = true }
 tokio-tls = { version = "0.2", optional = true }
 
-rustls = { version = "0.14", optional = true }
+rustls-crate = { package = "rustls", version = "0.14", optional = true }
 tokio-rustls = { version = "0.8", optional = true }
 
-openssl = { version = "0.10", optional = true }
+openssl-crate = { package = "openssl", version = "0.10", optional = true }
 tokio-openssl = { version = "0.3", optional = true }
+
+[dependencies.tokio]
+version = "0.1"
+default-features = false
+features = ["io", "reactor", "tcp", "timer", "uds"]
 
 [dev-dependencies]
 version-sync = "0.7"
-tokio = "0.1"
+tokio = "0.1" # with default features
 
 [features]
-use-native-tls = ["native-tls", "tokio-tls"]
-use-rustls = ["rustls", "tokio-rustls"]
-use-openssl = ["openssl", "tokio-openssl"]
+native-tls = ["native-tls-crate", "tokio-tls"]
+rustls = ["rustls-crate", "tokio-rustls"]
+openssl = ["openssl-crate", "tokio-openssl"]

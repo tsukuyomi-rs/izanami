@@ -4,7 +4,7 @@ use {
         io,
         time::{Duration, Instant},
     },
-    tokio_timer::Delay,
+    tokio::timer::Delay,
 };
 
 pub(super) trait Listener {

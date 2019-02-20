@@ -2,7 +2,7 @@
 
 use {
     futures::{Async, Future, Poll},
-    tokio_io::{AsyncRead, AsyncWrite},
+    tokio::io::{AsyncRead, AsyncWrite},
 };
 
 /// Trait representing a converter for granting the SSL/TLS to asynchronous I/Os.
@@ -41,10 +41,11 @@ pub fn no_tls() -> NoTls {
     NoTls::default()
 }
 
-#[cfg(feature = "use-native-tls")]
+#[cfg(feature = "native-tls")]
 mod native_tls {
     use {
         super::*,
+        native_tls_crate as native_tls,
         tokio_tls::{Accept, TlsAcceptor, TlsStream},
     };
 
@@ -53,7 +54,7 @@ mod native_tls {
         T: AsyncRead + AsyncWrite,
     {
         type Transport = TlsStream<T>;
-        type Error = ::native_tls::Error;
+        type Error = native_tls::Error;
         type Future = Accept<T>;
 
         #[inline]
@@ -63,14 +64,14 @@ mod native_tls {
     }
 }
 
-#[cfg(feature = "use-openssl")]
+#[cfg(feature = "openssl")]
 mod openssl {
     use {
         super::*,
-        ::openssl::ssl::SslAcceptor,
         futures::{Future, Poll},
+        openssl_crate::ssl::SslAcceptor,
         std::io,
-        tokio_io::{AsyncRead, AsyncWrite},
+        tokio::io::{AsyncRead, AsyncWrite},
         tokio_openssl::{SslAcceptorExt, SslStream},
     };
 
@@ -111,11 +112,11 @@ mod openssl {
     }
 }
 
-#[cfg(feature = "use-rustls")]
+#[cfg(feature = "rustls")]
 mod rustls {
     use {
         super::*,
-        ::rustls::ServerSession,
+        rustls_crate::ServerSession,
         std::io,
         tokio_rustls::{Accept, TlsAcceptor, TlsStream},
     };
