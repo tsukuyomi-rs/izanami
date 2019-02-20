@@ -6,11 +6,9 @@ use {
     futures::{Async, Future, Poll},
     http::HeaderMap,
     hyper::body::Payload as _Payload,
+    izanami_buf::{BufStream, SizeHint},
     izanami_service::Service,
-    izanami_util::{
-        buf_stream::{BufStream, SizeHint},
-        http::{HasTrailers, Upgrade},
-    },
+    izanami_util::http::{HasTrailers, Upgrade},
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };

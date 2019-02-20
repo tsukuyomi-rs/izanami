@@ -8,13 +8,11 @@ pub enum Either<L, R> {
 
 mod impl_buf_stream {
     use super::*;
+    use crate::util::*;
     use {
-        crate::{
-            buf_stream::{BufStream, SizeHint},
-            util::*,
-        },
         bytes::Buf,
         futures::Poll,
+        izanami_buf::{BufStream, SizeHint},
         std::error::Error,
     };
 
@@ -45,13 +43,6 @@ mod impl_buf_stream {
             match self {
                 Either::Left(l) => l.size_hint(),
                 Either::Right(r) => r.size_hint(),
-            }
-        }
-
-        fn consume_hint(&mut self, amount: usize) {
-            match self {
-                Either::Left(l) => l.consume_hint(amount),
-                Either::Right(r) => r.consume_hint(amount),
             }
         }
     }

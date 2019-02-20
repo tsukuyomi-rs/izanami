@@ -11,7 +11,6 @@
 )]
 #![forbid(clippy::unimplemented)]
 
-pub mod buf_stream;
 pub mod http;
 pub mod net;
 

@@ -15,6 +15,7 @@ include = [
 ]
 
 [dependencies]
+izanami-buf = { version = "0.1.0-preview.1", path = "izanami-buf" }
 izanami-rt = { version = "0.1.0-preview.1", path = "izanami-rt" }
 izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
 izanami-util = { version = "0.1.0-preview.1", path = "izanami-util" }
@@ -54,6 +55,7 @@ use-openssl = ["openssl", "tokio-openssl"]
 
 [workspace]
 members = [
+  "izanami-buf",
   "izanami-rt",
   "izanami-service",
   "izanami-util",

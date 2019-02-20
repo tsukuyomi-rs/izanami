@@ -10,6 +10,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://gitlab.com/ubnt-intrepid/izanami.git"
 
 [dependencies]
+izanami-buf = { version = "0.1.0-preview.1", path = "../izanami-buf" }
 bytes = "0.4"
 futures = "0.1"
 http = "0.1"
