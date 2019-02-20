@@ -1,15 +1,14 @@
 //! SSL/TLS support.
 
 use {
-    crate::error::BoxedStdError,
     futures::{Async, Future, Poll},
-    tokio::io::{AsyncRead, AsyncWrite},
+    tokio_io::{AsyncRead, AsyncWrite},
 };
 
 /// Trait representing a converter for granting the SSL/TLS to asynchronous I/Os.
 pub trait MakeTlsTransport<T> {
     type Transport: AsyncRead + AsyncWrite;
-    type Error: Into<BoxedStdError>;
+    type Error;
     type Future: Future<Item = Self::Transport, Error = Self::Error>;
 
     #[doc(hidden)]
@@ -71,7 +70,7 @@ mod openssl {
         ::openssl::ssl::SslAcceptor,
         futures::{Future, Poll},
         std::io,
-        tokio::io::{AsyncRead, AsyncWrite},
+        tokio_io::{AsyncRead, AsyncWrite},
         tokio_openssl::{SslAcceptorExt, SslStream},
     };
 

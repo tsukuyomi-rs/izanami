@@ -1,0 +1,35 @@
+[package]
+name = "izanami-net"
+version = "0.1.0-preview.1"
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+edition = "2018"
+publish = false
+
+[dependencies]
+futures = "0.1"
+log = "0.4"
+tokio-io = "0.1"
+tokio-timer = "0.2"
+tokio-tcp = "0.1"
+tokio-reactor = "0.1"
+
+[target.'cfg(unix)'.dependencies]
+tokio-uds = "0.2"
+
+native-tls = { version = "0.2", optional = true }
+tokio-tls = { version = "0.2", optional = true }
+
+rustls = { version = "0.14", optional = true }
+tokio-rustls = { version = "0.8", optional = true }
+
+openssl = { version = "0.10", optional = true }
+tokio-openssl = { version = "0.3", optional = true }
+
+[dev-dependencies]
+version-sync = "0.7"
+tokio = "0.1"
+
+[features]
+use-native-tls = ["native-tls", "tokio-tls"]
+use-rustls = ["rustls", "tokio-rustls"]
+use-openssl = ["openssl", "tokio-openssl"]

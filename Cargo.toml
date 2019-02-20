@@ -16,6 +16,7 @@ include = [
 
 [dependencies]
 izanami-buf = { version = "0.1.0-preview.1", path = "izanami-buf" }
+izanami-net = { version = "0.1.0-preview.1", path = "izanami-net" }
 izanami-rt = { version = "0.1.0-preview.1", path = "izanami-rt" }
 izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
 izanami-util = { version = "0.1.0-preview.1", path = "izanami-util" }
@@ -30,17 +31,14 @@ tokio = { version = "0.1.15", features = ["sync"] }
 tokio-executor = "0.1"
 tokio-io = "0.1"
 
-native-tls = { version = "0.2", optional = true }
-tokio-tls = { version = "0.2", optional = true }
-
-rustls = { version = "0.14", optional = true }
-tokio-rustls = { version = "0.8", optional = true }
-
-openssl = { version = "0.10", optional = true }
-tokio-openssl = { version = "0.3", optional = true }
-
 [dev-dependencies]
+native-tls-crate = { package = "native-tls", version = "0.2" }
+openssl-crate = { package = "openssl", version = "0.10" }
+rustls-crate = { package = "rustls", version = "0.14" }
 tempfile = "3"
+tokio-openssl = "0.3"
+tokio-rustls = "0.8"
+tokio-tls = "0.2"
 version-sync = "0.7"
 
 [dev-dependencies.cargo-husky]
@@ -49,13 +47,14 @@ default-features = false
 features = ["user-hooks"]
 
 [features]
-use-native-tls = ["native-tls", "tokio-tls"]
-use-rustls = ["rustls", "tokio-rustls"]
-use-openssl = ["openssl", "tokio-openssl"]
+native-tls = ["izanami-net/use-native-tls"]
+openssl = ["izanami-net/use-openssl"]
+rustls = ["izanami-net/use-rustls"]
 
 [workspace]
 members = [
   "izanami-buf",
+  "izanami-net",
   "izanami-rt",
   "izanami-service",
   "izanami-util",

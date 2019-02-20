@@ -8,16 +8,28 @@ use {
             imp::{HttpResponseImpl, ResponseBodyImpl},
             HttpService, IntoHttpService, MakeHttpService, RequestBody,
         },
-        tls::{MakeTlsTransport, NoTls},
         util::*,
     },
     futures::{future::Executor, Async, Future, IntoFuture, Poll, Stream},
     http::{Request, Response},
     hyper::server::conn::Http,
+    izanami_net::{
+        tcp::AddrStream as TcpAddrStream,
+        tls::{MakeTlsTransport, NoTls},
+    },
     izanami_rt::{Runnable, Runtime, Spawn, Spawner},
     izanami_service::StreamService,
-    std::io,
+    std::{
+        io,
+        net::{SocketAddr, ToSocketAddrs},
+    },
     tokio::io::{AsyncRead, AsyncWrite},
+};
+
+#[cfg(unix)]
+use {
+    izanami_net::unix::AddrStream as UnixAddrStream, //
+    std::path::Path,
 };
 
 /// A builder for creating an `Server`.
@@ -140,19 +152,16 @@ where
     }
 }
 
-impl<S, T> Server<Incoming<S, crate::net::tcp::AddrIncoming, T>>
+impl<S, T> Server<TcpIncoming<S, T>>
 where
-    S: MakeHttpService<crate::net::tcp::AddrStream, T::Transport>,
-    T: MakeTlsTransport<crate::net::tcp::AddrStream>,
+    S: MakeHttpService<TcpAddrStream, T::Transport>,
+    T: MakeTlsTransport<TcpAddrStream>,
+    T::Error: Into<BoxedStdError>,
 {
     /// Create a `Builder` bound to the specified address.
-    pub fn bind_tcp<A>(
-        make_service: S,
-        addr: A,
-        tls: T,
-    ) -> io::Result<Builder<Incoming<S, crate::net::tcp::AddrIncoming, T>>>
+    pub fn bind_tcp<A>(make_service: S, addr: A, tls: T) -> io::Result<Builder<TcpIncoming<S, T>>>
     where
-        A: std::net::ToSocketAddrs,
+        A: ToSocketAddrs,
     {
         Ok(Server::builder(Incoming::bind_tcp(
             make_service,
@@ -163,19 +172,16 @@ where
 }
 
 #[cfg(unix)]
-impl<S, T> Server<Incoming<S, crate::net::unix::AddrIncoming, T>>
+impl<S, T> Server<UnixIncoming<S, T>>
 where
-    S: MakeHttpService<crate::net::unix::AddrStream, T::Transport>,
-    T: MakeTlsTransport<crate::net::unix::AddrStream>,
+    S: MakeHttpService<UnixAddrStream, T::Transport>,
+    T: MakeTlsTransport<UnixAddrStream>,
+    T::Error: Into<BoxedStdError>,
 {
     /// Create a `Builder` bound to the specified socket path.
-    pub fn bind_unix<P>(
-        make_service: S,
-        path: P,
-        tls: T,
-    ) -> io::Result<Builder<Incoming<S, crate::net::unix::AddrIncoming, T>>>
+    pub fn bind_unix<P>(make_service: S, path: P, tls: T) -> io::Result<Builder<UnixIncoming<S, T>>>
     where
-        P: AsRef<std::path::Path>,
+        P: AsRef<Path>,
     {
         Ok(Server::builder(Incoming::bind_unix(
             make_service,
@@ -516,6 +522,7 @@ where
     I: Stream,
     I::Error: Into<BoxedStdError>,
     T: MakeTlsTransport<I::Item>,
+    T::Error: Into<BoxedStdError>,
 {
     /// Create a new `Incoming` using the specified values.
     pub fn new(make_service: S, incoming: I, tls: T) -> Self {
@@ -527,42 +534,39 @@ where
     }
 }
 
-impl<S, T> Incoming<S, crate::net::tcp::AddrIncoming, T>
+impl<S, T> TcpIncoming<S, T>
 where
-    S: MakeHttpService<crate::net::tcp::AddrStream, T::Transport>,
-    T: MakeTlsTransport<crate::net::tcp::AddrStream>,
+    S: MakeHttpService<TcpAddrStream, T::Transport>,
+    T: MakeTlsTransport<TcpAddrStream>,
+    T::Error: Into<BoxedStdError>,
 {
     pub fn bind_tcp<A>(make_service: S, addr: A, tls: T) -> io::Result<Self>
     where
-        A: std::net::ToSocketAddrs,
+        A: ToSocketAddrs,
     {
-        let incoming = crate::net::tcp::AddrIncoming::bind(addr)?;
+        let incoming = izanami_net::tcp::AddrIncoming::bind(addr)?;
         Ok(Incoming::new(make_service, incoming, tls))
     }
 
     #[doc(hidden)]
-    pub fn local_addr(&self) -> std::net::SocketAddr {
+    pub fn local_addr(&self) -> SocketAddr {
         self.incoming.local_addr()
     }
 }
 
 #[cfg(unix)]
-impl<S, T> Incoming<S, crate::net::unix::AddrIncoming, T>
+impl<S, T> UnixIncoming<S, T>
 where
-    S: MakeHttpService<crate::net::unix::AddrStream, T::Transport>,
-    T: MakeTlsTransport<crate::net::unix::AddrStream>,
+    S: MakeHttpService<UnixAddrStream, T::Transport>,
+    T: MakeTlsTransport<UnixAddrStream>,
+    T::Error: Into<BoxedStdError>,
 {
     pub fn bind_unix<P>(make_service: S, path: P, tls: T) -> io::Result<Self>
     where
-        P: AsRef<std::path::Path>,
+        P: AsRef<Path>,
     {
-        let incoming = crate::net::unix::AddrIncoming::bind(path)?;
+        let incoming = izanami_net::unix::AddrIncoming::bind(path)?;
         Ok(Incoming::new(make_service, incoming, tls))
-    }
-
-    #[doc(hidden)]
-    pub fn local_addr(&self) -> &std::os::unix::net::SocketAddr {
-        self.incoming.local_addr()
     }
 }
 
@@ -572,6 +576,7 @@ where
     I: Stream,
     I::Error: Into<BoxedStdError>,
     T: MakeTlsTransport<I::Item>,
+    T::Error: Into<BoxedStdError>,
 {
     type Response = (S::Service, T::Transport);
     type Error = BoxedStdError;
@@ -630,3 +635,7 @@ where
         Ok(Async::Ready((service, transport)))
     }
 }
+
+type TcpIncoming<S, T = NoTls> = Incoming<S, izanami_net::tcp::AddrIncoming, T>;
+#[cfg(unix)]
+type UnixIncoming<S, T = NoTls> = Incoming<S, izanami_net::unix::AddrIncoming, T>;

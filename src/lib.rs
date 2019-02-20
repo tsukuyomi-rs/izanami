@@ -14,22 +14,24 @@ mod drain;
 mod error;
 mod util;
 
-pub mod net;
 pub mod server;
 pub mod service;
-pub mod tls;
 
-pub use crate::{
-    error::{Error, Result},
-    server::Server,
+pub use {
+    crate::{
+        error::{Error, Result},
+        server::Server,
+    },
+    izanami_net::tls::no_tls,
 };
 
 use {
     crate::{
+        error::BoxedStdError,
         server::Incoming,
         service::{HttpService, MakeHttpService},
-        tls::MakeTlsTransport,
     },
+    izanami_net::tls::MakeTlsTransport,
     izanami_rt::Spawn,
     izanami_service::StreamService,
     std::net::ToSocketAddrs,
@@ -42,10 +44,11 @@ use {
 pub fn run_tcp<A, T, S>(addr: A, tls: T, make_service: S) -> crate::Result<()>
 where
     A: ToSocketAddrs,
-    T: MakeTlsTransport<crate::net::tcp::AddrStream> + Send + 'static,
+    T: MakeTlsTransport<izanami_net::tcp::AddrStream> + Send + 'static,
+    T::Error: Into<BoxedStdError>,
     T::Future: Send + 'static,
     T::Transport: Send + 'static,
-    S: MakeHttpService<crate::net::tcp::AddrStream, T::Transport> + Send + 'static,
+    S: MakeHttpService<izanami_net::tcp::AddrStream, T::Transport> + Send + 'static,
     S::Future: Send + 'static,
     S::IntoService: Send + 'static,
     S::Service: Send + 'static,
@@ -66,10 +69,11 @@ where
 pub fn run_unix<P, T, S>(path: P, tls: T, make_service: S) -> crate::Result<()>
 where
     P: AsRef<std::path::Path>,
-    T: MakeTlsTransport<crate::net::unix::AddrStream> + Send + 'static,
+    T: MakeTlsTransport<izanami_net::unix::AddrStream> + Send + 'static,
+    T::Error: Into<BoxedStdError>,
     T::Future: Send + 'static,
     T::Transport: Send + 'static,
-    S: MakeHttpService<crate::net::unix::AddrStream, T::Transport> + Send + 'static,
+    S: MakeHttpService<izanami_net::unix::AddrStream, T::Transport> + Send + 'static,
     S::Future: Send + 'static,
     S::IntoService: Send + 'static,
     S::Service: Send + 'static,

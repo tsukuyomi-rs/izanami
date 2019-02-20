@@ -1,7 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::tls::no_tls,
+    izanami::no_tls,
 };
 
 fn main() -> izanami::Result<()> {

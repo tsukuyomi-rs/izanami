@@ -55,7 +55,8 @@ mod tcp {
             },
             Body,
         },
-        izanami::{tls::no_tls, Server},
+        izanami::Server,
+        izanami_net::tls::no_tls,
         std::{io, net::SocketAddr},
         tokio::{
             net::TcpStream, //
@@ -131,7 +132,8 @@ mod unix {
             },
             Body,
         },
-        izanami::{tls::no_tls, Server},
+        izanami::Server,
+        izanami_net::tls::no_tls,
         std::{io, path::PathBuf},
         tempfile::Builder,
         tokio::{
@@ -203,7 +205,6 @@ mod unix {
 #[cfg(feature = "native-tls")]
 mod native_tls {
     use {
-        ::native_tls::{Certificate, Identity, TlsConnector},
         futures::{Future, Stream},
         http::Request,
         hyper::{
@@ -214,6 +215,12 @@ mod native_tls {
             Body,
         },
         izanami::Server,
+        native_tls_crate::{
+            Certificate, //
+            Identity,
+            TlsAcceptor as NativeTlsAcceptor,
+            TlsConnector,
+        },
         std::{io, net::SocketAddr},
         tokio::{
             net::TcpStream, //
@@ -232,7 +239,7 @@ mod native_tls {
 
         let tls: TlsAcceptor = {
             let der = Identity::from_pkcs12(IDENTITY, "mypass")?;
-            ::native_tls::TlsAcceptor::builder(der).build()?.into()
+            NativeTlsAcceptor::builder(der).build()?.into()
         };
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
@@ -316,7 +323,7 @@ mod openssl {
             Body,
         },
         izanami::Server,
-        openssl::{
+        openssl_crate::{
             pkey::PKey,
             ssl::{
                 SslAcceptor, //
@@ -428,8 +435,6 @@ mod openssl {
 #[cfg(feature = "rustls")]
 mod rustls {
     use {
-        ::native_tls::Certificate,
-        ::rustls::{NoClientAuth, ServerConfig},
         futures::{Future, Stream},
         http::Request,
         hyper::{
@@ -440,6 +445,8 @@ mod rustls {
             Body,
         },
         izanami::Server,
+        native_tls_crate::Certificate,
+        rustls_crate::{NoClientAuth, ServerConfig},
         std::{io, net::SocketAddr, sync::Arc},
         tokio::{
             net::TcpStream, //
@@ -460,16 +467,16 @@ mod rustls {
         let tls: TlsAcceptor = {
             let certs = {
                 let mut reader = io::BufReader::new(io::Cursor::new(CERTIFICATE));
-                ::rustls::internal::pemfile::certs(&mut reader)
+                rustls_crate::internal::pemfile::certs(&mut reader)
                     .map_err(|_| failure::format_err!("failed to read certificate file"))?
             };
 
             let priv_key = {
                 let mut reader = io::BufReader::new(io::Cursor::new(PRIVATE_KEY));
                 let rsa_keys = {
-                    ::rustls::internal::pemfile::rsa_private_keys(&mut reader).map_err(|_| {
-                        failure::format_err!("failed to read private key file as RSA")
-                    })?
+                    rustls_crate::internal::pemfile::rsa_private_keys(&mut reader).map_err(
+                        |_| failure::format_err!("failed to read private key file as RSA"),
+                    )?
                 };
                 rsa_keys
                     .into_iter()
@@ -498,7 +505,7 @@ mod rustls {
         let client = Client::builder() //
             .build(TestConnect {
                 local_addr,
-                connector: ::native_tls::TlsConnector::builder()
+                connector: native_tls_crate::TlsConnector::builder()
                     .add_root_certificate(Certificate::from_pem(CERTIFICATE)?)
                     .build()?
                     .into(),

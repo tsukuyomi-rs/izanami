@@ -11,10 +11,8 @@
 )]
 #![forbid(clippy::unimplemented)]
 
-pub mod http;
-pub mod net;
-
 mod either;
+pub mod http;
 mod util;
 
 pub use crate::either::Either;
