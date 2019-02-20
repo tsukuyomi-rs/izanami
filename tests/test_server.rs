@@ -74,10 +74,10 @@ mod tcp {
             "127.0.0.1:0",
             no_tls(),
         )?
-        .shutdown_signal(rx_shutdown)
+        .with_graceful_shutdown(rx_shutdown)
         .build();
         let local_addr = server.get_ref().local_addr();
-        server.spawn(&mut rt);
+        server.start(&mut rt);
 
         let client = Client::builder() //
             .build(TestConnect { local_addr });
@@ -154,9 +154,9 @@ mod unix {
             &sock_path,
             no_tls(),
         )?
-        .shutdown_signal(rx_shutdown)
+        .with_graceful_shutdown(rx_shutdown)
         .build();
-        server.spawn(&mut rt);
+        server.start(&mut rt);
 
         let client = Client::builder() //
             .build(TestConnect {
@@ -241,10 +241,10 @@ mod native_tls {
             "127.0.0.1:0",
             tls,
         )?
-        .shutdown_signal(rx_shutdown)
+        .with_graceful_shutdown(rx_shutdown)
         .build();
         let local_addr = server.get_ref().local_addr();
-        server.spawn(&mut rt);
+        server.start(&mut rt);
 
         let client = Client::builder() //
             .build(TestConnect {
@@ -358,10 +358,10 @@ mod openssl {
             "127.0.0.1:0",
             tls,
         )?
-        .shutdown_signal(rx_shutdown)
+        .with_graceful_shutdown(rx_shutdown)
         .build();
         let local_addr = server.get_ref().local_addr();
-        server.spawn(&mut rt);
+        server.start(&mut rt);
 
         let client = Client::builder() //
             .build(TestConnect {
@@ -489,10 +489,10 @@ mod rustls {
             "127.0.0.1:0",
             tls,
         )?
-        .shutdown_signal(rx_shutdown)
+        .with_graceful_shutdown(rx_shutdown)
         .build();
         let local_addr = server.get_ref().local_addr();
-        server.spawn(&mut rt);
+        server.start(&mut rt);
 
         // FIXME: use rustls
         let client = Client::builder() //

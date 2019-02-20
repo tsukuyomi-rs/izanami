@@ -27,7 +27,7 @@ pub use crate::{
 
 use {
     crate::{
-        runtime::Block,
+        runtime::Spawn,
         server::Incoming,
         service::{HttpService, NewHttpService},
         tls::MakeTlsTransport,
@@ -52,9 +52,10 @@ where
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
 {
-    let incoming = Incoming::bind_tcp(make_service, addr, tls)?;
-    run_incoming(incoming);
-    Ok(())
+    run_incoming(move || {
+        let incoming = Incoming::bind_tcp(make_service, addr, tls)?;
+        Ok(incoming)
+    })
 }
 
 /// Start an HTTP server using an Unix domain socket listener.
@@ -75,26 +76,29 @@ where
     S::Service: Send + 'static,
     <S::Service as HttpService>::Future: Send + 'static,
 {
-    let incoming = Incoming::bind_unix(make_service, path, tls)?;
-    run_incoming(incoming);
-    Ok(())
+    run_incoming(move || {
+        let incoming = Incoming::bind_unix(make_service, path, tls)?;
+        Ok(incoming)
+    })
 }
 
-fn run_incoming<S, T, C>(stream_service: S)
+fn run_incoming<F, S, T, C>(f: F) -> crate::Result<()>
 where
+    F: FnOnce() -> crate::Result<S>,
     S: StreamService<Response = (C, T)>,
     C: HttpService,
     T: AsyncRead + AsyncWrite,
-    Server<S>: Block<tokio::runtime::Runtime>,
+    Server<S>: Spawn<tokio::runtime::Runtime>,
 {
+    let mut entered = tokio_executor::enter().expect("nested run_incoming");
+    let mut runtime = tokio::runtime::Runtime::new()?;
+
+    let stream_service = f()?;
     let server = Server::builder(stream_service).build();
-
-    let mut entered = tokio_executor::enter().expect("nested runtime use");
-    let mut runtime = tokio::runtime::Runtime::new().expect("failed to start new Runtime");
-
-    server.block(&mut runtime);
+    server.start(&mut runtime);
 
     entered
         .block_on(runtime.shutdown_on_idle())
         .expect("shutdown cannot error");
+    Ok(())
 }

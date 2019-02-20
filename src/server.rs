@@ -57,7 +57,7 @@ where
     }
 
     /// Specifies the signal to shutdown the background tasks gracefully.
-    pub fn shutdown_signal<Sig2>(self, signal: Sig2) -> Builder<S, Sig2>
+    pub fn with_graceful_shutdown<Sig2>(self, signal: Sig2) -> Builder<S, Sig2>
     where
         Sig2: Future<Item = ()>,
     {
@@ -117,12 +117,24 @@ where
         &mut self.stream_service
     }
 
-    /// Spawns this server onto the specified spawner.
-    pub fn spawn<Sp: ?Sized>(self, spawner: &mut Sp)
+    /// Start this server onto the specified spawner.
+    ///
+    /// This method immediately returns and the server runs on the background.
+    pub fn start<Sp: ?Sized>(self, spawner: &mut Sp)
     where
         Self: Spawn<Sp>,
     {
         Spawn::spawn(self, spawner)
+    }
+
+    /// Run this server onto the specified runtime.
+    ///
+    /// This method runs the server without spawning, and will block the current thread.
+    pub fn run<Rt: Runtime>(self, runtime: &mut Rt) -> <Self as Block<Rt>>::Output
+    where
+        Self: Block<Rt>,
+    {
+        Block::block(self, runtime)
     }
 }
 
@@ -131,6 +143,7 @@ where
     S: NewHttpService<T::Transport>,
     T: MakeTlsTransport<crate::net::tcp::AddrStream>,
 {
+    /// Create a `Builder` bound to the specified address.
     pub fn bind_tcp<A>(
         make_service: S,
         addr: A,
@@ -153,6 +166,7 @@ where
     S: NewHttpService<T::Transport>,
     T: MakeTlsTransport<crate::net::unix::AddrStream>,
 {
+    /// Create a `Builder` bound to the specified socket path.
     pub fn bind_unix<P>(
         make_service: S,
         path: P,
