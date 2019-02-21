@@ -21,7 +21,6 @@ use {
 #[derive(Debug)]
 pub struct Builder<S, Sig = futures::future::Empty<(), ()>> {
     pub(crate) stream_service: S,
-    pub(crate) protocol: Http,
     pub(crate) shutdown_signal: Sig,
 }
 
@@ -30,24 +29,11 @@ where
     Sig: Future<Item = ()>,
 {
     /// Creates a `Builder` using a streamed service.
-    pub fn new(stream_service: S, protocol: Http, shutdown_signal: Sig) -> Self {
+    pub fn new(stream_service: S, shutdown_signal: Sig) -> Self {
         Self {
             stream_service,
-            protocol,
             shutdown_signal,
         }
-    }
-
-    /// Specifies that the server uses only HTTP/1.
-    pub fn http1_only(mut self) -> Self {
-        self.protocol.http1_only(true);
-        self
-    }
-
-    /// Specifies that the server uses only HTTP/2.
-    pub fn http2_only(mut self) -> Self {
-        self.protocol.http2_only(true);
-        self
     }
 
     /// Specifies the signal to shutdown the background tasks gracefully.
@@ -57,7 +43,6 @@ where
     {
         Builder {
             stream_service: self.stream_service,
-            protocol: self.protocol,
             shutdown_signal: signal,
         }
     }
@@ -65,21 +50,20 @@ where
     /// Consumes itself and create an instance of `Server`.
     pub fn build<C, T>(self) -> Server<S, Sig>
     where
-        S: StreamService<Response = (C, T)>,
+        S: StreamService<Response = (C, T, Http)>,
         C: HttpService<RequestBody>,
         C::Error: Into<BoxedStdError>,
         T: AsyncRead + AsyncWrite,
     {
         Server {
             stream_service: self.stream_service,
-            protocol: self.protocol,
             shutdown_signal: self.shutdown_signal,
         }
     }
 
     pub fn run<C, T>(self)
     where
-        S: StreamService<Response = (C, T)>,
+        S: StreamService<Response = (C, T, Http)>,
         C: HttpService<RequestBody>,
         C::Error: Into<BoxedStdError>,
         T: AsyncRead + AsyncWrite,
@@ -93,20 +77,19 @@ where
 #[derive(Debug)]
 pub struct Server<S, Sig = futures::future::Empty<(), ()>> {
     pub(crate) stream_service: S,
-    pub(crate) protocol: Http,
     pub(crate) shutdown_signal: Sig,
 }
 
 impl<S> Server<S> {
     /// Creates a `Builder` using a streamed service.
     pub fn builder(stream_service: S) -> Builder<S> {
-        Builder::new(stream_service, Http::new(), futures::future::empty())
+        Builder::new(stream_service, futures::future::empty())
     }
 }
 
 impl<S, C, T, Sig> Server<S, Sig>
 where
-    S: StreamService<Response = (C, T)>,
+    S: StreamService<Response = (C, T, Http)>,
     C: HttpService<RequestBody>,
     C::Error: Into<BoxedStdError>,
     T: AsyncRead + AsyncWrite,
@@ -192,12 +175,13 @@ macro_rules! spawn_all_task {
         let executor = $executor;
 
         let serve_connection_fn = {
-            let protocol = this.protocol.with_executor(executor.clone());
+            let executor = executor.clone();
             move |fut: <$S as StreamService>::Future, watch: Watch| {
-                let protocol = protocol.clone();
+                let executor = executor.clone();
                 fut.map_err(|_e| log::error!("stream service error"))
-                    .and_then(move |(service, stream)| {
+                    .and_then(move |(service, stream, protocol)| {
                         let conn = protocol
+                            .with_executor(executor)
                             .serve_connection(stream, InnerService(service))
                             .with_upgrades();
                         watch
@@ -228,7 +212,7 @@ macro_rules! impl_spawn_for_server {
     ($t:ty, ($rt:ident, $task:ident) => $e:expr) => {
         impl<S, C, T, Sig> Spawn<$t> for Server<S, Sig>
         where
-            S: StreamService<Response = (C, T)> + Send + 'static,
+            S: StreamService<Response = (C, T, Http)> + Send + 'static,
             S::Future: Send + 'static,
             C: HttpService<RequestBody> + Send + 'static,
             C::ResponseBody: Send + 'static,
@@ -254,7 +238,7 @@ macro_rules! impl_spawn_for_server {
     (!Send $t:ty, ($rt:ident, $task:ident) => $e:expr) => {
         impl<S, C, T, Sig> Spawn<$t> for Server<S, Sig>
         where
-            S: StreamService<Response = (C, T)> + 'static,
+            S: StreamService<Response = (C, T, Http)> + 'static,
             S::Future: 'static,
             C: HttpService<RequestBody> + 'static,
             C::ResponseBody: Send + 'static,
@@ -295,7 +279,7 @@ impl_spawn_for_server!(!Send tokio::runtime::current_thread::TaskExecutor,
 
 impl<S, C, T, Sig> Runnable<tokio::runtime::Runtime> for Server<S, Sig>
 where
-    S: StreamService<Response = (C, T)> + Send + 'static,
+    S: StreamService<Response = (C, T, Http)> + Send + 'static,
     S::Error: Send + 'static,
     S::Future: Send + 'static,
     C: HttpService<RequestBody> + Send + 'static,
@@ -318,7 +302,7 @@ where
 
 impl<S, C, T, Sig> Runnable<tokio::runtime::current_thread::Runtime> for Server<S, Sig>
 where
-    S: StreamService<Response = (C, T)>,
+    S: StreamService<Response = (C, T, Http)>,
     S::Future: 'static,
     C: HttpService<RequestBody> + 'static,
     C::ResponseBody: Send + 'static,
@@ -355,7 +339,7 @@ enum SpawnAllState<S, Sig, F, E> {
 
 impl<S, C, T, Sig, F, Fut, E> Future for SpawnAll<S, Sig, F, E>
 where
-    S: StreamService<Response = (C, T)>,
+    S: StreamService<Response = (C, T, Http)>,
     C: HttpService<RequestBody>,
     C::ResponseBody: Send + 'static,
     C::Error: Into<BoxedStdError>,

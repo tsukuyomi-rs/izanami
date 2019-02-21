@@ -5,7 +5,8 @@ use {
         request::{HttpRequest, RequestBody},
         BoxedStdError, Builder, Server,
     },
-    futures::{Async, Future, IntoFuture, Poll, Stream},
+    futures::{Async, Future, Poll, Stream},
+    hyper::server::conn::Http,
     izanami_http::{HttpBody, HttpService},
     izanami_net::{
         tcp::AddrStream as TcpAddrStream,
@@ -112,6 +113,7 @@ pub struct Incoming<S, I, T = NoTls> {
     make_service: S,
     incoming: I,
     tls: T,
+    protocol: Http,
 }
 
 type TcpIncoming<S, T = NoTls> = Incoming<S, izanami_net::tcp::AddrIncoming, T>;
@@ -127,7 +129,7 @@ where
     T: MakeTlsTransport<I::Item>,
     T::Error: Into<BoxedStdError>,
 {
-    type Response = (S::Service, T::Transport);
+    type Response = (S::Service, T::Transport, Http);
     type Error = BoxedStdError;
     type Future = IncomingFuture<S::Future, T::Future>;
 
@@ -139,11 +141,9 @@ where
         let make_service_future = self.make_service.make_service();
         let make_transport_future = self.tls.make_transport(stream);
         Ok(Async::Ready(Some(IncomingFuture {
-            inner: (
-                make_service_future.map_err(Into::into as fn(_) -> _),
-                make_transport_future.map_err(Into::into as fn(_) -> _),
-            )
-                .into_future(),
+            inner: (make_service_future.map_err(Into::into as fn(_) -> _))
+                .join(make_transport_future.map_err(Into::into as fn(_) -> _)),
+            protocol: Some(self.protocol.clone()),
         })))
     }
 }
@@ -161,6 +161,7 @@ where
         futures::future::MapErr<FutS, fn(FutS::Error) -> BoxedStdError>,
         futures::future::MapErr<FutT, fn(FutT::Error) -> BoxedStdError>, //
     >,
+    protocol: Option<Http>,
 }
 
 impl<FutS, FutT> Future for IncomingFuture<FutS, FutT>
@@ -174,6 +175,7 @@ where
     type Item = (
         <FutS::Item as IntoHttpService<FutT::Item>>::Service,
         FutT::Item,
+        Http,
     );
     type Error = BoxedStdError;
 
@@ -181,7 +183,11 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let (into_service, transport) = futures::try_ready!(self.inner.poll());
         let service = into_service.into_service(&transport);
-        Ok(Async::Ready((service, transport)))
+        let protocol = self
+            .protocol
+            .take()
+            .expect("the future has already been polled");
+        Ok(Async::Ready((service, transport, protocol)))
     }
 }
 
@@ -191,6 +197,18 @@ where
     T: MakeTlsTransport<I::Item>,
     T::Error: Into<BoxedStdError>,
 {
+    /// Specifies that the server uses only HTTP/1.
+    pub fn http1_only(mut self) -> Self {
+        self.stream_service.protocol.http1_only(true);
+        self
+    }
+
+    /// Specifies that the server uses only HTTP/2.
+    pub fn http2_only(mut self) -> Self {
+        self.stream_service.protocol.http2_only(true);
+        self
+    }
+
     /// Specifies a `make_service` to serve incoming connections.
     pub fn serve<S>(self, make_service: S) -> Builder<Incoming<S, I, T>, Sig>
     where
@@ -201,8 +219,8 @@ where
                 make_service,
                 incoming: self.stream_service.incoming,
                 tls: self.stream_service.tls,
+                protocol: self.stream_service.protocol,
             },
-            protocol: self.protocol,
             shutdown_signal: self.shutdown_signal,
         }
     }
@@ -221,6 +239,7 @@ impl Server<()> {
             make_service: (),
             incoming,
             tls,
+            protocol: Http::new(),
         }))
     }
 
@@ -237,6 +256,7 @@ impl Server<()> {
             make_service: (),
             incoming,
             tls,
+            protocol: Http::new(),
         }))
     }
 }

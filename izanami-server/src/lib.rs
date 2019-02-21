@@ -21,3 +21,6 @@ pub mod request;
 type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 pub use crate::server::{Builder, Server};
+
+#[doc(no_inline)]
+pub use hyper::server::conn::Http;
