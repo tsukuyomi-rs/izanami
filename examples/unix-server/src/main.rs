@@ -5,16 +5,18 @@ use {
 };
 
 #[cfg(unix)]
-fn main() -> izanami::Result<()> {
+fn main() {
     let echo = Echo::builder()
         .add_route("/", |_cx| {
             Response::builder() //
                 .body("Hello")
                 .unwrap()
-        })?
+        })
+        .expect("invalid route")
         .build();
 
     izanami::run_unix("/tmp/echo-service.sock", no_tls(), echo)
+        .expect("failed to start the server");
 }
 
 #[cfg(not(unix))]

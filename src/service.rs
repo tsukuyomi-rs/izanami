@@ -1,7 +1,7 @@
 //! Abstraction around HTTP services.
 
 use {
-    crate::{error::BoxedStdError, util::*},
+    crate::{util::*, BoxedStdError},
     bytes::{Buf, BufMut, Bytes},
     futures::{Async, Future, Poll},
     http::HeaderMap,

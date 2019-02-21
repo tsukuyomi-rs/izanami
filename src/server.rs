@@ -3,12 +3,12 @@
 use {
     crate::{
         drain::{Signal, Watch},
-        error::BoxedStdError,
         service::{
             imp::{HttpResponseImpl, ResponseBodyImpl},
             HttpService, IntoHttpService, MakeHttpService, RequestBody,
         },
         util::*,
+        BoxedStdError,
     },
     futures::{future::Executor, Async, Future, IntoFuture, Poll, Stream},
     http::{Request, Response},

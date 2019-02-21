@@ -11,37 +11,34 @@
 #![forbid(clippy::unimplemented)]
 
 mod drain;
-mod error;
 mod util;
 
 pub mod server;
 pub mod service;
 
-pub use {
-    crate::{
-        error::{Error, Result},
-        server::Server,
-    },
-    izanami_net::tls::no_tls,
-};
+pub use crate::server::Server;
+#[doc(no_inline)]
+pub use izanami_net::tls::no_tls;
 
 use {
     crate::{
-        error::BoxedStdError,
         server::Incoming,
         service::{HttpService, MakeHttpService},
     },
     izanami_net::tls::MakeTlsTransport,
     izanami_rt::Spawn,
     izanami_service::StreamService,
-    std::net::ToSocketAddrs,
+    std::{io, net::ToSocketAddrs},
     tokio::io::{AsyncRead, AsyncWrite},
 };
+
+#[allow(dead_code)]
+pub(crate) type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 /// Start an HTTP server using an TCP listener.
 ///
 /// This function internally uses the multi-threaded Tokio runtime with the default configuration.
-pub fn run_tcp<A, T, S>(addr: A, tls: T, make_service: S) -> crate::Result<()>
+pub fn run_tcp<A, T, S>(addr: A, tls: T, make_service: S) -> io::Result<()>
 where
     A: ToSocketAddrs,
     T: MakeTlsTransport<izanami_net::tcp::AddrStream> + Send + 'static,
@@ -66,7 +63,7 @@ where
 ///
 /// This function is available only on Unix platform.
 #[cfg(unix)]
-pub fn run_unix<P, T, S>(path: P, tls: T, make_service: S) -> crate::Result<()>
+pub fn run_unix<P, T, S>(path: P, tls: T, make_service: S) -> io::Result<()>
 where
     P: AsRef<std::path::Path>,
     T: MakeTlsTransport<izanami_net::unix::AddrStream> + Send + 'static,
@@ -85,9 +82,9 @@ where
     })
 }
 
-fn run_incoming<F, S, T, C>(f: F) -> crate::Result<()>
+fn run_incoming<F, S, T, C>(f: F) -> io::Result<()>
 where
-    F: FnOnce() -> crate::Result<S>,
+    F: FnOnce() -> io::Result<S>,
     S: StreamService<Response = (C, T)>,
     C: HttpService,
     T: AsyncRead + AsyncWrite,

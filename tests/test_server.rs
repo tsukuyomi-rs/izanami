@@ -66,7 +66,7 @@ mod tcp {
     };
 
     #[test]
-    fn tcp_server() -> izanami::Result<()> {
+    fn tcp_server() -> failure::Fallible<()> {
         let mut rt = Runtime::new()?;
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
@@ -144,7 +144,7 @@ mod unix {
     };
 
     #[test]
-    fn unix_server() -> izanami::Result<()> {
+    fn unix_server() -> failure::Fallible<()> {
         let mut rt = Runtime::new()?;
 
         let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
@@ -231,7 +231,7 @@ mod native_tls {
     };
 
     #[test]
-    fn tls_server() -> izanami::Result<()> {
+    fn tls_server() -> failure::Fallible<()> {
         let mut rt = Runtime::new()?;
 
         const IDENTITY: &[u8] = include_bytes!("../test/identity.pfx");
@@ -346,7 +346,7 @@ mod openssl {
     const PRIVATE_KEY: &[u8] = include_bytes!("../test/server-key.pem");
 
     #[test]
-    fn tls_server() -> izanami::Result<()> {
+    fn tls_server() -> failure::Fallible<()> {
         let mut rt = Runtime::new()?;
 
         let cert = X509::from_pem(CERTIFICATE)?;
@@ -458,7 +458,7 @@ mod rustls {
     };
 
     #[test]
-    fn tls_server() -> izanami::Result<()> {
+    fn tls_server() -> failure::Fallible<()> {
         let mut rt = Runtime::new()?;
 
         const CERTIFICATE: &[u8] = include_bytes!("../test/server-crt.pem");

@@ -10,7 +10,7 @@ use {
 const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
 const PRIVATE_KEY: &[u8] = include_bytes!("../../../test/server-key.pem");
 
-fn main() -> izanami::Result<()> {
+fn main() -> failure::Fallible<()> {
     let echo = Echo::builder()
         .add_route("/", |_cx| {
             Response::builder() //
@@ -44,5 +44,6 @@ fn main() -> izanami::Result<()> {
         TlsAcceptor::from(std::sync::Arc::new(config))
     };
 
-    izanami::run_tcp("127.0.0.1:4000", rustls, echo)
+    izanami::run_tcp("127.0.0.1:4000", rustls, echo)?;
+    Ok(())
 }

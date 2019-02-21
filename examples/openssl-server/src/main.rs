@@ -11,24 +11,25 @@ use {
 const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
 const PRIVATE_KEY: &[u8] = include_bytes!("../../../test/server-key.pem");
 
-fn main() -> izanami::Result<()> {
+fn main() {
     let echo = Echo::builder()
         .add_route("/", |_cx| {
             Response::builder() //
                 .body("Hello")
                 .unwrap()
-        })? //
+        })
+        .unwrap() //
         .build();
 
-    let cert = X509::from_pem(CERTIFICATE)?;
-    let pkey = PKey::private_key_from_pem(PRIVATE_KEY)?;
+    let cert = X509::from_pem(CERTIFICATE).unwrap();
+    let pkey = PKey::private_key_from_pem(PRIVATE_KEY).unwrap();
     let ssl = {
-        let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
-        builder.set_certificate(&cert)?;
-        builder.set_private_key(&pkey)?;
-        builder.check_private_key()?;
+        let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
+        builder.set_certificate(&cert).unwrap();
+        builder.set_private_key(&pkey).unwrap();
+        builder.check_private_key().unwrap();
         builder.build()
     };
 
-    izanami::run_tcp("127.0.0.1:4000", ssl, echo)
+    izanami::run_tcp("127.0.0.1:4000", ssl, echo).unwrap()
 }
