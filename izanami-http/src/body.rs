@@ -1,9 +1,58 @@
-//! trailer headers.
+//! request/response bodies.
 
 use {
     futures::{Async, Future, Poll},
     http::HeaderMap,
+    izanami_buf::BufStream,
 };
+
+#[doc(hidden)]
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum ContentLength {
+    Sized(u64),
+    Chunked,
+}
+
+/// A trait that abstracts HTTP request/response bodies.
+pub trait HttpBody: BufStream + BodyTrailers {
+    /// Returns whether the body has been completed emitting all chunks and trailer headers.
+    ///
+    /// It is possible that this method returns `false`
+    /// even if the body has incomplete chunks or trailers.
+    fn is_end_stream(&self) -> bool {
+        false
+    }
+
+    #[doc(hidden)]
+    fn content_length(&self) -> ContentLength {
+        ContentLength::Chunked
+    }
+}
+
+macro_rules! impl_body_for_sized_types {
+    ($($t:ty,)*) => {$(
+        impl HttpBody for $t {
+            fn is_end_stream(&self) -> bool {
+                self.is_empty()
+            }
+
+            fn content_length(&self) -> ContentLength {
+                ContentLength::Sized(self.len() as u64)
+            }
+        }
+    )*};
+}
+
+impl_body_for_sized_types! {
+    String,
+    Vec<u8>,
+    &'static str,
+    &'static [u8],
+    std::borrow::Cow<'static, str>,
+    std::borrow::Cow<'static, [u8]>,
+    bytes::Bytes,
+    bytes::BytesMut,
+}
 
 /// A trait representing that it is possible that the stream
 /// will return a `HeaderMap` after completing the output of bytes.

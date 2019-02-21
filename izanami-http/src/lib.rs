@@ -11,10 +11,13 @@
 )]
 #![forbid(clippy::unimplemented)]
 
-pub mod trailers;
+mod service;
+
+pub mod body;
 pub mod upgrade;
 
 pub use crate::{
-    trailers::BodyTrailers, //
+    body::{BodyTrailers, HttpBody}, //
+    service::HttpService,
     upgrade::Upgrade,
 };

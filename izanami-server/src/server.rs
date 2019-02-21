@@ -1,43 +1,28 @@
-//! The implementation of HTTP server.
+//! Abstraction around HTTP services.
 
 use {
     crate::{
         drain::{Signal, Watch},
-        service::{
-            imp::{HttpResponseImpl, ResponseBodyImpl},
-            HttpService, IntoHttpService, MakeHttpService, RequestBody,
-        },
+        request::RequestBody,
         util::*,
         BoxedStdError,
     },
-    futures::{future::Executor, Async, Future, IntoFuture, Poll, Stream},
+    futures::{future::Executor, Async, Future, Poll},
     http::{Request, Response},
     hyper::server::conn::Http,
-    izanami_net::{
-        tcp::AddrStream as TcpAddrStream,
-        tls::{MakeTlsTransport, NoTls},
-    },
+    izanami_buf::BufStream,
+    izanami_http::{body::ContentLength, BodyTrailers, HttpBody, HttpService},
     izanami_rt::{Runnable, Runtime, Spawn, Spawner},
     izanami_service::StreamService,
-    std::{
-        io,
-        net::{SocketAddr, ToSocketAddrs},
-    },
     tokio::io::{AsyncRead, AsyncWrite},
-};
-
-#[cfg(unix)]
-use {
-    izanami_net::unix::AddrStream as UnixAddrStream, //
-    std::path::Path,
 };
 
 /// A builder for creating an `Server`.
 #[derive(Debug)]
 pub struct Builder<S, Sig = futures::future::Empty<(), ()>> {
-    stream_service: S,
-    protocol: Http,
-    shutdown_signal: Sig,
+    pub(crate) stream_service: S,
+    pub(crate) protocol: Http,
+    pub(crate) shutdown_signal: Sig,
 }
 
 impl<S, Sig> Builder<S, Sig>
@@ -81,7 +66,8 @@ where
     pub fn build<C, T>(self) -> Server<S, Sig>
     where
         S: StreamService<Response = (C, T)>,
-        C: HttpService,
+        C: HttpService<RequestBody>,
+        C::Error: Into<BoxedStdError>,
         T: AsyncRead + AsyncWrite,
     {
         Server {
@@ -94,7 +80,8 @@ where
     pub fn run<C, T>(self)
     where
         S: StreamService<Response = (C, T)>,
-        C: HttpService,
+        C: HttpService<RequestBody>,
+        C::Error: Into<BoxedStdError>,
         T: AsyncRead + AsyncWrite,
         Server<S, Sig>: Spawn<tokio::runtime::Runtime>,
     {
@@ -102,68 +89,12 @@ where
     }
 }
 
-impl<I, T, Sig> Builder<Incoming<(), I, T>, Sig>
-where
-    I: Stream,
-    T: MakeTlsTransport<I::Item>,
-    T::Error: Into<BoxedStdError>,
-{
-    /// Specifies a `make_service` to serve incoming connections.
-    pub fn serve<S>(self, make_service: S) -> Builder<Incoming<S, I, T>, Sig>
-    where
-        S: MakeHttpService<I::Item, T::Transport>,
-    {
-        Builder {
-            stream_service: Incoming {
-                make_service,
-                incoming: self.stream_service.incoming,
-                tls: self.stream_service.tls,
-            },
-            protocol: self.protocol,
-            shutdown_signal: self.shutdown_signal,
-        }
-    }
-}
-
 /// An HTTP server.
 #[derive(Debug)]
 pub struct Server<S, Sig = futures::future::Empty<(), ()>> {
-    stream_service: S,
-    protocol: Http,
-    shutdown_signal: Sig,
-}
-
-impl Server<()> {
-    /// Create a `Builder` using a TCP listener bound to the specified address.
-    pub fn bind_tcp<A, T>(addr: A, tls: T) -> io::Result<Builder<TcpIncoming<(), T>>>
-    where
-        A: ToSocketAddrs,
-        T: MakeTlsTransport<TcpAddrStream>,
-        T::Error: Into<BoxedStdError>,
-    {
-        let incoming = izanami_net::tcp::AddrIncoming::bind(addr)?;
-        Ok(Server::builder(Incoming {
-            make_service: (),
-            incoming,
-            tls,
-        }))
-    }
-
-    /// Create a `Builder` using a Unix domain socket listener bound to the specified socket path.
-    #[cfg(unix)]
-    pub fn bind_unix<P, T>(path: P, tls: T) -> io::Result<Builder<UnixIncoming<(), T>>>
-    where
-        P: AsRef<Path>,
-        T: MakeTlsTransport<UnixAddrStream>,
-        T::Error: Into<BoxedStdError>,
-    {
-        let incoming = izanami_net::unix::AddrIncoming::bind(path)?;
-        Ok(Server::builder(Incoming {
-            make_service: (),
-            incoming,
-            tls,
-        }))
-    }
+    pub(crate) stream_service: S,
+    pub(crate) protocol: Http,
+    pub(crate) shutdown_signal: Sig,
 }
 
 impl<S> Server<S> {
@@ -176,7 +107,8 @@ impl<S> Server<S> {
 impl<S, C, T, Sig> Server<S, Sig>
 where
     S: StreamService<Response = (C, T)>,
-    C: HttpService,
+    C: HttpService<RequestBody>,
+    C::Error: Into<BoxedStdError>,
     T: AsyncRead + AsyncWrite,
     Sig: Future<Item = ()>,
 {
@@ -210,13 +142,6 @@ where
         Rt: Runtime + ?Sized,
     {
         Runnable::run(self, runtime)
-    }
-}
-
-impl<S, T, Sig> Server<TcpIncoming<S, T>, Sig> {
-    #[doc(hidden)]
-    pub fn local_addr(&self) -> SocketAddr {
-        self.stream_service.incoming.local_addr()
     }
 }
 
@@ -305,7 +230,12 @@ macro_rules! impl_spawn_for_server {
         where
             S: StreamService<Response = (C, T)> + Send + 'static,
             S::Future: Send + 'static,
-            C: HttpService + Send + 'static,
+            C: HttpService<RequestBody> + Send + 'static,
+            C::ResponseBody: Send + 'static,
+            <C::ResponseBody as BufStream>::Item: Send,
+            <C::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+            <C::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+            C::Error: Into<BoxedStdError>,
             C::Future: Send + 'static,
             T: AsyncRead + AsyncWrite + Send + 'static,
             Sig: Future<Item = ()> + Send + 'static,
@@ -326,7 +256,12 @@ macro_rules! impl_spawn_for_server {
         where
             S: StreamService<Response = (C, T)> + 'static,
             S::Future: 'static,
-            C: HttpService + 'static,
+            C: HttpService<RequestBody> + 'static,
+            C::ResponseBody: Send + 'static,
+            <C::ResponseBody as BufStream>::Item: Send,
+            <C::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+            <C::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+            C::Error: Into<BoxedStdError>,
             T: AsyncRead + AsyncWrite + Send + 'static,
             Sig: Future<Item = ()> + 'static,
         {
@@ -363,7 +298,12 @@ where
     S: StreamService<Response = (C, T)> + Send + 'static,
     S::Error: Send + 'static,
     S::Future: Send + 'static,
-    C: HttpService + Send + 'static,
+    C: HttpService<RequestBody> + Send + 'static,
+    C::ResponseBody: Send + 'static,
+    <C::ResponseBody as BufStream>::Item: Send,
+    <C::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+    <C::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+    C::Error: Into<BoxedStdError>,
     C::Future: Send + 'static,
     T: AsyncRead + AsyncWrite + Send + 'static,
     Sig: Future<Item = ()> + Send + 'static,
@@ -380,7 +320,12 @@ impl<S, C, T, Sig> Runnable<tokio::runtime::current_thread::Runtime> for Server<
 where
     S: StreamService<Response = (C, T)>,
     S::Future: 'static,
-    C: HttpService + 'static,
+    C: HttpService<RequestBody> + 'static,
+    C::ResponseBody: Send + 'static,
+    <C::ResponseBody as BufStream>::Item: Send,
+    <C::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+    <C::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+    C::Error: Into<BoxedStdError>,
     T: AsyncRead + AsyncWrite + Send + 'static,
     Sig: Future<Item = ()>,
 {
@@ -411,7 +356,9 @@ enum SpawnAllState<S, Sig, F, E> {
 impl<S, C, T, Sig, F, Fut, E> Future for SpawnAll<S, Sig, F, E>
 where
     S: StreamService<Response = (C, T)>,
-    C: HttpService,
+    C: HttpService<RequestBody>,
+    C::ResponseBody: Send + 'static,
+    C::Error: Into<BoxedStdError>,
     T: AsyncRead + AsyncWrite + Send + 'static,
     Sig: Future<Item = ()>,
     F: FnMut(S::Future, Watch) -> Fut,
@@ -463,11 +410,16 @@ where
 }
 
 #[allow(missing_debug_implementations)]
-struct InnerService<S: HttpService>(S);
+struct InnerService<S>(S);
 
 impl<S> hyper::service::Service for InnerService<S>
 where
-    S: HttpService + 'static,
+    S: HttpService<RequestBody> + 'static,
+    S::ResponseBody: Send + 'static,
+    <S::ResponseBody as BufStream>::Item: Send,
+    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+    S::Error: Into<BoxedStdError>,
 {
     type ReqBody = hyper::Body;
     type ResBody = InnerBody<S>;
@@ -484,13 +436,18 @@ where
 }
 
 #[allow(missing_debug_implementations)]
-struct InnerServiceFuture<S: HttpService> {
+struct InnerServiceFuture<S: HttpService<RequestBody>> {
     inner: S::Future,
 }
 
 impl<S> Future for InnerServiceFuture<S>
 where
-    S: HttpService,
+    S: HttpService<RequestBody>,
+    S::ResponseBody: Send + 'static,
+    <S::ResponseBody as BufStream>::Item: Send,
+    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+    S::Error: Into<BoxedStdError>,
 {
     type Item = Response<InnerBody<S>>;
     type Error = BoxedStdError;
@@ -499,119 +456,42 @@ where
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         self.inner
             .poll()
-            .map_async(|response| response.into_response().map(|inner| InnerBody { inner }))
+            .map_async(|response| response.map(|inner| InnerBody { inner }))
             .map_err(Into::into)
     }
 }
 
 #[allow(missing_debug_implementations)]
-struct InnerBody<S: HttpService> {
-    inner: <S::Response as HttpResponseImpl>::Body,
+struct InnerBody<S: HttpService<RequestBody>> {
+    inner: S::ResponseBody,
 }
 
 impl<S> hyper::body::Payload for InnerBody<S>
 where
-    S: HttpService + 'static,
+    S: HttpService<RequestBody> + 'static,
+    S::ResponseBody: Send + 'static,
+    <S::ResponseBody as BufStream>::Item: Send,
+    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
 {
-    type Data = <S::Response as HttpResponseImpl>::Data;
+    type Data = <S::ResponseBody as BufStream>::Item;
     type Error = BoxedStdError;
 
     #[inline]
     fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
-        ResponseBodyImpl::poll_data(&mut self.inner)
+        BufStream::poll_buf(&mut self.inner).map_err(Into::into)
     }
 
     #[inline]
     fn poll_trailers(&mut self) -> Poll<Option<http::HeaderMap>, Self::Error> {
-        ResponseBodyImpl::poll_trailers(&mut self.inner)
+        BodyTrailers::poll_trailers(&mut self.inner).map_err(Into::into)
     }
 
     #[inline]
     fn content_length(&self) -> Option<u64> {
-        let hint = ResponseBodyImpl::size_hint(&self.inner);
-        match (hint.lower(), hint.upper()) {
-            (lower, Some(upper)) if lower == upper => Some(upper),
-            _ => None,
+        match HttpBody::content_length(&self.inner) {
+            ContentLength::Sized(len) => Some(len),
+            ContentLength::Chunked => None,
         }
-    }
-}
-
-/// An implementation of `StreamService` consisting of a pair of an I/O stream
-/// and `MakeService`.
-#[derive(Debug)]
-pub struct Incoming<S, I, T = NoTls> {
-    make_service: S,
-    incoming: I,
-    tls: T,
-}
-
-type TcpIncoming<S, T = NoTls> = Incoming<S, izanami_net::tcp::AddrIncoming, T>;
-
-#[cfg(unix)]
-type UnixIncoming<S, T = NoTls> = Incoming<S, izanami_net::unix::AddrIncoming, T>;
-
-impl<S, I, T> StreamService for Incoming<S, I, T>
-where
-    S: MakeHttpService<I::Item, T::Transport>,
-    I: Stream,
-    I::Error: Into<BoxedStdError>,
-    T: MakeTlsTransport<I::Item>,
-    T::Error: Into<BoxedStdError>,
-{
-    type Response = (S::Service, T::Transport);
-    type Error = BoxedStdError;
-    type Future = IncomingFuture<S::Future, T::Future>;
-
-    fn poll_next_service(&mut self) -> Poll<Option<Self::Future>, Self::Error> {
-        let stream = match futures::try_ready!(self.incoming.poll().map_err(Into::into)) {
-            Some(stream) => stream,
-            None => return Ok(Async::Ready(None)),
-        };
-        let make_service_future = self.make_service.make_service(&stream);
-        let make_transport_future = self.tls.make_transport(stream);
-        Ok(Async::Ready(Some(IncomingFuture {
-            inner: (
-                make_service_future.map_err(Into::into as fn(_) -> _),
-                make_transport_future.map_err(Into::into as fn(_) -> _),
-            )
-                .into_future(),
-        })))
-    }
-}
-
-#[doc(hidden)]
-#[allow(missing_debug_implementations, clippy::type_complexity)]
-pub struct IncomingFuture<FutS, FutT>
-where
-    FutS: Future,
-    FutS::Error: Into<BoxedStdError>,
-    FutT: Future,
-    FutT::Error: Into<BoxedStdError>,
-{
-    inner: futures::future::Join<
-        futures::future::MapErr<FutS, fn(FutS::Error) -> BoxedStdError>,
-        futures::future::MapErr<FutT, fn(FutT::Error) -> BoxedStdError>, //
-    >,
-}
-
-impl<FutS, FutT> Future for IncomingFuture<FutS, FutT>
-where
-    FutS: Future,
-    FutS::Item: IntoHttpService<FutT::Item>,
-    FutS::Error: Into<BoxedStdError>,
-    FutT: Future,
-    FutT::Error: Into<BoxedStdError>,
-{
-    type Item = (
-        <FutS::Item as IntoHttpService<FutT::Item>>::Service,
-        FutT::Item,
-    );
-    type Error = BoxedStdError;
-
-    #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let (into_service, transport) = futures::try_ready!(self.inner.poll());
-        let service = into_service.into_service(&transport);
-        Ok(Async::Ready((service, transport)))
     }
 }

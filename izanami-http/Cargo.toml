@@ -12,6 +12,8 @@ repository = "https://github.com/ubnt-intrepid/izanami.git"
 bytes = "0.4"
 futures = "0.1"
 http = "0.1"
+izanami-buf = { version = "0.1.0-preview.1", path = "../izanami-buf" }
+izanami-service = { version = "0.1.0-preview.1", path = "../izanami-service" }
 tokio-io = "0.1"
 
 [dev-dependencies]
