@@ -1,7 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::no_tls,
+    izanami::{net::tls::no_tls, server::Server},
 };
 
 #[cfg(unix)]
@@ -15,8 +15,10 @@ fn main() {
         .expect("invalid route")
         .build();
 
-    izanami::run_unix("/tmp/echo-service.sock", no_tls(), echo)
-        .expect("failed to start the server");
+    Server::bind_unix("/tmp/echo-service.sock", no_tls())
+        .unwrap()
+        .serve(echo)
+        .run()
 }
 
 #[cfg(not(unix))]

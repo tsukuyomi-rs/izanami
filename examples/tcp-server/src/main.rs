@@ -1,7 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::no_tls,
+    izanami::{net::tls::no_tls, server::Server},
 };
 
 fn main() {
@@ -14,5 +14,8 @@ fn main() {
         .unwrap()
         .build();
 
-    izanami::run_tcp("127.0.0.1:5000", no_tls(), echo).unwrap()
+    Server::bind_tcp("127.0.0.1:5000", no_tls())
+        .unwrap()
+        .serve(echo)
+        .run()
 }

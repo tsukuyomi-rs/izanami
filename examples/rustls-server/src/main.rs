@@ -2,6 +2,7 @@ use {
     echo_service::Echo,
     failure::format_err,
     http::Response,
+    izanami::server::Server,
     rustls::{NoClientAuth, ServerConfig},
     std::io,
     tokio_rustls::TlsAcceptor,
@@ -44,6 +45,8 @@ fn main() -> failure::Fallible<()> {
         TlsAcceptor::from(std::sync::Arc::new(config))
     };
 
-    izanami::run_tcp("127.0.0.1:4000", rustls, echo)?;
+    Server::bind_tcp("127.0.0.1:4000", rustls)?
+        .serve(echo)
+        .run();
     Ok(())
 }

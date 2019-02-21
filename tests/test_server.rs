@@ -55,8 +55,7 @@ mod tcp {
             },
             Body,
         },
-        izanami::Server,
-        izanami_net::tls::no_tls,
+        izanami::{net::tls::no_tls, server::Server},
         std::{io, net::SocketAddr},
         tokio::{
             net::TcpStream, //
@@ -70,14 +69,11 @@ mod tcp {
         let mut rt = Runtime::new()?;
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = Server::bind_tcp(
-            super::Echo::default(), //
-            "127.0.0.1:0",
-            no_tls(),
-        )?
-        .with_graceful_shutdown(rx_shutdown)
-        .build();
-        let local_addr = server.get_ref().local_addr();
+        let server = Server::bind_tcp("127.0.0.1:0", no_tls())?
+            .serve(super::Echo::default())
+            .with_graceful_shutdown(rx_shutdown)
+            .build();
+        let local_addr = server.local_addr();
         server.start(&mut rt);
 
         let client = Client::builder() //
@@ -132,8 +128,7 @@ mod unix {
             },
             Body,
         },
-        izanami::Server,
-        izanami_net::tls::no_tls,
+        izanami::{net::tls::no_tls, server::Server},
         std::{io, path::PathBuf},
         tempfile::Builder,
         tokio::{
@@ -151,13 +146,10 @@ mod unix {
         let sock_path = sock_tempdir.path().join("connect.sock");
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = Server::bind_unix(
-            super::Echo::default(), //
-            &sock_path,
-            no_tls(),
-        )?
-        .with_graceful_shutdown(rx_shutdown)
-        .build();
+        let server = Server::bind_unix(&sock_path, no_tls())?
+            .serve(super::Echo::default())
+            .with_graceful_shutdown(rx_shutdown)
+            .build();
         server.start(&mut rt);
 
         let client = Client::builder() //
@@ -214,7 +206,7 @@ mod native_tls {
             },
             Body,
         },
-        izanami::Server,
+        izanami::server::Server,
         native_tls_crate::{
             Certificate, //
             Identity,
@@ -243,14 +235,11 @@ mod native_tls {
         };
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = Server::bind_tcp(
-            super::Echo::default(), //
-            "127.0.0.1:0",
-            tls,
-        )?
-        .with_graceful_shutdown(rx_shutdown)
-        .build();
-        let local_addr = server.get_ref().local_addr();
+        let server = Server::bind_tcp("127.0.0.1:0", tls)?
+            .serve(super::Echo::default())
+            .with_graceful_shutdown(rx_shutdown)
+            .build();
+        let local_addr = server.local_addr();
         server.start(&mut rt);
 
         let client = Client::builder() //
@@ -322,7 +311,7 @@ mod openssl {
             },
             Body,
         },
-        izanami::Server,
+        izanami::server::Server,
         openssl_crate::{
             pkey::PKey,
             ssl::{
@@ -360,14 +349,11 @@ mod openssl {
         };
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = Server::bind_tcp(
-            super::Echo::default(), //
-            "127.0.0.1:0",
-            tls,
-        )?
-        .with_graceful_shutdown(rx_shutdown)
-        .build();
-        let local_addr = server.get_ref().local_addr();
+        let server = Server::bind_tcp("127.0.0.1:0", tls)?
+            .serve(super::Echo::default())
+            .with_graceful_shutdown(rx_shutdown)
+            .build();
+        let local_addr = server.local_addr();
         server.start(&mut rt);
 
         let client = Client::builder() //
@@ -444,7 +430,7 @@ mod rustls {
             },
             Body,
         },
-        izanami::Server,
+        izanami::server::Server,
         native_tls_crate::Certificate,
         rustls_crate::{NoClientAuth, ServerConfig},
         std::{io, net::SocketAddr, sync::Arc},
@@ -491,14 +477,11 @@ mod rustls {
         };
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = Server::bind_tcp(
-            super::Echo::default(), //
-            "127.0.0.1:0",
-            tls,
-        )?
-        .with_graceful_shutdown(rx_shutdown)
-        .build();
-        let local_addr = server.get_ref().local_addr();
+        let server = Server::bind_tcp("127.0.0.1:0", tls)?
+            .serve(super::Echo::default())
+            .with_graceful_shutdown(rx_shutdown)
+            .build();
+        let local_addr = server.local_addr();
         server.start(&mut rt);
 
         // FIXME: use rustls

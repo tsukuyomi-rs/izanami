@@ -1,6 +1,7 @@
 use {
     echo_service::Echo,
     http::Response,
+    izanami::server::Server,
     openssl::{
         pkey::PKey,
         ssl::{SslAcceptor, SslMethod},
@@ -31,5 +32,8 @@ fn main() {
         builder.build()
     };
 
-    izanami::run_tcp("127.0.0.1:4000", ssl, echo).unwrap()
+    Server::bind_tcp("127.0.0.1:4000", ssl)
+        .unwrap()
+        .serve(echo)
+        .run()
 }

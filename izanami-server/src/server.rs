@@ -40,11 +40,8 @@ pub struct Builder<S, Sig = futures::future::Empty<(), ()>> {
     shutdown_signal: Sig,
 }
 
-impl<S, C, T, Sig> Builder<S, Sig>
+impl<S, Sig> Builder<S, Sig>
 where
-    S: StreamService<Response = (C, T)>,
-    C: HttpService,
-    T: AsyncRead + AsyncWrite,
     Sig: Future<Item = ()>,
 {
     /// Creates a `Builder` using a streamed service.
@@ -81,11 +78,47 @@ where
     }
 
     /// Consumes itself and create an instance of `Server`.
-    ///
-    /// It also returns a `Handle` used by controlling the spawned server.
-    pub fn build(self) -> Server<S, Sig> {
+    pub fn build<C, T>(self) -> Server<S, Sig>
+    where
+        S: StreamService<Response = (C, T)>,
+        C: HttpService,
+        T: AsyncRead + AsyncWrite,
+    {
         Server {
             stream_service: self.stream_service,
+            protocol: self.protocol,
+            shutdown_signal: self.shutdown_signal,
+        }
+    }
+
+    pub fn run<C, T>(self)
+    where
+        S: StreamService<Response = (C, T)>,
+        C: HttpService,
+        T: AsyncRead + AsyncWrite,
+        Server<S, Sig>: Spawn<tokio::runtime::Runtime>,
+    {
+        izanami_rt::run(self.build())
+    }
+}
+
+impl<I, T, Sig> Builder<Incoming<(), I, T>, Sig>
+where
+    I: Stream,
+    T: MakeTlsTransport<I::Item>,
+    T::Error: Into<BoxedStdError>,
+{
+    /// Specifies a `make_service` to serve incoming connections.
+    pub fn serve<S>(self, make_service: S) -> Builder<Incoming<S, I, T>, Sig>
+    where
+        S: MakeHttpService<I::Item, T::Transport>,
+    {
+        Builder {
+            stream_service: Incoming {
+                make_service,
+                incoming: self.stream_service.incoming,
+                tls: self.stream_service.tls,
+            },
             protocol: self.protocol,
             shutdown_signal: self.shutdown_signal,
         }
@@ -100,12 +133,40 @@ pub struct Server<S, Sig = futures::future::Empty<(), ()>> {
     shutdown_signal: Sig,
 }
 
-impl<S, C, T> Server<S>
-where
-    S: StreamService<Response = (C, T)>,
-    C: HttpService,
-    T: AsyncRead + AsyncWrite,
-{
+impl Server<()> {
+    /// Create a `Builder` using a TCP listener bound to the specified address.
+    pub fn bind_tcp<A, T>(addr: A, tls: T) -> io::Result<Builder<TcpIncoming<(), T>>>
+    where
+        A: ToSocketAddrs,
+        T: MakeTlsTransport<TcpAddrStream>,
+        T::Error: Into<BoxedStdError>,
+    {
+        let incoming = izanami_net::tcp::AddrIncoming::bind(addr)?;
+        Ok(Server::builder(Incoming {
+            make_service: (),
+            incoming,
+            tls,
+        }))
+    }
+
+    /// Create a `Builder` using a Unix domain socket listener bound to the specified socket path.
+    #[cfg(unix)]
+    pub fn bind_unix<P, T>(path: P, tls: T) -> io::Result<Builder<UnixIncoming<(), T>>>
+    where
+        P: AsRef<Path>,
+        T: MakeTlsTransport<UnixAddrStream>,
+        T::Error: Into<BoxedStdError>,
+    {
+        let incoming = izanami_net::unix::AddrIncoming::bind(path)?;
+        Ok(Server::builder(Incoming {
+            make_service: (),
+            incoming,
+            tls,
+        }))
+    }
+}
+
+impl<S> Server<S> {
     /// Creates a `Builder` using a streamed service.
     pub fn builder(stream_service: S) -> Builder<S> {
         Builder::new(stream_service, Http::new(), futures::future::empty())
@@ -152,42 +213,10 @@ where
     }
 }
 
-impl<S, T> Server<TcpIncoming<S, T>>
-where
-    S: MakeHttpService<TcpAddrStream, T::Transport>,
-    T: MakeTlsTransport<TcpAddrStream>,
-    T::Error: Into<BoxedStdError>,
-{
-    /// Create a `Builder` bound to the specified address.
-    pub fn bind_tcp<A>(make_service: S, addr: A, tls: T) -> io::Result<Builder<TcpIncoming<S, T>>>
-    where
-        A: ToSocketAddrs,
-    {
-        Ok(Server::builder(Incoming::bind_tcp(
-            make_service,
-            addr,
-            tls,
-        )?))
-    }
-}
-
-#[cfg(unix)]
-impl<S, T> Server<UnixIncoming<S, T>>
-where
-    S: MakeHttpService<UnixAddrStream, T::Transport>,
-    T: MakeTlsTransport<UnixAddrStream>,
-    T::Error: Into<BoxedStdError>,
-{
-    /// Create a `Builder` bound to the specified socket path.
-    pub fn bind_unix<P>(make_service: S, path: P, tls: T) -> io::Result<Builder<UnixIncoming<S, T>>>
-    where
-        P: AsRef<Path>,
-    {
-        Ok(Server::builder(Incoming::bind_unix(
-            make_service,
-            path,
-            tls,
-        )?))
+impl<S, T, Sig> Server<TcpIncoming<S, T>, Sig> {
+    #[doc(hidden)]
+    pub fn local_addr(&self) -> SocketAddr {
+        self.stream_service.incoming.local_addr()
     }
 }
 
@@ -516,59 +545,10 @@ pub struct Incoming<S, I, T = NoTls> {
     tls: T,
 }
 
-impl<S, I, T> Incoming<S, I, T>
-where
-    S: MakeHttpService<I::Item, T::Transport>,
-    I: Stream,
-    I::Error: Into<BoxedStdError>,
-    T: MakeTlsTransport<I::Item>,
-    T::Error: Into<BoxedStdError>,
-{
-    /// Create a new `Incoming` using the specified values.
-    pub fn new(make_service: S, incoming: I, tls: T) -> Self {
-        Self {
-            make_service,
-            incoming,
-            tls,
-        }
-    }
-}
-
-impl<S, T> TcpIncoming<S, T>
-where
-    S: MakeHttpService<TcpAddrStream, T::Transport>,
-    T: MakeTlsTransport<TcpAddrStream>,
-    T::Error: Into<BoxedStdError>,
-{
-    pub fn bind_tcp<A>(make_service: S, addr: A, tls: T) -> io::Result<Self>
-    where
-        A: ToSocketAddrs,
-    {
-        let incoming = izanami_net::tcp::AddrIncoming::bind(addr)?;
-        Ok(Incoming::new(make_service, incoming, tls))
-    }
-
-    #[doc(hidden)]
-    pub fn local_addr(&self) -> SocketAddr {
-        self.incoming.local_addr()
-    }
-}
+type TcpIncoming<S, T = NoTls> = Incoming<S, izanami_net::tcp::AddrIncoming, T>;
 
 #[cfg(unix)]
-impl<S, T> UnixIncoming<S, T>
-where
-    S: MakeHttpService<UnixAddrStream, T::Transport>,
-    T: MakeTlsTransport<UnixAddrStream>,
-    T::Error: Into<BoxedStdError>,
-{
-    pub fn bind_unix<P>(make_service: S, path: P, tls: T) -> io::Result<Self>
-    where
-        P: AsRef<Path>,
-    {
-        let incoming = izanami_net::unix::AddrIncoming::bind(path)?;
-        Ok(Incoming::new(make_service, incoming, tls))
-    }
-}
+type UnixIncoming<S, T = NoTls> = Incoming<S, izanami_net::unix::AddrIncoming, T>;
 
 impl<S, I, T> StreamService for Incoming<S, I, T>
 where
@@ -635,7 +615,3 @@ where
         Ok(Async::Ready((service, transport)))
     }
 }
-
-type TcpIncoming<S, T = NoTls> = Incoming<S, izanami_net::tcp::AddrIncoming, T>;
-#[cfg(unix)]
-type UnixIncoming<S, T = NoTls> = Incoming<S, izanami_net::unix::AddrIncoming, T>;

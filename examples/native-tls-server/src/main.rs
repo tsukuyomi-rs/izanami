@@ -1,6 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
+    izanami::server::Server,
     native_tls::{Identity, TlsAcceptor as NativeTlsAcceptor},
     tokio_tls::TlsAcceptor,
 };
@@ -20,5 +21,8 @@ fn main() {
     let der = Identity::from_pkcs12(IDENTITY, "mypass").unwrap();
     let tls: TlsAcceptor = NativeTlsAcceptor::builder(der).build().unwrap().into();
 
-    izanami::run_tcp("127.0.0.1:4000", tls, echo).unwrap()
+    Server::bind_tcp("127.0.0.1:4000", tls)
+        .unwrap()
+        .serve(echo)
+        .run()
 }

@@ -11,6 +11,7 @@ cargo doc --no-deps -p izanami-buf
 cargo doc --no-deps -p izanami-http
 cargo doc --no-deps -p izanami-net --all-features
 cargo doc --no-deps -p izanami-rt
+cargo doc --no-deps -p izanami-server
 cargo doc --no-deps -p izanami-service
 cargo doc --no-deps -p izanami-util
 cargo doc --no-deps -p izanami --all-features

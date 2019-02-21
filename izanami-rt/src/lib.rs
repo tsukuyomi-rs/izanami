@@ -19,7 +19,7 @@ pub use tokio_threadpool::{
 
 use futures::Future;
 
-/// Creates a `Future` to execute the specified function that will block the current thread.
+/// Creates a `Future` to enter the specified blocking section of code.
 ///
 /// The future genereted by this function internally calls the Tokio's blocking API,
 /// and then enters a blocking section after other tasks are moved to another thread.
@@ -33,7 +33,7 @@ where
     BlockingSection { op: Some(op) }
 }
 
-#[allow(missing_docs)]
+/// The future that enters a blocking section of code.
 #[derive(Debug)]
 pub struct BlockingSection<F> {
     op: Option<F>,
@@ -177,4 +177,45 @@ mod sealed {
     impl Spawner for tokio::runtime::TaskExecutor {}
     impl Spawner for tokio::runtime::current_thread::Runtime {}
     impl Spawner for tokio::runtime::current_thread::TaskExecutor {}
+}
+
+/// Start the Tokio runtime using the specified task to bootstrap execution.
+///
+/// Unlike [`run`], it takes a value of `Spawn<Runtime>` in order
+/// to allow spawning values that cannot directly implement `Future`.
+///
+/// [`run`]: https://docs.rs/tokio/0.1/tokio/runtime/fn.run.html
+pub fn run<S>(task: S)
+where
+    S: Spawn<tokio::runtime::Runtime>,
+{
+    let mut entered = tokio_executor::enter().expect("nested run_incoming");
+    let mut runtime = tokio::runtime::Runtime::new().expect("failed to start Runtime");
+
+    task.spawn(&mut runtime);
+
+    entered
+        .block_on(runtime.shutdown_on_idle())
+        .expect("shutdown cannot error");
+}
+
+/// Single-threaded runtime.
+pub mod current_thread {
+    use super::*;
+
+    /// Start a single-threaded Tokio runtime using the specified task to bootstrap execution.
+    ///
+    /// Unlike [`run`], it takes a value of `Spawn<Runtime>` in order
+    /// to allow spawning values that cannot directly implement `Future`.
+    ///
+    /// [`run`]: https://docs.rs/tokio/0.1/tokio/runtime/current_thread/fn.run.html
+    pub fn run<S>(task: S)
+    where
+        S: Spawn<tokio::runtime::current_thread::Runtime>,
+    {
+        let mut runtime =
+            tokio::runtime::current_thread::Runtime::new().expect("failed to start Runtime");
+        task.spawn(&mut runtime);
+        runtime.run().expect("failed to resolve remaining futures");
+    }
 }
