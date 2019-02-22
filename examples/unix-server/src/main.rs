@@ -1,7 +1,7 @@
 use {
     echo_service::Echo, //
     http::Response,
-    izanami::{net::tls::no_tls, server::Server},
+    izanami::server::Server,
 };
 
 #[cfg(unix)]
@@ -16,7 +16,7 @@ fn main() {
         .build();
 
     izanami::rt::run(
-        Server::bind_unix("/tmp/echo-service.sock", no_tls()) //
+        Server::bind_unix("/tmp/echo-service.sock") //
             .unwrap()
             .serve(echo),
     )

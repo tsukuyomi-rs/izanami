@@ -17,62 +17,31 @@ use {
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
-/// A builder for creating an `Server`.
-#[derive(Debug)]
-pub struct Builder<S, Sig = futures::future::Empty<(), ()>> {
-    pub(crate) stream_service: S,
-    pub(crate) shutdown_signal: Sig,
-}
-
-impl<S, Sig> Builder<S, Sig>
-where
-    Sig: Future<Item = ()>,
-{
-    /// Creates a `Builder` using a streamed service.
-    pub fn new(stream_service: S, shutdown_signal: Sig) -> Self {
-        Self {
-            stream_service,
-            shutdown_signal,
-        }
-    }
-
-    /// Specifies the signal to shutdown the background tasks gracefully.
-    pub fn with_graceful_shutdown<Sig2>(self, signal: Sig2) -> Builder<S, Sig2>
-    where
-        Sig2: Future<Item = ()>,
-    {
-        Builder {
-            stream_service: self.stream_service,
-            shutdown_signal: signal,
-        }
-    }
-
-    /// Consumes itself and create an instance of `Server`.
-    pub fn build<C, T>(self) -> Server<S, Sig>
-    where
-        S: StreamService<Response = (C, T, Http)>,
-        C: HttpService<RequestBody>,
-        C::Error: Into<BoxedStdError>,
-        T: AsyncRead + AsyncWrite,
-    {
-        Server {
-            stream_service: self.stream_service,
-            shutdown_signal: self.shutdown_signal,
-        }
-    }
-}
-
 /// An HTTP server.
 #[derive(Debug)]
 pub struct Server<S, Sig = futures::future::Empty<(), ()>> {
     pub(crate) stream_service: S,
-    pub(crate) shutdown_signal: Sig,
+    shutdown_signal: Sig,
 }
 
 impl<S> Server<S> {
     /// Creates a `Builder` using a streamed service.
-    pub fn builder(stream_service: S) -> Builder<S> {
-        Builder::new(stream_service, futures::future::empty())
+    pub fn new(stream_service: S) -> Self {
+        Self {
+            stream_service,
+            shutdown_signal: futures::future::empty(),
+        }
+    }
+
+    /// Specifies the signal to shutdown the background tasks gracefully.
+    pub fn with_graceful_shutdown<Sig>(self, signal: Sig) -> Server<S, Sig>
+    where
+        Sig: Future<Item = ()>,
+    {
+        Server {
+            stream_service: self.stream_service,
+            shutdown_signal: signal,
+        }
     }
 }
 

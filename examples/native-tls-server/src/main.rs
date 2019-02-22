@@ -22,8 +22,9 @@ fn main() {
     let tls: TlsAcceptor = NativeTlsAcceptor::builder(der).build().unwrap().into();
 
     izanami::rt::run(
-        Server::bind_tcp("127.0.0.1:4000", tls) //
+        Server::bind_tcp("127.0.0.1:4000") //
             .unwrap()
+            .use_tls(tls)
             .serve(echo),
     )
 }

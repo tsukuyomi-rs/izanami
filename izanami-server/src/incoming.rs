@@ -3,13 +3,13 @@
 use {
     crate::{
         request::{HttpRequest, RequestBody},
-        BoxedStdError, Builder, Server,
+        BoxedStdError, Server,
     },
     futures::{Async, Future, Poll, Stream},
     hyper::server::conn::Http,
     izanami_http::{HttpBody, HttpService},
     izanami_net::{
-        tcp::AddrStream as TcpAddrStream,
+        tcp::AddrIncoming as TcpAddrIncoming,
         tls::{MakeTlsTransport, NoTls},
     },
     izanami_service::{IntoService, Service, StreamService},
@@ -20,10 +20,7 @@ use {
 };
 
 #[cfg(unix)]
-use {
-    izanami_net::unix::AddrStream as UnixAddrStream, //
-    std::path::Path,
-};
+use {izanami_net::unix::AddrIncoming as UnixAddrIncoming, std::path::Path};
 
 /// An asynchronous factory of `HttpService`s.
 pub trait MakeHttpService<T>: self::imp::MakeHttpServiceSealed<T> {
@@ -116,11 +113,6 @@ pub struct Incoming<S, I, T = NoTls> {
     protocol: Http,
 }
 
-type TcpIncoming<S, T = NoTls> = Incoming<S, izanami_net::tcp::AddrIncoming, T>;
-
-#[cfg(unix)]
-type UnixIncoming<S, T = NoTls> = Incoming<S, izanami_net::unix::AddrIncoming, T>;
-
 impl<S, I, T> StreamService for Incoming<S, I, T>
 where
     S: MakeHttpService<T::Transport>,
@@ -191,7 +183,33 @@ where
     }
 }
 
-impl<I, T, Sig> Builder<Incoming<(), I, T>, Sig>
+/// A builder of `Server` using `Incoming` as streamed service.
+#[derive(Debug)]
+pub struct Builder<I, T = NoTls> {
+    incoming: I,
+    tls: T,
+    protocol: Http,
+}
+
+impl<I> Builder<I>
+where
+    I: Stream,
+{
+    /// Specifies a SSL/TLS acceptor that creates encrypted transports.
+    pub fn use_tls<T>(self, tls: T) -> Builder<I, T>
+    where
+        T: MakeTlsTransport<I::Item>,
+        T::Error: Into<BoxedStdError>,
+    {
+        Builder {
+            incoming: self.incoming,
+            tls,
+            protocol: self.protocol,
+        }
+    }
+}
+
+impl<I, T> Builder<I, T>
 where
     I: Stream,
     T: MakeTlsTransport<I::Item>,
@@ -199,69 +217,58 @@ where
 {
     /// Specifies that the server uses only HTTP/1.
     pub fn http1_only(mut self) -> Self {
-        self.stream_service.protocol.http1_only(true);
+        self.protocol.http1_only(true);
         self
     }
 
     /// Specifies that the server uses only HTTP/2.
     pub fn http2_only(mut self) -> Self {
-        self.stream_service.protocol.http2_only(true);
+        self.protocol.http2_only(true);
         self
     }
 
     /// Specifies a `make_service` to serve incoming connections.
-    pub fn serve<S>(self, make_service: S) -> Server<Incoming<S, I, T>, Sig>
+    pub fn serve<S>(self, make_service: S) -> Server<Incoming<S, I, T>>
     where
         S: MakeHttpService<T::Transport>,
     {
-        Server {
-            stream_service: Incoming {
-                make_service,
-                incoming: self.stream_service.incoming,
-                tls: self.stream_service.tls,
-                protocol: self.stream_service.protocol,
-            },
-            shutdown_signal: self.shutdown_signal,
-        }
+        Server::new(Incoming {
+            make_service,
+            incoming: self.incoming,
+            tls: self.tls,
+            protocol: self.protocol,
+        })
     }
 }
 
 impl Server<()> {
     /// Create a `Builder` using a TCP listener bound to the specified address.
-    pub fn bind_tcp<A, T>(addr: A, tls: T) -> io::Result<Builder<TcpIncoming<(), T>>>
+    pub fn bind_tcp<A>(addr: A) -> io::Result<Builder<TcpAddrIncoming>>
     where
         A: ToSocketAddrs,
-        T: MakeTlsTransport<TcpAddrStream>,
-        T::Error: Into<BoxedStdError>,
     {
-        let incoming = izanami_net::tcp::AddrIncoming::bind(addr)?;
-        Ok(Server::builder(Incoming {
-            make_service: (),
-            incoming,
-            tls,
+        Ok(Builder {
+            incoming: izanami_net::tcp::AddrIncoming::bind(addr)?,
+            tls: NoTls::default(),
             protocol: Http::new(),
-        }))
+        })
     }
 
     /// Create a `Builder` using a Unix domain socket listener bound to the specified socket path.
     #[cfg(unix)]
-    pub fn bind_unix<P, T>(path: P, tls: T) -> io::Result<Builder<UnixIncoming<(), T>>>
+    pub fn bind_unix<P>(path: P) -> io::Result<Builder<UnixAddrIncoming>>
     where
         P: AsRef<Path>,
-        T: MakeTlsTransport<UnixAddrStream>,
-        T::Error: Into<BoxedStdError>,
     {
-        let incoming = izanami_net::unix::AddrIncoming::bind(path)?;
-        Ok(Server::builder(Incoming {
-            make_service: (),
-            incoming,
-            tls,
+        Ok(Builder {
+            incoming: izanami_net::unix::AddrIncoming::bind(path)?,
+            tls: NoTls::default(),
             protocol: Http::new(),
-        }))
+        })
     }
 }
 
-impl<S, T, Sig> Server<TcpIncoming<S, T>, Sig> {
+impl<S, T, Sig> Server<Incoming<S, TcpAddrIncoming, T>, Sig> {
     #[doc(hidden)]
     pub fn local_addr(&self) -> SocketAddr {
         self.stream_service.incoming.local_addr()

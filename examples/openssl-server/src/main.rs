@@ -33,8 +33,9 @@ fn main() {
     };
 
     izanami::rt::run(
-        Server::bind_tcp("127.0.0.1:4000", ssl) //
+        Server::bind_tcp("127.0.0.1:4000")
             .unwrap()
+            .use_tls(ssl)
             .serve(echo),
     )
 }

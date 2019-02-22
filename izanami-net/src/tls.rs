@@ -37,10 +37,6 @@ where
     }
 }
 
-pub fn no_tls() -> NoTls {
-    NoTls::default()
-}
-
 #[cfg(feature = "native-tls")]
 mod native_tls {
     use {

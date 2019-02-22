@@ -46,7 +46,8 @@ fn main() -> failure::Fallible<()> {
     };
 
     izanami::rt::run(
-        Server::bind_tcp("127.0.0.1:4000", rustls)? //
+        Server::bind_tcp("127.0.0.1:4000")? //
+            .use_tls(rustls)
             .serve(echo),
     );
     Ok(())
