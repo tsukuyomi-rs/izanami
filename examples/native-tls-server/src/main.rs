@@ -21,8 +21,9 @@ fn main() {
     let der = Identity::from_pkcs12(IDENTITY, "mypass").unwrap();
     let tls: TlsAcceptor = NativeTlsAcceptor::builder(der).build().unwrap().into();
 
-    Server::bind_tcp("127.0.0.1:4000", tls)
-        .unwrap()
-        .serve(echo)
-        .run()
+    izanami::rt::run(
+        Server::bind_tcp("127.0.0.1:4000", tls) //
+            .unwrap()
+            .serve(echo),
+    )
 }

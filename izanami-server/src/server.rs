@@ -60,17 +60,6 @@ where
             shutdown_signal: self.shutdown_signal,
         }
     }
-
-    pub fn run<C, T>(self)
-    where
-        S: StreamService<Response = (C, T, Http)>,
-        C: HttpService<RequestBody>,
-        C::Error: Into<BoxedStdError>,
-        T: AsyncRead + AsyncWrite,
-        Server<S, Sig>: Spawn<tokio::runtime::Runtime>,
-    {
-        izanami_rt::run(self.build())
-    }
 }
 
 /// An HTTP server.

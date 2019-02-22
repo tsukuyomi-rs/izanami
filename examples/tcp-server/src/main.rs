@@ -14,8 +14,9 @@ fn main() {
         .unwrap()
         .build();
 
-    Server::bind_tcp("127.0.0.1:5000", no_tls())
-        .unwrap()
-        .serve(echo)
-        .run()
+    izanami::rt::run(
+        Server::bind_tcp("127.0.0.1:5000", no_tls()) //
+            .unwrap()
+            .serve(echo),
+    );
 }

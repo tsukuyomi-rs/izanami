@@ -45,8 +45,9 @@ fn main() -> failure::Fallible<()> {
         TlsAcceptor::from(std::sync::Arc::new(config))
     };
 
-    Server::bind_tcp("127.0.0.1:4000", rustls)?
-        .serve(echo)
-        .run();
+    izanami::rt::run(
+        Server::bind_tcp("127.0.0.1:4000", rustls)? //
+            .serve(echo),
+    );
     Ok(())
 }

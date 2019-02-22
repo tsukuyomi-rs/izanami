@@ -32,8 +32,9 @@ fn main() {
         builder.build()
     };
 
-    Server::bind_tcp("127.0.0.1:4000", ssl)
-        .unwrap()
-        .serve(echo)
-        .run()
+    izanami::rt::run(
+        Server::bind_tcp("127.0.0.1:4000", ssl) //
+            .unwrap()
+            .serve(echo),
+    )
 }

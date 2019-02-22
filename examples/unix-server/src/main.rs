@@ -15,10 +15,11 @@ fn main() {
         .expect("invalid route")
         .build();
 
-    Server::bind_unix("/tmp/echo-service.sock", no_tls())
-        .unwrap()
-        .serve(echo)
-        .run()
+    izanami::rt::run(
+        Server::bind_unix("/tmp/echo-service.sock", no_tls()) //
+            .unwrap()
+            .serve(echo),
+    )
 }
 
 #[cfg(not(unix))]

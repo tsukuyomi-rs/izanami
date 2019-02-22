@@ -210,11 +210,11 @@ where
     }
 
     /// Specifies a `make_service` to serve incoming connections.
-    pub fn serve<S>(self, make_service: S) -> Builder<Incoming<S, I, T>, Sig>
+    pub fn serve<S>(self, make_service: S) -> Server<Incoming<S, I, T>, Sig>
     where
         S: MakeHttpService<T::Transport>,
     {
-        Builder {
+        Server {
             stream_service: Incoming {
                 make_service,
                 incoming: self.stream_service.incoming,

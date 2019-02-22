@@ -70,9 +70,8 @@ mod tcp {
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::bind_tcp("127.0.0.1:0", no_tls())?
-            .serve(super::Echo::default())
             .with_graceful_shutdown(rx_shutdown)
-            .build();
+            .serve(super::Echo::default());
         let local_addr = server.local_addr();
         server.start(&mut rt);
 
@@ -147,9 +146,8 @@ mod unix {
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::bind_unix(&sock_path, no_tls())?
-            .serve(super::Echo::default())
             .with_graceful_shutdown(rx_shutdown)
-            .build();
+            .serve(super::Echo::default());
         server.start(&mut rt);
 
         let client = Client::builder() //
@@ -236,9 +234,8 @@ mod native_tls {
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::bind_tcp("127.0.0.1:0", tls)?
-            .serve(super::Echo::default())
             .with_graceful_shutdown(rx_shutdown)
-            .build();
+            .serve(super::Echo::default());
         let local_addr = server.local_addr();
         server.start(&mut rt);
 
@@ -350,9 +347,8 @@ mod openssl {
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::bind_tcp("127.0.0.1:0", tls)?
-            .serve(super::Echo::default())
             .with_graceful_shutdown(rx_shutdown)
-            .build();
+            .serve(super::Echo::default());
         let local_addr = server.local_addr();
         server.start(&mut rt);
 
@@ -478,9 +474,8 @@ mod rustls {
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::bind_tcp("127.0.0.1:0", tls)?
-            .serve(super::Echo::default())
             .with_graceful_shutdown(rx_shutdown)
-            .build();
+            .serve(super::Echo::default());
         let local_addr = server.local_addr();
         server.start(&mut rt);
 
