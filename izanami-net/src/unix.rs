@@ -2,8 +2,8 @@
 
 use {
     super::sleep_on_errors::{Listener, SleepOnErrors},
-    crate::util::MapAsyncExt,
     futures::{Poll, Stream},
+    izanami_util::MapAsyncExt,
     std::{io, os::unix::net::SocketAddr, path::Path, time::Duration},
     tokio::{
         io::{AsyncRead, AsyncWrite},

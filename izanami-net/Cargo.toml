@@ -9,6 +9,7 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/ubnt-intrepid/izanami.git"
 
 [dependencies]
+izanami-util = { version = "0.1.0-preview.1", path = "../izanami-util" }
 futures = "0.1"
 log = "0.4"
 

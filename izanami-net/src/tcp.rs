@@ -1,7 +1,7 @@
 use {
     super::sleep_on_errors::{Listener, SleepOnErrors},
-    crate::util::*,
     futures::{Poll, Stream},
+    izanami_util::*,
     std::{
         io,
         net::{SocketAddr, TcpListener as StdTcpListener, ToSocketAddrs},

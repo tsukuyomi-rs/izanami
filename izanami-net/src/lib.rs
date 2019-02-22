@@ -12,7 +12,6 @@
 #![forbid(clippy::unimplemented)]
 
 mod sleep_on_errors;
-mod util;
 
 pub mod ext;
 pub mod tcp;

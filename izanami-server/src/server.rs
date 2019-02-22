@@ -4,7 +4,6 @@ use {
     crate::{
         drain::{Signal, Watch},
         request::RequestBody,
-        util::*,
         BoxedStdError,
     },
     futures::{future::Executor, Async, Future, Poll},
@@ -14,6 +13,7 @@ use {
     izanami_http::{body::ContentLength, BodyTrailers, HttpBody, HttpService},
     izanami_rt::{Runnable, Runtime, Spawn, Spawner},
     izanami_service::StreamService,
+    izanami_util::*,
     tokio::io::{AsyncRead, AsyncWrite},
 };
 

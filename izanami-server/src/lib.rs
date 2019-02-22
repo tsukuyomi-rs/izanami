@@ -12,7 +12,6 @@
 
 mod drain;
 mod server;
-mod util;
 
 pub mod incoming;
 pub mod request;

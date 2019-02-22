@@ -1,13 +1,14 @@
 //! HTTP request used in this crate.
 
 use {
-    crate::{util::*, BoxedStdError},
+    crate::BoxedStdError,
     bytes::{Buf, BufMut, Bytes},
     futures::{Future, Poll},
     http::HeaderMap,
     hyper::body::Payload as _Payload,
     izanami_buf::{BufStream, SizeHint},
     izanami_http::{body::ContentLength, BodyTrailers, HttpBody, Upgrade},
+    izanami_util::*,
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };
