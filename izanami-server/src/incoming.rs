@@ -1,15 +1,12 @@
 //! The implementation of `StreamService` using a `Stream`.
 
 use {
-    crate::{
-        request::{HttpRequest, RequestBody},
-        BoxedStdError, Server,
-    },
+    crate::{request::RequestBody, BoxedStdError, Server},
     futures::{Async, Future, Poll, Stream},
     hyper::server::conn::Http,
     izanami_http::{HttpBody, HttpService},
     izanami_net::tcp::AddrIncoming as TcpAddrIncoming,
-    izanami_service::{IntoService, Service, StreamService, StreamServiceState},
+    izanami_service::{Service, ServiceRef},
     std::{
         io,
         net::{SocketAddr, ToSocketAddrs},
@@ -29,76 +26,36 @@ pub trait MakeHttpService<T>: self::imp::MakeHttpServiceSealed<T> {
         ResponseBody = Self::ResponseBody,
         Error = Self::Error,
     >;
-    type IntoService: IntoHttpService<
-        T,
-        ResponseBody = Self::ResponseBody,
-        Error = Self::Error,
-        Service = Self::Service,
-    >;
     type MakeError: Into<BoxedStdError>;
-    type Future: Future<Item = Self::IntoService, Error = Self::MakeError>;
+    type Future: Future<Item = Self::Service, Error = Self::MakeError>;
 
     #[doc(hidden)]
-    fn poll_ready(&mut self) -> Poll<(), Self::MakeError> {
-        Ok(Async::Ready(()))
-    }
+    fn poll_ready(&mut self) -> Poll<(), Self::MakeError>;
 
-    fn make_service(&mut self) -> Self::Future;
+    fn make_service(&mut self, target: &T) -> Self::Future;
 }
 
 impl<S, T> MakeHttpService<T> for S
 where
-    S: Service<()>,
-    S::Response: IntoHttpService<T>,
+    S: ServiceRef<T>,
+    S::Response: HttpService<RequestBody>,
     S::Error: Into<BoxedStdError>,
+    <S::Response as HttpService<RequestBody>>::Error: Into<BoxedStdError>,
 {
-    type ResponseBody = <S::Response as IntoHttpService<T>>::ResponseBody;
-    type Error = <S::Response as IntoHttpService<T>>::Error;
-    type Service = <S::Response as IntoHttpService<T>>::Service;
-    type IntoService = S::Response;
+    type ResponseBody = <S::Response as HttpService<RequestBody>>::ResponseBody;
+    type Error = <S::Response as HttpService<RequestBody>>::Error;
+    type Service = S::Response;
     type MakeError = S::Error;
     type Future = S::Future;
 
     #[inline]
     fn poll_ready(&mut self) -> Poll<(), Self::MakeError> {
-        Service::poll_ready(self)
+        ServiceRef::poll_ready(self)
     }
 
     #[inline]
-    fn make_service(&mut self) -> Self::Future {
-        Service::call(self, ())
-    }
-}
-
-/// A value to be converted into an `HttpService`.
-pub trait IntoHttpService<T>: self::imp::IntoHttpServiceSealed<T> {
-    type ResponseBody: HttpBody;
-    type Error: Into<BoxedStdError>;
-    type Service: HttpService<RequestBody, ResponseBody = Self::ResponseBody, Error = Self::Error>;
-
-    fn into_service(self, target: &T) -> Self::Service;
-}
-
-impl<S, T, Bd, Err, Svc> IntoHttpService<T> for S
-where
-    S: for<'a> IntoService<
-        &'a T,
-        HttpRequest,
-        Response = http::Response<Bd>,
-        Error = Err,
-        Service = Svc,
-    >,
-    Bd: HttpBody,
-    Err: Into<BoxedStdError>,
-    Svc: Service<HttpRequest, Response = http::Response<Bd>, Error = Err>,
-{
-    type ResponseBody = Bd;
-    type Error = Err;
-    type Service = Svc;
-
-    #[inline]
-    fn into_service(self, target: &T) -> Self::Service {
-        IntoService::into_service(self, target)
+    fn make_service(&mut self, target: &T) -> Self::Future {
+        ServiceRef::call(self, target)
     }
 }
 
@@ -114,7 +71,7 @@ where
     protocol: Http,
 }
 
-impl<S, I> StreamService<()> for Incoming<S, I>
+impl<S, I> Service<()> for Incoming<S, I>
 where
     S: MakeHttpService<I::Item>,
     I: Stream,
@@ -125,23 +82,25 @@ where
     type Error = BoxedStdError;
     type Future = IncomingFuture<S::Future, I::Item>;
 
-    fn poll_ready(&mut self) -> Poll<StreamServiceState, Self::Error> {
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         if self.stream.is_some() {
-            return Ok(Async::Ready(StreamServiceState::Ready));
+            return Ok(Async::Ready(()));
         }
         match futures::try_ready!(self.incoming.poll().map_err(Into::into)) {
             Some(stream) => {
                 self.stream = Some(stream);
-                Ok(Async::Ready(StreamServiceState::Ready))
+                Ok(Async::Ready(()))
             }
-            None => Ok(Async::Ready(StreamServiceState::Completed)),
+            None => Err(failure::format_err!("incoming closed").compat().into()),
         }
     }
 
     fn call(&mut self, _: ()) -> Self::Future {
+        let stream = self.stream.take().expect("empty stream");
+        let make_service_future = self.make_service.make_service(&stream);
         IncomingFuture {
-            make_service_future: self.make_service.make_service(),
-            stream: Some(self.stream.take().expect("empty stream")),
+            make_service_future,
+            stream: Some(stream),
             protocol: Some(self.protocol.clone()),
         }
     }
@@ -163,21 +122,20 @@ where
 impl<Fut, I> Future for IncomingFuture<Fut, I>
 where
     Fut: Future,
-    Fut::Item: IntoHttpService<I>,
+    Fut::Item: HttpService<RequestBody>,
     Fut::Error: Into<BoxedStdError>,
     I: AsyncRead + AsyncWrite,
 {
-    type Item = (<Fut::Item as IntoHttpService<I>>::Service, I, Http);
+    type Item = (Fut::Item, I, Http);
     type Error = BoxedStdError;
 
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let into_service = futures::try_ready!(self.make_service_future.poll().map_err(Into::into));
+        let service = futures::try_ready!(self.make_service_future.poll().map_err(Into::into));
         let stream = self
             .stream
             .take()
             .expect("the future has already been polled.");
-        let service = into_service.into_service(&stream);
         let protocol = self
             .protocol
             .take()
@@ -264,26 +222,9 @@ mod imp {
 
     impl<S, T> MakeHttpServiceSealed<T> for S
     where
-        S: Service<()>,
-        S::Response: IntoHttpService<T>,
+        S: ServiceRef<T>,
+        S::Response: HttpService<RequestBody>,
         S::Error: Into<BoxedStdError>,
-    {
-    }
-
-    pub trait IntoHttpServiceSealed<T> {}
-
-    impl<S, T, Bd, Err, Svc> IntoHttpServiceSealed<T> for S
-    where
-        S: for<'a> IntoService<
-            &'a T,
-            HttpRequest,
-            Response = http::Response<Bd>,
-            Error = Err,
-            Service = Svc,
-        >,
-        Bd: HttpBody,
-        Err: Into<BoxedStdError>,
-        Svc: Service<HttpRequest, Response = http::Response<Bd>, Error = Err>,
     {
     }
 }

@@ -12,7 +12,7 @@ use {
     izanami_buf::BufStream,
     izanami_http::{body::ContentLength, BodyTrailers, HttpBody, HttpService},
     izanami_rt::{Runnable, Runtime, Spawn, Spawner},
-    izanami_service::{StreamService, StreamServiceState},
+    izanami_service::Service,
     izanami_util::*,
     tokio::io::{AsyncRead, AsyncWrite},
 };
@@ -47,7 +47,7 @@ impl<S> Server<S> {
 
 impl<S, C, T, Sig> Server<S, Sig>
 where
-    S: StreamService<(), Response = (C, T, Http)>,
+    S: Service<(), Response = (C, T, Http)>,
     C: HttpService<RequestBody>,
     C::Error: Into<BoxedStdError>,
     T: AsyncRead + AsyncWrite,
@@ -134,7 +134,7 @@ macro_rules! spawn_all_task {
 
         let serve_connection_fn = {
             let executor = executor.clone();
-            move |fut: <$S as StreamService<()>>::Future, watch: Watch| {
+            move |fut: <$S as Service<()>>::Future, watch: Watch| {
                 let executor = executor.clone();
                 fut.map_err(|_e| log::error!("stream service error"))
                     .and_then(move |(service, stream, protocol)| {
@@ -170,7 +170,7 @@ macro_rules! impl_spawn_for_server {
     ($t:ty, ($rt:ident, $task:ident) => $e:expr) => {
         impl<S, C, T, Sig> Spawn<$t> for Server<S, Sig>
         where
-            S: StreamService<(), Response = (C, T, Http)> + Send + 'static,
+            S: Service<(), Response = (C, T, Http)> + Send + 'static,
             S::Future: Send + 'static,
             C: HttpService<RequestBody> + Send + 'static,
             C::ResponseBody: Send + 'static,
@@ -196,7 +196,7 @@ macro_rules! impl_spawn_for_server {
     (!Send $t:ty, ($rt:ident, $task:ident) => $e:expr) => {
         impl<S, C, T, Sig> Spawn<$t> for Server<S, Sig>
         where
-            S: StreamService<(), Response = (C, T, Http)> + 'static,
+            S: Service<(), Response = (C, T, Http)> + 'static,
             S::Future: 'static,
             C: HttpService<RequestBody> + 'static,
             C::ResponseBody: Send + 'static,
@@ -237,7 +237,7 @@ impl_spawn_for_server!(!Send tokio::runtime::current_thread::TaskExecutor,
 
 impl<S, C, T, Sig> Runnable<tokio::runtime::Runtime> for Server<S, Sig>
 where
-    S: StreamService<(), Response = (C, T, Http)> + Send + 'static,
+    S: Service<(), Response = (C, T, Http)> + Send + 'static,
     S::Error: Send + 'static,
     S::Future: Send + 'static,
     C: HttpService<RequestBody> + Send + 'static,
@@ -260,7 +260,7 @@ where
 
 impl<S, C, T, Sig> Runnable<tokio::runtime::current_thread::Runtime> for Server<S, Sig>
 where
-    S: StreamService<(), Response = (C, T, Http)>,
+    S: Service<(), Response = (C, T, Http)>,
     S::Future: 'static,
     C: HttpService<RequestBody> + 'static,
     C::ResponseBody: Send + 'static,
@@ -297,7 +297,7 @@ enum SpawnAllState<S, Sig, F, E> {
 
 impl<S, C, T, Sig, F, Fut, E> Future for SpawnAll<S, Sig, F, E>
 where
-    S: StreamService<(), Response = (C, T, Http)>,
+    S: Service<(), Response = (C, T, Http)>,
     C: HttpService<RequestBody>,
     C::ResponseBody: Send + 'static,
     C::Error: Into<BoxedStdError>,
@@ -326,20 +326,13 @@ where
                         SpawnAllState::Done(signal.drain())
                     }
                     Ok(Async::NotReady) => {
-                        match futures::try_ready!(stream_service.poll_ready()) {
-                            StreamServiceState::Ready => {
-                                let fut = stream_service.call(());
-                                let serve_connection = serve_connection_fn(fut, watch.clone());
-                                executor
-                                    .execute(serve_connection)
-                                    .unwrap_or_else(|_e| log::error!("executor error"));
-                                continue;
-                            }
-                            StreamServiceState::Completed => {
-                                // should be wait for the background tasks to finish?
-                                return Ok(Async::Ready(()));
-                            }
-                        }
+                        futures::try_ready!(stream_service.poll_ready());
+                        let fut = stream_service.call(());
+                        let serve_connection = serve_connection_fn(fut, watch.clone());
+                        executor
+                            .execute(serve_connection)
+                            .unwrap_or_else(|_e| log::error!("executor error"));
+                        continue;
                     }
                 },
                 SpawnAllState::Done(ref mut draining) => {
