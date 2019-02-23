@@ -1,17 +1,25 @@
 use {
     crate::Service,
-    futures::{Async, Future, Poll},
+    futures::{Future, Poll},
+    izanami_util::*,
 };
 
-/// Asynchronous stream that produces a sequence of futures.
+/// The kinds of preparation state returned from `StreamService`.
+#[derive(Debug, Copy, Clone, PartialEq)]
+pub enum StreamServiceState {
+    /// The service is ready to call.
+    Ready,
+
+    /// The service was shutdown in a normal procedure.
+    Completed,
+}
+
+/// An extension of `Service` which provides the ability
+/// to return the preparing state.
 ///
-/// The role of this trait is similar to [`Stream`], except that
-/// the value produced by this stream is [`Future`].
-///
-/// [`Stream`]: https://docs.rs/futures/0.1/futures/stream/trait.Stream.html
-/// [`Future`]: https://docs.rs/futures/0.1/futures/future/trait.Future.html
-#[allow(missing_docs)]
-pub trait StreamService {
+/// The signature of this trait is almost the same as `Service`,
+/// except that the return type of `poll_ready`.
+pub trait StreamService<T> {
     /// The response type of produced future.
     type Response;
 
@@ -21,21 +29,34 @@ pub trait StreamService {
     /// The type of future produced by this stream.
     type Future: Future<Item = Self::Response, Error = Self::Error>;
 
-    /// Attempts to pull out a future from this stream.
-    fn poll_next_service(&mut self) -> Poll<Option<Self::Future>, Self::Error>;
+    /// Returns whether to ready the service is able to process requests.
+    ///
+    /// Unlike `Service::poll_ready`, this method may return a `Completed`
+    /// that indicates the service has already been terminated in a normal
+    /// procedure. these situation may occur when the inner `Stream` returned
+    /// an `Ok(Async::Ready(None))`.
+    fn poll_ready(&mut self) -> Poll<StreamServiceState, Self::Error>;
+
+    /// Process the request and return its response asynchronously.
+    ///
+    /// This method may cause a panic when the service has already been terminated.
+    fn call(&mut self, target: T) -> Self::Future;
 }
 
-impl<S> StreamService for S
+impl<S, T> StreamService<T> for S
 where
-    S: Service<()>,
+    S: Service<T>,
 {
     type Response = S::Response;
     type Error = S::Error;
     type Future = S::Future;
 
+    fn poll_ready(&mut self) -> Poll<StreamServiceState, Self::Error> {
+        Service::poll_ready(self).map_async(|()| StreamServiceState::Ready)
+    }
+
     #[inline]
-    fn poll_next_service(&mut self) -> Poll<Option<Self::Future>, Self::Error> {
-        futures::try_ready!(Service::poll_ready(self));
-        Ok(Async::Ready(Some(Service::call(self, ()))))
+    fn call(&mut self, target: T) -> Self::Future {
+        Service::call(self, target)
     }
 }

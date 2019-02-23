@@ -29,5 +29,5 @@ pub use crate::{
     service_fn::service_fn,
     service_mut::ServiceMut,
     service_ref::ServiceRef,
-    stream_service::StreamService,
+    stream_service::{StreamService, StreamServiceState},
 };

@@ -9,7 +9,7 @@ use {
     hyper::server::conn::Http,
     izanami_http::{HttpBody, HttpService},
     izanami_net::tcp::AddrIncoming as TcpAddrIncoming,
-    izanami_service::{IntoService, Service, StreamService},
+    izanami_service::{IntoService, Service, StreamService, StreamServiceState},
     std::{
         io,
         net::{SocketAddr, ToSocketAddrs},
@@ -104,13 +104,17 @@ where
 
 /// A `StreamService` that uses a `Stream` of I/O objects.
 #[derive(Debug)]
-pub struct Incoming<S, I> {
+pub struct Incoming<S, I>
+where
+    I: Stream,
+{
     make_service: S,
     incoming: I,
+    stream: Option<I::Item>,
     protocol: Http,
 }
 
-impl<S, I> StreamService for Incoming<S, I>
+impl<S, I> StreamService<()> for Incoming<S, I>
 where
     S: MakeHttpService<I::Item>,
     I: Stream,
@@ -121,17 +125,25 @@ where
     type Error = BoxedStdError;
     type Future = IncomingFuture<S::Future, I::Item>;
 
-    fn poll_next_service(&mut self) -> Poll<Option<Self::Future>, Self::Error> {
-        let stream = match futures::try_ready!(self.incoming.poll().map_err(Into::into)) {
-            Some(stream) => stream,
-            None => return Ok(Async::Ready(None)),
-        };
-        let make_service_future = self.make_service.make_service();
-        Ok(Async::Ready(Some(IncomingFuture {
-            make_service_future,
-            stream: Some(stream),
+    fn poll_ready(&mut self) -> Poll<StreamServiceState, Self::Error> {
+        if self.stream.is_some() {
+            return Ok(Async::Ready(StreamServiceState::Ready));
+        }
+        match futures::try_ready!(self.incoming.poll().map_err(Into::into)) {
+            Some(stream) => {
+                self.stream = Some(stream);
+                Ok(Async::Ready(StreamServiceState::Ready))
+            }
+            None => Ok(Async::Ready(StreamServiceState::Completed)),
+        }
+    }
+
+    fn call(&mut self, _: ()) -> Self::Future {
+        IncomingFuture {
+            make_service_future: self.make_service.make_service(),
+            stream: Some(self.stream.take().expect("empty stream")),
             protocol: Some(self.protocol.clone()),
-        })))
+        }
     }
 }
 
@@ -207,6 +219,7 @@ where
         Server::new(Incoming {
             make_service,
             incoming: self.incoming,
+            stream: None,
             protocol: self.protocol,
         })
     }
