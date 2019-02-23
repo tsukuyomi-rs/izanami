@@ -13,15 +13,6 @@ izanami-util = { version = "0.1.0-preview.1", path = "../izanami-util" }
 futures = "0.1"
 log = "0.4"
 
-native-tls-crate = { package = "native-tls", version = "0.2", optional = true }
-tokio-tls = { version = "0.2", optional = true }
-
-rustls-crate = { package = "rustls", version = "0.14", optional = true }
-tokio-rustls = { version = "0.8", optional = true }
-
-openssl-crate = { package = "openssl", version = "0.10", optional = true }
-tokio-openssl = { version = "0.3", optional = true }
-
 [dependencies.tokio]
 version = "0.1"
 default-features = false
@@ -30,8 +21,3 @@ features = ["io", "reactor", "tcp", "timer", "uds"]
 [dev-dependencies]
 version-sync = "0.7"
 tokio = "0.1" # with default features
-
-[features]
-native-tls = ["native-tls-crate", "tokio-tls"]
-rustls = ["rustls-crate", "tokio-rustls"]
-openssl = ["openssl-crate", "tokio-openssl"]

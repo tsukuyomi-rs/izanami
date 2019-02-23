@@ -15,5 +15,4 @@ mod sleep_on_errors;
 
 pub mod ext;
 pub mod tcp;
-pub mod tls;
 pub mod unix;

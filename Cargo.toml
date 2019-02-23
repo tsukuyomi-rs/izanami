@@ -28,25 +28,14 @@ failure = "0.1"
 futures = "0.1"
 http = "0.1"
 hyper = "0.12"
-native-tls-crate = { package = "native-tls", version = "0.2" }
-openssl-crate = { package = "openssl", version = "0.10" }
-rustls-crate = { package = "rustls", version = "0.14" }
 tempfile = "3"
 tokio = "0.1"
-tokio-openssl = "0.3"
-tokio-rustls = "0.8"
-tokio-tls = "0.2"
 version-sync = "0.7"
 
 [dev-dependencies.cargo-husky]
 version = "1"
 default-features = false
 features = ["user-hooks"]
-
-[features]
-native-tls = ["izanami-net/native-tls"]
-openssl = ["izanami-net/openssl"]
-rustls = ["izanami-net/rustls"]
 
 [workspace]
 members = [
@@ -59,9 +48,9 @@ members = [
   "izanami-util",
 
   "examples/echo-service",
-  "examples/native-tls-server",
-  "examples/openssl-server",
-  "examples/rustls-server",
+  # "examples/native-tls-server",
+  # "examples/openssl-server",
+  # "examples/rustls-server",
   "examples/tcp-server",
   "examples/unix-server",
 ]
