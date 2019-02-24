@@ -41,7 +41,7 @@ members = [
 
   "examples/tcp-server",
   "examples/unix-server",
-  # "examples/native-tls-server",
-  # "examples/openssl-server",
-  # "examples/rustls-server",
+  "examples/native-tls-server",
+  "examples/openssl-server",
+  "examples/rustls-server",
 ]

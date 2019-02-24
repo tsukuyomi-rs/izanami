@@ -11,8 +11,9 @@ path = "src/main.rs"
 doc = false
 
 [dependencies]
-izanami = { path = "../..", features = ["openssl"] }
-openssl = "0.10"
-
-echo-service = { path = "../echo-service" }
+izanami = { path = "../.." }
+failure = "0.1"
+futures = "0.1"
 http = "0.1"
+openssl = "0.10"
+tokio-openssl = "0.3"
