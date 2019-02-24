@@ -1,30 +1,39 @@
 use {
-    echo_service::Echo, //
+    futures::prelude::*,
     http::Response,
-    izanami::server::Server,
-    native_tls::{Identity, TlsAcceptor as NativeTlsAcceptor},
-    tokio_tls::TlsAcceptor,
+    izanami::{
+        server::{Incoming, Server}, //
+        service::{service_fn_ok, ServiceExt},
+    },
 };
 
 const IDENTITY: &[u8] = include_bytes!("../../../test/identity.pfx");
 
-fn main() {
-    let echo = Echo::builder()
-        .add_route("/", |_| {
-            Response::builder() //
-                .body("Hello")
-                .unwrap()
-        })
-        .unwrap()
-        .build();
+fn main() -> failure::Fallible<()> {
+    let tls_acceptor = tokio_tls::TlsAcceptor::from({
+        let der = native_tls::Identity::from_pkcs12(IDENTITY, "mypass")?;
+        native_tls::TlsAcceptor::builder(der).build()?
+    });
 
-    let der = Identity::from_pkcs12(IDENTITY, "mypass").unwrap();
-    let tls: TlsAcceptor = NativeTlsAcceptor::builder(der).build().unwrap().into();
+    let incoming_service = Incoming::bind_tcp("127.0.0.1:5000")? //
+        .serve(service_fn_ok(|()| {
+            service_fn_ok(|_req| {
+                Response::builder()
+                    .header("content-type", "text/plain")
+                    .body("Hello")
+                    .unwrap()
+            })
+        }))
+        .fixed_service()
+        .and_then(move |(service, stream, protocol)| {
+            tls_acceptor
+                .accept(stream)
+                .map(move |stream| (service, stream, protocol))
+                .map_err(Into::into)
+        });
 
-    izanami::rt::run(
-        Server::bind_tcp("127.0.0.1:4000") //
-            .unwrap()
-            .use_tls(tls)
-            .serve(echo),
-    )
+    let server = Server::new(incoming_service);
+    izanami::rt::run(server);
+
+    Ok(())
 }
