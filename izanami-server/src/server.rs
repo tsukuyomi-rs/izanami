@@ -9,12 +9,12 @@ use {
     futures::{future::Executor, Async, Future, Poll},
     http::{Request, Response},
     hyper::server::conn::Http,
-    izanami_buf::BufStream,
     izanami_http::{body::ContentLength, BodyTrailers, HttpBody, HttpService},
     izanami_rt::{Runnable, Runtime, Spawn, Spawner},
     izanami_service::Service,
     izanami_util::*,
     tokio::io::{AsyncRead, AsyncWrite},
+    tokio_buf::BufStream,
 };
 
 /// An HTTP server.

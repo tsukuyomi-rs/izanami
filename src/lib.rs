@@ -12,8 +12,7 @@
 
 #[doc(no_inline)]
 pub use {
-    izanami_buf as buf, //
-    izanami_http as http,
+    izanami_http as http, //
     izanami_net as net,
     izanami_rt as rt,
     izanami_server as server,

@@ -3,7 +3,7 @@
 use {
     futures::{Async, Future, Poll},
     http::HeaderMap,
-    izanami_buf::BufStream,
+    tokio_buf::BufStream,
 };
 
 #[doc(hidden)]
@@ -48,8 +48,6 @@ impl_body_for_sized_types! {
     Vec<u8>,
     &'static str,
     &'static [u8],
-    std::borrow::Cow<'static, str>,
-    std::borrow::Cow<'static, [u8]>,
     bytes::Bytes,
     bytes::BytesMut,
 }
@@ -87,8 +85,6 @@ impl_has_trailers! {
     &'static str,
     Vec<u8>,
     &'static [u8],
-    std::borrow::Cow<'static, str>,
-    std::borrow::Cow<'static, [u8]>,
     bytes::Bytes,
     bytes::BytesMut,
 }

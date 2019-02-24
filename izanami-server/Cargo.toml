@@ -5,7 +5,6 @@ authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-izanami-buf = { version = "0.1.0-preview.1", path = "../izanami-buf" }
 izanami-http = { version = "0.1.0-preview.1", path = "../izanami-http" }
 izanami-net = { version = "0.1.0-preview.1", path = "../izanami-net" }
 izanami-rt = { version = "0.1.0-preview.1", path = "../izanami-rt" }
@@ -19,6 +18,7 @@ http = "0.1"
 hyper = "0.12"
 log = "0.4"
 tokio = { version = "0.1.15", features = ["sync"] }
+tokio-buf = "0.1"
 
 [dev-dependencies]
 version-sync = "0.7"

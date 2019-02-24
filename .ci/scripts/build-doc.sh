@@ -5,7 +5,6 @@ set -ex
 cargo doc --no-deps -p tower-service
 
 cargo doc --no-deps -p izanami-util
-cargo doc --no-deps -p izanami-buf
 cargo doc --no-deps -p izanami-http
 cargo doc --no-deps -p izanami-net
 cargo doc --no-deps -p izanami-rt
