@@ -20,7 +20,7 @@ use {
 /// An HTTP server.
 #[derive(Debug)]
 pub struct Server<S, Sig = futures::future::Empty<(), ()>> {
-    pub(crate) stream_service: S,
+    stream_service: S,
     shutdown_signal: Sig,
 }
 

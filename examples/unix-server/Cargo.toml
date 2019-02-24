@@ -12,5 +12,4 @@ doc = false
 
 [dependencies]
 izanami = { path = "../.." }
-echo-service = { path = "../echo-service" }
 http = "0.1"

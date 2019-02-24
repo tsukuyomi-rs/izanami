@@ -19,7 +19,7 @@ pub mod request;
 #[allow(dead_code)]
 type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-pub use crate::server::Server;
+pub use crate::{incoming::Incoming, server::Server};
 
 #[doc(no_inline)]
 pub use hyper::server::conn::Http;

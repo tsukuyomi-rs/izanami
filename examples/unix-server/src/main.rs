@@ -1,25 +1,30 @@
 use {
-    echo_service::Echo, //
     http::Response,
-    izanami::server::Server,
+    izanami::{
+        server::{Incoming, Server}, //
+        service::service_fn_ok,
+    },
+    std::io,
 };
 
 #[cfg(unix)]
-fn main() {
-    let echo = Echo::builder()
-        .add_route("/", |_cx| {
-            Response::builder() //
+fn main() -> io::Result<()> {
+    let make_service = service_fn_ok(|_| {
+        service_fn_ok(|_req| {
+            Response::builder()
+                .header("content-type", "text/plain")
                 .body("Hello")
                 .unwrap()
         })
-        .expect("invalid route")
-        .build();
+    });
 
-    izanami::rt::run(
-        Server::bind_unix("/tmp/echo-service.sock") //
-            .unwrap()
-            .serve(echo),
-    )
+    let incoming_service = Incoming::bind_unix("/tmp/echo-service.sock")? //
+        .serve(make_service);
+
+    let server = Server::new(incoming_service);
+    izanami::rt::run(server);
+
+    Ok(())
 }
 
 #[cfg(not(unix))]

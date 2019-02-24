@@ -23,12 +23,6 @@ izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
 izanami-util = { version = "0.1.0-preview.1", path = "izanami-util" }
 
 [dev-dependencies]
-failure = "0.1"
-futures = "0.1"
-http = "0.1"
-hyper = "0.12"
-tempfile = "3"
-tokio = "0.1"
 version-sync = "0.7"
 
 [dev-dependencies.cargo-husky]
@@ -45,10 +39,9 @@ members = [
   "izanami-service",
   "izanami-util",
 
-  "examples/echo-service",
+  "examples/tcp-server",
+  "examples/unix-server",
   # "examples/native-tls-server",
   # "examples/openssl-server",
   # "examples/rustls-server",
-  "examples/tcp-server",
-  "examples/unix-server",
 ]

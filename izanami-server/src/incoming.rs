@@ -1,86 +1,70 @@
 //! The implementation of `StreamService` using a `Stream`.
 
 use {
-    crate::{request::RequestBody, BoxedStdError, Server},
+    crate::BoxedStdError,
     futures::{Async, Future, Poll, Stream},
     hyper::server::conn::Http,
-    izanami_http::{HttpBody, HttpService},
     izanami_net::tcp::AddrIncoming as TcpAddrIncoming,
-    izanami_service::{Service, ServiceRef},
-    std::{
-        io,
-        net::{SocketAddr, ToSocketAddrs},
-    },
+    izanami_service::Service,
+    std::{io, net::ToSocketAddrs},
     tokio::io::{AsyncRead, AsyncWrite},
 };
 
 #[cfg(unix)]
 use {izanami_net::unix::AddrIncoming as UnixAddrIncoming, std::path::Path};
 
-/// An asynchronous factory of `HttpService`s.
-pub trait MakeHttpService<T>: self::imp::MakeHttpServiceSealed<T> {
-    type ResponseBody: HttpBody;
-    type Error: Into<BoxedStdError>;
-    type Service: HttpService<
-        RequestBody, //
-        ResponseBody = Self::ResponseBody,
-        Error = Self::Error,
-    >;
-    type MakeError: Into<BoxedStdError>;
-    type Future: Future<Item = Self::Service, Error = Self::MakeError>;
-
-    #[doc(hidden)]
-    fn poll_ready(&mut self) -> Poll<(), Self::MakeError>;
-
-    fn make_service(&mut self, target: &T) -> Self::Future;
-}
-
-impl<S, T> MakeHttpService<T> for S
-where
-    S: ServiceRef<T>,
-    S::Response: HttpService<RequestBody>,
-    S::Error: Into<BoxedStdError>,
-    <S::Response as HttpService<RequestBody>>::Error: Into<BoxedStdError>,
-{
-    type ResponseBody = <S::Response as HttpService<RequestBody>>::ResponseBody;
-    type Error = <S::Response as HttpService<RequestBody>>::Error;
-    type Service = S::Response;
-    type MakeError = S::Error;
-    type Future = S::Future;
-
-    #[inline]
-    fn poll_ready(&mut self) -> Poll<(), Self::MakeError> {
-        ServiceRef::poll_ready(self)
-    }
-
-    #[inline]
-    fn make_service(&mut self, target: &T) -> Self::Future {
-        ServiceRef::call(self, target)
-    }
-}
-
-/// A `StreamService` that uses a `Stream` of I/O objects.
+/// A `Service` that produces pairs of an incoming stream and an associated service.
 #[derive(Debug)]
-pub struct Incoming<S, I>
-where
-    I: Stream,
-{
-    make_service: S,
+pub struct Incoming<I: Stream, S> {
     incoming: I,
     stream: Option<I::Item>,
+    make_service: S,
     protocol: Http,
 }
 
-impl<S, I> Service<()> for Incoming<S, I>
+impl<I> Incoming<I, ()>
 where
-    S: MakeHttpService<I::Item>,
+    I: Stream,
+    I::Error: Into<BoxedStdError>,
+{
+    pub fn builder(incoming: I) -> Builder<I> {
+        Builder {
+            incoming,
+            protocol: Http::new(),
+        }
+    }
+}
+
+impl Incoming<TcpAddrIncoming, ()> {
+    pub fn bind_tcp<A>(addr: A) -> io::Result<Builder<TcpAddrIncoming>>
+    where
+        A: ToSocketAddrs,
+    {
+        Ok(Incoming::builder(TcpAddrIncoming::bind(addr)?))
+    }
+}
+
+#[cfg(unix)]
+impl Incoming<UnixAddrIncoming, ()> {
+    pub fn bind_unix<P>(path: P) -> io::Result<Builder<UnixAddrIncoming>>
+    where
+        P: AsRef<Path>,
+    {
+        Ok(Incoming::builder(UnixAddrIncoming::bind(path)?))
+    }
+}
+
+impl<I, S> Service<()> for Incoming<I, S>
+where
     I: Stream,
     I::Item: AsyncRead + AsyncWrite,
     I::Error: Into<BoxedStdError>,
+    S: Service<()>,
+    S::Error: Into<BoxedStdError>,
 {
-    type Response = (S::Service, I::Item, Http);
+    type Response = (S::Response, I::Item, Http);
     type Error = BoxedStdError;
-    type Future = IncomingFuture<S::Future, I::Item>;
+    type Future = IncomingFuture<I, S>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
         if self.stream.is_some() {
@@ -97,7 +81,7 @@ where
 
     fn call(&mut self, _: ()) -> Self::Future {
         let stream = self.stream.take().expect("empty stream");
-        let make_service_future = self.make_service.make_service(&stream);
+        let make_service_future = self.make_service.call(());
         IncomingFuture {
             make_service_future,
             stream: Some(stream),
@@ -108,25 +92,28 @@ where
 
 #[doc(hidden)]
 #[allow(missing_debug_implementations, clippy::type_complexity)]
-pub struct IncomingFuture<Fut, I>
+pub struct IncomingFuture<I, S>
 where
-    Fut: Future,
-    Fut::Error: Into<BoxedStdError>,
-    I: AsyncRead + AsyncWrite,
+    I: Stream,
+    I::Item: AsyncRead + AsyncWrite,
+    I::Error: Into<BoxedStdError>,
+    S: Service<()>,
+    S::Error: Into<BoxedStdError>,
 {
-    make_service_future: Fut,
-    stream: Option<I>,
+    make_service_future: S::Future,
+    stream: Option<I::Item>,
     protocol: Option<Http>,
 }
 
-impl<Fut, I> Future for IncomingFuture<Fut, I>
+impl<I, S> Future for IncomingFuture<I, S>
 where
-    Fut: Future,
-    Fut::Item: HttpService<RequestBody>,
-    Fut::Error: Into<BoxedStdError>,
-    I: AsyncRead + AsyncWrite,
+    I: Stream,
+    I::Item: AsyncRead + AsyncWrite,
+    I::Error: Into<BoxedStdError>,
+    S: Service<()>,
+    S::Error: Into<BoxedStdError>,
 {
-    type Item = (Fut::Item, I, Http);
+    type Item = (S::Response, I::Item, Http);
     type Error = BoxedStdError;
 
     #[inline]
@@ -170,61 +157,16 @@ where
     }
 
     /// Specifies a `make_service` to serve incoming connections.
-    pub fn serve<S>(self, make_service: S) -> Server<Incoming<S, I>>
+    pub fn serve<S>(self, make_service: S) -> Incoming<I, S>
     where
-        S: MakeHttpService<I::Item>,
+        S: Service<()>,
+        S::Error: Into<BoxedStdError>,
     {
-        Server::new(Incoming {
+        Incoming {
             make_service,
             incoming: self.incoming,
             stream: None,
             protocol: self.protocol,
-        })
-    }
-}
-
-impl Server<()> {
-    /// Create a `Builder` using a TCP listener bound to the specified address.
-    pub fn bind_tcp<A>(addr: A) -> io::Result<Builder<TcpAddrIncoming>>
-    where
-        A: ToSocketAddrs,
-    {
-        Ok(Builder {
-            incoming: izanami_net::tcp::AddrIncoming::bind(addr)?,
-            protocol: Http::new(),
-        })
-    }
-
-    /// Create a `Builder` using a Unix domain socket listener bound to the specified socket path.
-    #[cfg(unix)]
-    pub fn bind_unix<P>(path: P) -> io::Result<Builder<UnixAddrIncoming>>
-    where
-        P: AsRef<Path>,
-    {
-        Ok(Builder {
-            incoming: izanami_net::unix::AddrIncoming::bind(path)?,
-            protocol: Http::new(),
-        })
-    }
-}
-
-impl<S, Sig> Server<Incoming<S, TcpAddrIncoming>, Sig> {
-    #[doc(hidden)]
-    pub fn local_addr(&self) -> SocketAddr {
-        self.stream_service.incoming.local_addr()
-    }
-}
-
-mod imp {
-    use super::*;
-
-    pub trait MakeHttpServiceSealed<T> {}
-
-    impl<S, T> MakeHttpServiceSealed<T> for S
-    where
-        S: ServiceRef<T>,
-        S::Response: HttpService<RequestBody>,
-        S::Error: Into<BoxedStdError>,
-    {
+        }
     }
 }

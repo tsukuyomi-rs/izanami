@@ -25,7 +25,7 @@ pub use tower_service::Service;
 pub use crate::{
     into_service::IntoService, //
     make_service::MakeService,
-    service_fn::service_fn,
+    service_fn::{service_fn, service_fn_ok},
     service_mut::ServiceMut,
     service_ref::ServiceRef,
 };
