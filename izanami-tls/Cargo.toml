@@ -1,0 +1,16 @@
+[package]
+name = "izanami-tls"
+version = "0.1.0"
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+izanami = { version = "0.1.0-preview.1", path = ".." }
+native-tls = "0.2"
+tokio-tls = "0.2"
+
+[dev-dependencies]
+failure = "0.1.3"
+futures = "0.1"
+http = "0.1"
+version-sync = "0.7"

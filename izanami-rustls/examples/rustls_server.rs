@@ -6,26 +6,23 @@ use {
         server::{Incoming, Server}, //
         service::{service_fn_ok, ServiceExt},
     },
-    std::{io, sync::Arc},
+    std::{fs, io, sync::Arc},
     tokio_rustls::{
         rustls::{NoClientAuth, ServerConfig},
         TlsAcceptor,
     },
 };
 
-const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
-const PRIVATE_KEY: &[u8] = include_bytes!("../../../test/server-key.pem");
-
 fn main() -> failure::Fallible<()> {
     let rustls_acceptor = TlsAcceptor::from({
         let certs = {
-            let mut reader = io::BufReader::new(io::Cursor::new(CERTIFICATE));
+            let mut reader = io::BufReader::new(fs::File::open("keys/server-crt.pem")?);
             tokio_rustls::rustls::internal::pemfile::certs(&mut reader)
                 .map_err(|_| format_err!("failed to read certificate file"))?
         };
 
         let priv_key = {
-            let mut reader = io::BufReader::new(io::Cursor::new(PRIVATE_KEY));
+            let mut reader = io::BufReader::new(fs::File::open("keys/server-key.pem")?);
             let rsa_keys = {
                 tokio_rustls::rustls::internal::pemfile::rsa_private_keys(&mut reader)
                     .map_err(|_| format_err!("failed to read private key file as RSA"))?

@@ -7,11 +7,10 @@ use {
     },
 };
 
-const IDENTITY: &[u8] = include_bytes!("../../../test/identity.pfx");
-
 fn main() -> failure::Fallible<()> {
     let tls_acceptor = tokio_tls::TlsAcceptor::from({
-        let der = native_tls::Identity::from_pkcs12(IDENTITY, "mypass")?;
+        let identity = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/..keys/identity.pfx"))?;
+        let der = native_tls::Identity::from_pkcs12(&identity, "mypass")?;
         native_tls::TlsAcceptor::builder(der).build()?
     });
 

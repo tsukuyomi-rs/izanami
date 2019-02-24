@@ -10,21 +10,25 @@ use {
         ssl::{SslAcceptor, SslMethod},
         x509::X509,
     },
-    std::io,
     tokio_openssl::SslAcceptorExt,
 };
 
-const CERTIFICATE: &[u8] = include_bytes!("../../../test/server-crt.pem");
-const PRIVATE_KEY: &[u8] = include_bytes!("../../../test/server-key.pem");
+fn main() -> failure::Fallible<()> {
+    let cert = {
+        let certificate = std::fs::read("keys/server-crt.pem")?;
+        X509::from_pem(&certificate)?
+    };
 
-fn main() -> io::Result<()> {
-    let cert = X509::from_pem(CERTIFICATE).unwrap();
-    let pkey = PKey::private_key_from_pem(PRIVATE_KEY).unwrap();
+    let pkey = {
+        let private_key = std::fs::read("keys/server-key.pem")?;
+        PKey::private_key_from_pem(&private_key)?
+    };
+
     let ssl_acceptor = {
-        let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls()).unwrap();
-        builder.set_certificate(&cert).unwrap();
-        builder.set_private_key(&pkey).unwrap();
-        builder.check_private_key().unwrap();
+        let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
+        builder.set_certificate(&cert)?;
+        builder.set_private_key(&pkey)?;
+        builder.check_private_key()?;
         builder.build()
     };
 

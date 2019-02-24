@@ -23,6 +23,7 @@ izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
 izanami-util = { version = "0.1.0-preview.1", path = "izanami-util" }
 
 [dev-dependencies]
+http = "0.1"
 version-sync = "0.7"
 
 [dev-dependencies.cargo-husky]
@@ -39,9 +40,8 @@ members = [
   "izanami-service",
   "izanami-util",
 
-  "examples/tcp-server",
-  "examples/unix-server",
-  "examples/native-tls-server",
-  "examples/openssl-server",
-  "examples/rustls-server",
+  # SSL/TLS support (not available)
+  "izanami-tls",
+  "izanami-openssl",
+  "izanami-rustls",
 ]
