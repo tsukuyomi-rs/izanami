@@ -6,11 +6,11 @@ use {
     futures::{Future, Poll},
     http::HeaderMap,
     hyper::body::Payload as _Payload,
-    izanami_buf::{BufStream, SizeHint},
     izanami_http::{body::ContentLength, BodyTrailers, HttpBody, Upgrade},
     izanami_util::*,
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
+    tokio_buf::{BufStream, SizeHint},
 };
 
 /// The message body of an incoming HTTP request.
