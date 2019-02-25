@@ -17,7 +17,8 @@ use {
     tokio_buf::BufStream,
 };
 
-/// A trait that abstracts the connection to client and associated service.
+/// A trait abstracting a factory that produces the connection with a client
+/// and the service associated with its connection.
 pub trait MakeConnection {
     /// A transport for sending/receiving data with the client.
     type Transport: AsyncRead + AsyncWrite;
