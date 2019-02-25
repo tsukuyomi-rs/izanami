@@ -17,9 +17,15 @@ use {izanami_net::unix::AddrIncoming as UnixAddrIncoming, std::path::Path};
 #[derive(Debug)]
 pub struct Incoming<I: Stream, S> {
     incoming: I,
-    stream: Option<I::Item>,
+    state: IncomingState<I::Item>,
     make_service: S,
     protocol: Http,
+}
+
+#[derive(Debug)]
+enum IncomingState<I> {
+    Pending,
+    Ready(I),
 }
 
 impl<I> Incoming<I, ()>
@@ -67,20 +73,24 @@ where
     type Future = IncomingFuture<I, S>;
 
     fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        if self.stream.is_some() {
-            return Ok(Async::Ready(()));
-        }
-        match futures::try_ready!(self.incoming.poll().map_err(Into::into)) {
-            Some(stream) => {
-                self.stream = Some(stream);
-                Ok(Async::Ready(()))
-            }
-            None => Err(failure::format_err!("incoming closed").compat().into()),
+        loop {
+            self.state = match self.state {
+                IncomingState::Pending => {
+                    futures::try_ready!(self.make_service.poll_ready().map_err(Into::into));
+                    let stream = futures::try_ready!(self.incoming.poll().map_err(Into::into))
+                        .ok_or_else(|| failure::format_err!("incoming closed").compat())?;
+                    IncomingState::Ready(stream)
+                }
+                IncomingState::Ready(..) => return Ok(Async::Ready(())),
+            };
         }
     }
 
     fn call(&mut self, _: ()) -> Self::Future {
-        let stream = self.stream.take().expect("empty stream");
+        let stream = match std::mem::replace(&mut self.state, IncomingState::Pending) {
+            IncomingState::Ready(stream) => stream,
+            IncomingState::Pending => panic!("the service is not ready"),
+        };
         let make_service_future = self.make_service.call(());
         IncomingFuture {
             make_service_future,
@@ -165,7 +175,7 @@ where
         Incoming {
             make_service,
             incoming: self.incoming,
-            stream: None,
+            state: IncomingState::Pending,
             protocol: self.protocol,
         }
     }
