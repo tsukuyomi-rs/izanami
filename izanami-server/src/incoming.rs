@@ -1,9 +1,8 @@
 //! The implementation of `StreamService` using a `Stream`.
 
 use {
-    crate::BoxedStdError,
+    crate::{server::Protocol, BoxedStdError},
     futures::{Async, Future, Poll, Stream},
-    hyper::server::conn::Http,
     izanami_net::tcp::AddrIncoming as TcpAddrIncoming,
     izanami_service::Service,
     std::{io, net::ToSocketAddrs},
@@ -19,7 +18,6 @@ pub struct Incoming<I: Stream, S> {
     incoming: I,
     state: IncomingState<I::Item>,
     make_service: S,
-    protocol: Http,
 }
 
 #[derive(Debug)]
@@ -34,10 +32,7 @@ where
     I::Error: Into<BoxedStdError>,
 {
     pub fn builder(incoming: I) -> Builder<I> {
-        Builder {
-            incoming,
-            protocol: Http::new(),
-        }
+        Builder { incoming }
     }
 }
 
@@ -60,7 +55,7 @@ impl Incoming<UnixAddrIncoming, ()> {
     }
 }
 
-impl<I, S> Service<()> for Incoming<I, S>
+impl<I, S> Service<Protocol> for Incoming<I, S>
 where
     I: Stream,
     I::Item: AsyncRead + AsyncWrite,
@@ -68,7 +63,7 @@ where
     S: Service<()>,
     S::Error: Into<BoxedStdError>,
 {
-    type Response = (S::Response, I::Item, Http);
+    type Response = (S::Response, I::Item, Protocol);
     type Error = BoxedStdError;
     type Future = IncomingFuture<I, S>;
 
@@ -86,7 +81,7 @@ where
         }
     }
 
-    fn call(&mut self, _: ()) -> Self::Future {
+    fn call(&mut self, protocol: Protocol) -> Self::Future {
         let stream = match std::mem::replace(&mut self.state, IncomingState::Pending) {
             IncomingState::Ready(stream) => stream,
             IncomingState::Pending => panic!("the service is not ready"),
@@ -95,7 +90,7 @@ where
         IncomingFuture {
             make_service_future,
             stream: Some(stream),
-            protocol: Some(self.protocol.clone()),
+            protocol: Some(protocol),
         }
     }
 }
@@ -112,7 +107,7 @@ where
 {
     make_service_future: S::Future,
     stream: Option<I::Item>,
-    protocol: Option<Http>,
+    protocol: Option<Protocol>,
 }
 
 impl<I, S> Future for IncomingFuture<I, S>
@@ -123,7 +118,7 @@ where
     S: Service<()>,
     S::Error: Into<BoxedStdError>,
 {
-    type Item = (S::Response, I::Item, Http);
+    type Item = (S::Response, I::Item, Protocol);
     type Error = BoxedStdError;
 
     #[inline]
@@ -145,7 +140,6 @@ where
 #[derive(Debug)]
 pub struct Builder<I> {
     incoming: I,
-    protocol: Http,
 }
 
 impl<I> Builder<I>
@@ -154,18 +148,6 @@ where
     I::Item: AsyncRead + AsyncWrite,
     I::Error: Into<BoxedStdError>,
 {
-    /// Specifies that the server uses only HTTP/1.
-    pub fn http1_only(mut self) -> Self {
-        self.protocol.http1_only(true);
-        self
-    }
-
-    /// Specifies that the server uses only HTTP/2.
-    pub fn http2_only(mut self) -> Self {
-        self.protocol.http2_only(true);
-        self
-    }
-
     /// Specifies a `make_service` to serve incoming connections.
     pub fn serve<S>(self, make_service: S) -> Incoming<I, S>
     where
@@ -176,7 +158,6 @@ where
             make_service,
             incoming: self.incoming,
             state: IncomingState::Pending,
-            protocol: self.protocol,
         }
     }
 }

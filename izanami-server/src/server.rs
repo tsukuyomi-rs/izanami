@@ -17,6 +17,47 @@ use {
     tokio_buf::BufStream,
 };
 
+/// A set of protocol level configuration.
+#[derive(Debug)]
+pub struct Protocol(Http);
+
+impl Protocol {
+    pub fn http1_only(&mut self, enabled: bool) -> &mut Self {
+        self.0.http1_only(enabled);
+        self
+    }
+
+    pub fn http1_half_close(&mut self, enabled: bool) -> &mut Self {
+        self.0.http1_half_close(enabled);
+        self
+    }
+
+    pub fn http1_writev(&mut self, enabled: bool) -> &mut Self {
+        self.0.http1_writev(enabled);
+        self
+    }
+
+    pub fn http2_only(&mut self, enabled: bool) -> &mut Self {
+        self.0.http2_only(enabled);
+        self
+    }
+
+    pub fn keep_alive(&mut self, enabled: bool) -> &mut Self {
+        self.0.keep_alive(enabled);
+        self
+    }
+
+    pub fn pipeline_flush(&mut self, enabled: bool) -> &mut Self {
+        self.0.pipeline_flush(enabled);
+        self
+    }
+
+    pub fn max_buf_size(&mut self, amt: usize) -> &mut Self {
+        self.0.max_buf_size(amt);
+        self
+    }
+}
+
 /// A trait abstracting a factory that produces the connection with a client
 /// and the service associated with its connection.
 pub trait MakeConnection {
@@ -30,16 +71,16 @@ pub trait MakeConnection {
     type Error;
 
     ///　A `Future` that establishes the connection to client and initializes the service.
-    type Future: Future<Item = (Self::Service, Self::Transport, Http), Error = Self::Error>;
+    type Future: Future<Item = (Self::Service, Self::Transport, Protocol), Error = Self::Error>;
 
     /// Polls the connection from client, and create a future that establishes
     /// its connection asynchronously.
-    fn make_connection(&mut self) -> Poll<Self::Future, Self::Error>;
+    fn make_connection(&mut self, protocol: Protocol) -> Poll<Self::Future, Self::Error>;
 }
 
 impl<T, I, S> MakeConnection for T
 where
-    T: Service<(), Response = (S, I, Http)>,
+    T: Service<Protocol, Response = (S, I, Protocol)>,
     S: HttpService<RequestBody>,
     I: AsyncRead + AsyncWrite,
 {
@@ -48,9 +89,9 @@ where
     type Error = T::Error;
     type Future = T::Future;
 
-    fn make_connection(&mut self) -> Poll<Self::Future, Self::Error> {
+    fn make_connection(&mut self, protocol: Protocol) -> Poll<Self::Future, Self::Error> {
         futures::try_ready!(self.poll_ready());
-        Ok(Async::Ready(self.call(())))
+        Ok(Async::Ready(self.call(protocol)))
     }
 }
 
@@ -59,6 +100,7 @@ where
 pub struct Server<T, Sig = futures::future::Empty<(), ()>> {
     make_connection: T,
     shutdown_signal: Sig,
+    protocol: Http,
 }
 
 impl<T> Server<T>
@@ -70,6 +112,7 @@ where
         Self {
             make_connection,
             shutdown_signal: futures::future::empty(),
+            protocol: Http::new(),
         }
     }
 
@@ -81,6 +124,7 @@ where
         Server {
             make_connection: self.make_connection,
             shutdown_signal: signal,
+            protocol: self.protocol,
         }
     }
 }
@@ -90,6 +134,18 @@ where
     T: MakeConnection,
     Sig: Future<Item = ()>,
 {
+    /// Specifies that the server uses only HTTP/1.
+    pub fn http1_only(mut self) -> Self {
+        self.protocol.http1_only(true);
+        self
+    }
+
+    /// Specifies that the server uses only HTTP/2.
+    pub fn http2_only(mut self) -> Self {
+        self.protocol.http2_only(true);
+        self
+    }
+
     /// Start this server onto the specified spawner.
     ///
     /// This method immediately returns and the server runs on the background.
@@ -166,6 +222,7 @@ macro_rules! spawn_all_task {
                 fut.map_err(|_e| log::error!("stream service error"))
                     .and_then(move |(service, stream, protocol)| {
                         let conn = protocol
+                            .0
                             .with_executor(executor)
                             .serve_connection(stream, InnerService(service))
                             .with_upgrades();
@@ -181,6 +238,7 @@ macro_rules! spawn_all_task {
             state: SpawnAllState::Running {
                 make_connection: this.make_connection,
                 shutdown_signal: this.shutdown_signal,
+                protocol: this.protocol,
                 executor,
                 signal: Some(signal),
                 watch,
@@ -314,6 +372,7 @@ enum SpawnAllState<T, Sig, F, E> {
     Running {
         make_connection: T,
         shutdown_signal: Sig,
+        protocol: Http,
         serve_connection_fn: F,
         signal: Option<Signal>,
         watch: Watch,
@@ -345,6 +404,7 @@ where
                     ref mut shutdown_signal,
                     ref mut serve_connection_fn,
                     ref mut signal,
+                    ref protocol,
                     ref watch,
                     ref executor,
                 } => match shutdown_signal.poll() {
@@ -353,7 +413,9 @@ where
                         SpawnAllState::Done(signal.drain())
                     }
                     Ok(Async::NotReady) => {
-                        let fut = futures::try_ready!(make_connection.make_connection());
+                        let fut = futures::try_ready!(
+                            make_connection.make_connection(Protocol(protocol.clone()))
+                        );
                         let serve_connection = serve_connection_fn(fut, watch.clone());
                         executor
                             .execute(serve_connection)

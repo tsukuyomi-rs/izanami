@@ -23,6 +23,3 @@ pub use crate::{
     incoming::Incoming,
     server::{MakeConnection, Server},
 };
-
-#[doc(no_inline)]
-pub use hyper::server::conn::Http;
