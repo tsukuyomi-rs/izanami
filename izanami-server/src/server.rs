@@ -17,52 +17,78 @@ use {
     tokio_buf::BufStream,
 };
 
+/// A trait that abstracts the connection to client and associated service.
+pub trait MakeConnection {
+    /// A transport for sending/receiving data with the client.
+    type Transport: AsyncRead + AsyncWrite;
+
+    /// A `Service` that handles incoming requests from the client.
+    type Service: HttpService<RequestBody>;
+
+    /// The error type that will be thrown when acquiring a connection.
+    type Error;
+
+    ///　A `Future` that establishes the connection to client and initializes the service.
+    type Future: Future<Item = (Self::Service, Self::Transport, Http), Error = Self::Error>;
+
+    /// Polls the connection from client, and create a future that establishes
+    /// its connection asynchronously.
+    fn make_connection(&mut self) -> Poll<Self::Future, Self::Error>;
+}
+
+impl<T, I, S> MakeConnection for T
+where
+    T: Service<(), Response = (S, I, Http)>,
+    S: HttpService<RequestBody>,
+    I: AsyncRead + AsyncWrite,
+{
+    type Service = S;
+    type Transport = I;
+    type Error = T::Error;
+    type Future = T::Future;
+
+    fn make_connection(&mut self) -> Poll<Self::Future, Self::Error> {
+        futures::try_ready!(self.poll_ready());
+        Ok(Async::Ready(self.call(())))
+    }
+}
+
 /// An HTTP server.
 #[derive(Debug)]
-pub struct Server<S, Sig = futures::future::Empty<(), ()>> {
-    stream_service: S,
+pub struct Server<T, Sig = futures::future::Empty<(), ()>> {
+    make_connection: T,
     shutdown_signal: Sig,
 }
 
-impl<S> Server<S> {
-    /// Creates a `Builder` using a streamed service.
-    pub fn new(stream_service: S) -> Self {
+impl<T> Server<T>
+where
+    T: MakeConnection,
+{
+    /// Creates a `Server` using a `MakeConnection`.
+    pub fn new(make_connection: T) -> Self {
         Self {
-            stream_service,
+            make_connection,
             shutdown_signal: futures::future::empty(),
         }
     }
 
     /// Specifies the signal to shutdown the background tasks gracefully.
-    pub fn with_graceful_shutdown<Sig>(self, signal: Sig) -> Server<S, Sig>
+    pub fn with_graceful_shutdown<Sig>(self, signal: Sig) -> Server<T, Sig>
     where
         Sig: Future<Item = ()>,
     {
         Server {
-            stream_service: self.stream_service,
+            make_connection: self.make_connection,
             shutdown_signal: signal,
         }
     }
 }
 
-impl<S, C, T, Sig> Server<S, Sig>
+impl<T, Sig> Server<T, Sig>
 where
-    S: Service<(), Response = (C, T, Http)>,
-    C: HttpService<RequestBody>,
-    C::Error: Into<BoxedStdError>,
-    T: AsyncRead + AsyncWrite,
+    T: MakeConnection,
     Sig: Future<Item = ()>,
 {
-    #[doc(hidden)]
-    pub fn get_ref(&self) -> &S {
-        &self.stream_service
-    }
-
-    #[doc(hidden)]
-    pub fn get_mut(&mut self) -> &mut S {
-        &mut self.stream_service
-    }
-
     /// Start this server onto the specified spawner.
     ///
     /// This method immediately returns and the server runs on the background.
@@ -134,7 +160,7 @@ macro_rules! spawn_all_task {
 
         let serve_connection_fn = {
             let executor = executor.clone();
-            move |fut: <$S as Service<()>>::Future, watch: Watch| {
+            move |fut: <$S as MakeConnection>::Future, watch: Watch| {
                 let executor = executor.clone();
                 fut.map_err(|_e| log::error!("stream service error"))
                     .and_then(move |(service, stream, protocol)| {
@@ -152,7 +178,7 @@ macro_rules! spawn_all_task {
         let (signal, watch) = crate::drain::channel();
         SpawnAll {
             state: SpawnAllState::Running {
-                stream_service: this.stream_service,
+                make_connection: this.make_connection,
                 shutdown_signal: this.shutdown_signal,
                 executor,
                 signal: Some(signal),
@@ -168,22 +194,22 @@ macro_rules! impl_spawn_for_server {
         impl_spawn_for_server!($t, (rt, task) => { rt.spawn(task); });
     };
     ($t:ty, ($rt:ident, $task:ident) => $e:expr) => {
-        impl<S, C, T, Sig> Spawn<$t> for Server<S, Sig>
+        impl<T, I, S, Sig> Spawn<$t> for Server<T, Sig>
         where
-            S: Service<(), Response = (C, T, Http)> + Send + 'static,
+            T: MakeConnection<Transport = I, Service = S> + Send + 'static,
+            T::Future: Send + 'static,
+            I: AsyncRead + AsyncWrite + Send + 'static,
+            S: HttpService<RequestBody> + Send + 'static,
+            S::ResponseBody: Send + 'static,
+            <S::ResponseBody as BufStream>::Item: Send,
+            <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+            <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+            S::Error: Into<BoxedStdError>,
             S::Future: Send + 'static,
-            C: HttpService<RequestBody> + Send + 'static,
-            C::ResponseBody: Send + 'static,
-            <C::ResponseBody as BufStream>::Item: Send,
-            <C::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-            <C::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
-            C::Error: Into<BoxedStdError>,
-            C::Future: Send + 'static,
-            T: AsyncRead + AsyncWrite + Send + 'static,
             Sig: Future<Item = ()> + Send + 'static,
         {
             fn spawn(self, $rt: &mut $t) {
-                let $task = spawn_all_task!(<S> self, $rt.executor())
+                let $task = spawn_all_task!(<T> self, $rt.executor())
                     .map_err(|_e| log::error!("stream service error"));
                 $e;
             }
@@ -194,21 +220,21 @@ macro_rules! impl_spawn_for_server {
         impl_spawn_for_server!(!Send $t, (rt, task) => { rt.spawn(task); });
     };
     (!Send $t:ty, ($rt:ident, $task:ident) => $e:expr) => {
-        impl<S, C, T, Sig> Spawn<$t> for Server<S, Sig>
+        impl<T, I, S, Sig> Spawn<$t> for Server<T, Sig>
         where
-            S: Service<(), Response = (C, T, Http)> + 'static,
-            S::Future: 'static,
-            C: HttpService<RequestBody> + 'static,
-            C::ResponseBody: Send + 'static,
-            <C::ResponseBody as BufStream>::Item: Send,
-            <C::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-            <C::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
-            C::Error: Into<BoxedStdError>,
-            T: AsyncRead + AsyncWrite + Send + 'static,
+            T: MakeConnection<Transport = I, Service = S> + 'static,
+            T::Future: 'static,
+            I: AsyncRead + AsyncWrite + Send + 'static,
+            S: HttpService<RequestBody> + 'static,
+            S::ResponseBody: Send + 'static,
+            <S::ResponseBody as BufStream>::Item: Send,
+            <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+            <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+            S::Error: Into<BoxedStdError>,
             Sig: Future<Item = ()> + 'static,
         {
             fn spawn(self, $rt: &mut $t) {
-                let $task = spawn_all_task!(<S> self, $rt.executor())
+                let $task = spawn_all_task!(<T> self, $rt.executor())
                     .map_err(|_e| log::error!("stream service error"));
                 $e;
             }
@@ -235,46 +261,46 @@ impl_spawn_for_server!(!Send tokio::runtime::current_thread::TaskExecutor,
     }
 );
 
-impl<S, C, T, Sig> Runnable<tokio::runtime::Runtime> for Server<S, Sig>
+impl<T, I, S, Sig> Runnable<tokio::runtime::Runtime> for Server<T, Sig>
 where
-    S: Service<(), Response = (C, T, Http)> + Send + 'static,
-    S::Error: Send + 'static,
+    T: MakeConnection<Transport = I, Service = S> + Send + 'static,
+    T::Error: Send + 'static,
+    T::Future: Send + 'static,
+    I: AsyncRead + AsyncWrite + Send + 'static,
+    S: HttpService<RequestBody> + Send + 'static,
+    S::ResponseBody: Send + 'static,
+    <S::ResponseBody as BufStream>::Item: Send,
+    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+    S::Error: Into<BoxedStdError>,
     S::Future: Send + 'static,
-    C: HttpService<RequestBody> + Send + 'static,
-    C::ResponseBody: Send + 'static,
-    <C::ResponseBody as BufStream>::Item: Send,
-    <C::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-    <C::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
-    C::Error: Into<BoxedStdError>,
-    C::Future: Send + 'static,
-    T: AsyncRead + AsyncWrite + Send + 'static,
     Sig: Future<Item = ()> + Send + 'static,
 {
-    type Output = Result<(), S::Error>;
+    type Output = Result<(), T::Error>;
 
     fn run(self, rt: &mut tokio::runtime::Runtime) -> Self::Output {
-        let task = spawn_all_task!(<S> self, rt.executor());
+        let task = spawn_all_task!(<T> self, rt.executor());
         rt.block_on(task)
     }
 }
 
-impl<S, C, T, Sig> Runnable<tokio::runtime::current_thread::Runtime> for Server<S, Sig>
+impl<T, I, S, Sig> Runnable<tokio::runtime::current_thread::Runtime> for Server<T, Sig>
 where
-    S: Service<(), Response = (C, T, Http)>,
-    S::Future: 'static,
-    C: HttpService<RequestBody> + 'static,
-    C::ResponseBody: Send + 'static,
-    <C::ResponseBody as BufStream>::Item: Send,
-    <C::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-    <C::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
-    C::Error: Into<BoxedStdError>,
-    T: AsyncRead + AsyncWrite + Send + 'static,
+    T: MakeConnection<Transport = I, Service = S>,
+    T::Future: 'static,
+    I: AsyncRead + AsyncWrite + Send + 'static,
+    S: HttpService<RequestBody> + 'static,
+    S::ResponseBody: Send + 'static,
+    <S::ResponseBody as BufStream>::Item: Send,
+    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+    S::Error: Into<BoxedStdError>,
     Sig: Future<Item = ()>,
 {
-    type Output = Result<(), S::Error>;
+    type Output = Result<(), T::Error>;
 
     fn run(self, rt: &mut tokio::runtime::current_thread::Runtime) -> Self::Output {
-        let task = spawn_all_task!(<S> self, rt.executor());
+        let task = spawn_all_task!(<T> self, rt.executor());
         rt.block_on(task)
     }
 }
@@ -283,9 +309,9 @@ struct SpawnAll<S, Sig, F, E> {
     state: SpawnAllState<S, Sig, F, E>,
 }
 
-enum SpawnAllState<S, Sig, F, E> {
+enum SpawnAllState<T, Sig, F, E> {
     Running {
-        stream_service: S,
+        make_connection: T,
         shutdown_signal: Sig,
         serve_connection_fn: F,
         signal: Option<Signal>,
@@ -295,26 +321,26 @@ enum SpawnAllState<S, Sig, F, E> {
     Done(crate::drain::Draining),
 }
 
-impl<S, C, T, Sig, F, Fut, E> Future for SpawnAll<S, Sig, F, E>
+impl<T, I, S, Sig, F, Fut, E> Future for SpawnAll<T, Sig, F, E>
 where
-    S: Service<(), Response = (C, T, Http)>,
-    C: HttpService<RequestBody>,
-    C::ResponseBody: Send + 'static,
-    C::Error: Into<BoxedStdError>,
-    T: AsyncRead + AsyncWrite + Send + 'static,
+    T: MakeConnection<Transport = I, Service = S>,
+    I: AsyncRead + AsyncWrite + Send + 'static,
+    S: HttpService<RequestBody>,
+    S::ResponseBody: Send + 'static,
+    S::Error: Into<BoxedStdError>,
     Sig: Future<Item = ()>,
-    F: FnMut(S::Future, Watch) -> Fut,
+    F: FnMut(T::Future, Watch) -> Fut,
     Fut: Future<Item = (), Error = ()>,
     E: Executor<Fut>,
 {
     type Item = ();
-    type Error = S::Error;
+    type Error = T::Error;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
             self.state = match self.state {
                 SpawnAllState::Running {
-                    ref mut stream_service,
+                    ref mut make_connection,
                     ref mut shutdown_signal,
                     ref mut serve_connection_fn,
                     ref mut signal,
@@ -326,8 +352,7 @@ where
                         SpawnAllState::Done(signal.drain())
                     }
                     Ok(Async::NotReady) => {
-                        futures::try_ready!(stream_service.poll_ready());
-                        let fut = stream_service.call(());
+                        let fut = futures::try_ready!(make_connection.make_connection());
                         let serve_connection = serve_connection_fn(fut, watch.clone());
                         executor
                             .execute(serve_connection)

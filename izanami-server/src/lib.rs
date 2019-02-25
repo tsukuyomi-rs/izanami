@@ -11,15 +11,18 @@
 #![forbid(clippy::unimplemented)]
 
 mod drain;
-mod server;
 
 pub mod incoming;
 pub mod request;
+pub mod server;
 
 #[allow(dead_code)]
 type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-pub use crate::{incoming::Incoming, server::Server};
+pub use crate::{
+    incoming::Incoming,
+    server::{MakeConnection, Server},
+};
 
 #[doc(no_inline)]
 pub use hyper::server::conn::Http;
