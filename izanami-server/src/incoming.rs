@@ -12,7 +12,8 @@ use {
 #[cfg(unix)]
 use {izanami_net::unix::AddrIncoming as UnixAddrIncoming, std::path::Path};
 
-/// A `Service` that produces pairs of an incoming stream and an associated service.
+/// An implementation of `MakeConnection` consisting of an asynchronous `Stream` of transports
+/// and a service factory.
 #[derive(Debug)]
 pub struct Incoming<I: Stream, S> {
     incoming: I,
@@ -29,14 +30,17 @@ enum IncomingState<I> {
 impl<I> Incoming<I, ()>
 where
     I: Stream,
+    I::Item: AsyncRead + AsyncWrite,
     I::Error: Into<BoxedStdError>,
 {
+    /// Create a `Builder` for creating an instance of `Incoming`.
     pub fn builder(incoming: I) -> Builder<I> {
         Builder { incoming }
     }
 }
 
 impl Incoming<TcpAddrIncoming, ()> {
+    /// Create a `Builder` that uses a TCP listener bound to the specified address.
     pub fn bind_tcp<A>(addr: A) -> io::Result<Builder<TcpAddrIncoming>>
     where
         A: ToSocketAddrs,
@@ -47,6 +51,9 @@ impl Incoming<TcpAddrIncoming, ()> {
 
 #[cfg(unix)]
 impl Incoming<UnixAddrIncoming, ()> {
+    /// Create a `Builder` that uses an Unix socket listener bound to the specified path.
+    ///
+    /// This function is available only on Unix platform.
     pub fn bind_unix<P>(path: P) -> io::Result<Builder<UnixAddrIncoming>>
     where
         P: AsRef<Path>,
@@ -148,7 +155,10 @@ where
     I::Item: AsyncRead + AsyncWrite,
     I::Error: Into<BoxedStdError>,
 {
-    /// Specifies a `make_service` to serve incoming connections.
+    /// Construct an `Incoming` using the specified service factory.
+    ///
+    /// The response type of `make_service` is typically the service that
+    /// implements `HttpService`, but it is not necessary.
     pub fn serve<S>(self, make_service: S) -> Incoming<I, S>
     where
         S: Service<()>,
