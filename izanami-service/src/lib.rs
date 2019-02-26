@@ -14,6 +14,7 @@
 #![forbid(clippy::unimplemented)]
 
 pub mod ext;
+pub mod stream;
 
 mod into_service;
 mod make_service;

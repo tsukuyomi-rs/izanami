@@ -1,27 +1,27 @@
 use {
     http::Response,
     izanami::{
-        server::{Incoming, Server}, //
-        service::service_fn_ok,
+        net::tcp::AddrIncoming,
+        server::Server, //
+        service::{ext::ServiceExt, service_fn, stream::StreamExt},
     },
     std::io,
 };
 
 fn main() -> io::Result<()> {
-    // A service factory called when a connection with the remote is established.
-    let make_service = service_fn_ok(|()| {
-        service_fn_ok(move |_req| {
-            Response::builder()
-                .header("content-type", "text/plain")
-                .body("Hello")
-                .unwrap()
-        })
-    });
-
     // A `Service` that produces a tuple of an HTTP service, a TCP stream
     // and an HTTP protocol configuration.
-    let incoming_service = Incoming::bind_tcp("127.0.0.1:5000")? //
-        .serve(make_service);
+    let incoming_service = AddrIncoming::bind("127.0.0.1:5000")? //
+        .into_service()
+        .with_adaptors()
+        .map(|stream| {
+            let service = service_fn(move |_req| {
+                Response::builder()
+                    .header("content-type", "text/plain")
+                    .body("Hello")
+            });
+            (stream, service)
+        });
 
     // Starts an HTTP server using the above configuration.
     izanami::rt::run(Server::new(incoming_service));

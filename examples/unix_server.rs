@@ -1,29 +1,40 @@
-use {
-    http::Response,
-    izanami::{
-        server::{Incoming, Server}, //
-        service::service_fn_ok,
-    },
-    std::io,
-};
-
 #[cfg(unix)]
-fn main() -> io::Result<()> {
-    let incoming_service = Incoming::bind_unix("/tmp/echo-service.sock")? //
-        .serve(service_fn_ok(|_| {
-            service_fn_ok(|_req| {
-                Response::builder()
-                    .header("content-type", "text/plain")
-                    .body("Hello")
-                    .unwrap()
-            })
-        }));
+mod imp {
+    use {
+        http::Response,
+        izanami::{
+            net::unix::AddrIncoming,
+            server::Server, //
+            service::{ext::ServiceExt, service_fn, service_fn_ok, stream::StreamExt},
+        },
+        std::io,
+    };
 
-    izanami::rt::run(Server::new(incoming_service));
-    Ok(())
+    pub fn main() -> io::Result<()> {
+        let incoming_service = AddrIncoming::bind("/tmp/echo-service.sock")? //
+            .into_service()
+            .with_adaptors()
+            .with(service_fn_ok(|_| {
+                service_fn(|_req| {
+                    Response::builder()
+                        .header("content-type", "text/plain")
+                        .body("Hello")
+                })
+            }));
+
+        izanami::rt::run(Server::new(incoming_service));
+        Ok(())
+    }
 }
 
 #[cfg(not(unix))]
-fn main() {
-    println!("This example works only on Unix platform.")
+mod imp {
+    pub fn main() -> std::io::Result<()> {
+        println!("This example works only on Unix platform.");
+        Ok(())
+    }
+}
+
+fn main() -> std::io::Result<()> {
+    crate::imp::main()
 }

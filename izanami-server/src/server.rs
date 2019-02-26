@@ -17,47 +17,6 @@ use {
     tokio_buf::BufStream,
 };
 
-/// A set of protocol level configuration.
-#[derive(Debug)]
-pub struct Protocol(Http);
-
-impl Protocol {
-    pub fn http1_only(&mut self, enabled: bool) -> &mut Self {
-        self.0.http1_only(enabled);
-        self
-    }
-
-    pub fn http1_half_close(&mut self, enabled: bool) -> &mut Self {
-        self.0.http1_half_close(enabled);
-        self
-    }
-
-    pub fn http1_writev(&mut self, enabled: bool) -> &mut Self {
-        self.0.http1_writev(enabled);
-        self
-    }
-
-    pub fn http2_only(&mut self, enabled: bool) -> &mut Self {
-        self.0.http2_only(enabled);
-        self
-    }
-
-    pub fn keep_alive(&mut self, enabled: bool) -> &mut Self {
-        self.0.keep_alive(enabled);
-        self
-    }
-
-    pub fn pipeline_flush(&mut self, enabled: bool) -> &mut Self {
-        self.0.pipeline_flush(enabled);
-        self
-    }
-
-    pub fn max_buf_size(&mut self, amt: usize) -> &mut Self {
-        self.0.max_buf_size(amt);
-        self
-    }
-}
-
 /// A trait abstracting a factory that produces the connection with a client
 /// and the service associated with its connection.
 pub trait MakeConnection {
@@ -71,27 +30,27 @@ pub trait MakeConnection {
     type Error;
 
     ///　A `Future` that establishes the connection to client and initializes the service.
-    type Future: Future<Item = (Self::Service, Self::Transport, Protocol), Error = Self::Error>;
+    type Future: Future<Item = (Self::Transport, Self::Service), Error = Self::Error>;
 
     /// Polls the connection from client, and create a future that establishes
     /// its connection asynchronously.
-    fn make_connection(&mut self, protocol: Protocol) -> Poll<Self::Future, Self::Error>;
+    fn make_connection(&mut self) -> Poll<Self::Future, Self::Error>;
 }
 
 impl<T, I, S> MakeConnection for T
 where
-    T: Service<Protocol, Response = (S, I, Protocol)>,
+    T: Service<(), Response = (I, S)>,
     S: HttpService<RequestBody>,
     I: AsyncRead + AsyncWrite,
 {
-    type Service = S;
     type Transport = I;
+    type Service = S;
     type Error = T::Error;
     type Future = T::Future;
 
-    fn make_connection(&mut self, protocol: Protocol) -> Poll<Self::Future, Self::Error> {
+    fn make_connection(&mut self) -> Poll<Self::Future, Self::Error> {
         futures::try_ready!(self.poll_ready());
-        Ok(Async::Ready(self.call(protocol)))
+        Ok(Async::Ready(self.call(())))
     }
 }
 
@@ -217,13 +176,11 @@ macro_rules! spawn_all_task {
 
         let serve_connection_fn = {
             let executor = executor.clone();
-            move |fut: <$S as MakeConnection>::Future, watch: Watch| {
-                let executor = executor.clone();
+            move |fut: <$S as MakeConnection>::Future, protocol: Http, watch: Watch| {
+                let protocol = protocol.with_executor(executor.clone());
                 fut.map_err(|_e| log::error!("stream service error"))
-                    .and_then(move |(service, stream, protocol)| {
+                    .and_then(move |(stream, service)| {
                         let conn = protocol
-                            .0
-                            .with_executor(executor)
                             .serve_connection(stream, InnerService(service))
                             .with_upgrades();
                         watch
@@ -389,7 +346,7 @@ where
     S::ResponseBody: Send + 'static,
     S::Error: Into<BoxedStdError>,
     Sig: Future<Item = ()>,
-    F: FnMut(T::Future, Watch) -> Fut,
+    F: FnMut(T::Future, Http, Watch) -> Fut,
     Fut: Future<Item = (), Error = ()>,
     E: Executor<Fut>,
 {
@@ -413,10 +370,9 @@ where
                         SpawnAllState::Done(signal.drain())
                     }
                     Ok(Async::NotReady) => {
-                        let fut = futures::try_ready!(
-                            make_connection.make_connection(Protocol(protocol.clone()))
-                        );
-                        let serve_connection = serve_connection_fn(fut, watch.clone());
+                        let fut = futures::try_ready!(make_connection.make_connection());
+                        let serve_connection =
+                            serve_connection_fn(fut, protocol.clone(), watch.clone());
                         executor
                             .execute(serve_connection)
                             .unwrap_or_else(|_e| log::error!("executor error"));

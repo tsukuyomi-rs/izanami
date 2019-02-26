@@ -1,38 +1,20 @@
 use {
-    futures::prelude::*,
     http::Response,
     izanami::{
-        server::{Incoming, Server}, //
-        service::ServiceExt,
+        net::tcp::AddrIncoming,
+        server::Server,
+        service::{ext::ServiceExt, stream::StreamExt},
     },
     std::io,
 };
 
-#[allow(dead_code)]
-struct ServiceContext {
-    db_conn: (),
-    // ...
-}
-
-impl ServiceContext {
-    fn connect() -> impl Future<Item = Self, Error = io::Error> {
-        futures::future::ok(ServiceContext { db_conn: () })
-    }
-}
-
 fn main() -> io::Result<()> {
-    // Since we want to build the value of service with the information
-    // retrieved from incoming stream, so here returning just an empty service.
-    let incoming_service = Incoming::bind_tcp("127.0.0.1:5000")? //
-        .serve(izanami::service::service_fn(|()| ServiceContext::connect()));
-
-    let incoming_service = incoming_service
-        // First, wraps the service with `FixedService` to enable adaptor methods.
-        .fixed_service()
-        // Here, `incoming_service` is a `Service` that returns tuples of
-        // the response of service specified for `serve`, TCP stream, and
-        // the HTTP configuration used for serving them.
-        .map(|(ctx, stream, protocol)| {
+    let incoming_service = AddrIncoming::bind("127.0.0.1:5000")? //
+        .into_service()
+        .with_adaptors()
+        // The value of service returned from `serve` is wrapped into FixedService<S>,
+        // which provides some adaptor methods for `Service`s.
+        .map(|stream| {
             // Extract the value of remote peer's address from stream.
             let remote_addr = stream.remote_addr();
 
@@ -41,16 +23,14 @@ fn main() -> io::Result<()> {
             // are available at here.
 
             // Builds an HTTP service using the above values.
-            let service = izanami::service::service_fn_ok(move |_req| {
-                let _ = &ctx;
+            let service = izanami::service::service_fn(move |_req| {
                 eprintln!("remote_addr = {}", remote_addr);
                 Response::builder()
                     .header("content-type", "text/plain")
                     .body("Hello")
-                    .unwrap()
             });
 
-            (service, stream, protocol)
+            (stream, service)
         });
 
     let server = Server::new(incoming_service);

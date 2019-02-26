@@ -2,8 +2,9 @@ use {
     futures::prelude::*,
     http::Response,
     izanami::{
-        server::{Incoming, Server}, //
-        service::{service_fn_ok, ServiceExt},
+        net::tcp::AddrIncoming,
+        server::Server,
+        service::{ext::ServiceExt, stream::StreamExt},
     },
     openssl::{
         pkey::PKey,
@@ -40,13 +41,12 @@ fn main() -> failure::Fallible<()> {
     };
 
     let ssl_acceptor = {
-        const SERVER_PROTO: &[u8] = b"\x02h2\x08http/1.1";
-
         let mut builder = SslAcceptor::mozilla_intermediate(SslMethod::tls())?;
         builder.set_certificate(&cert)?;
         builder.set_private_key(&pkey)?;
         builder.check_private_key()?;
 
+        const SERVER_PROTO: &[u8] = b"\x02h2\x08http/1.1";
         builder.set_alpn_protos(SERVER_PROTO)?;
         builder.set_alpn_select_callback(|_ssl, client_proto| {
             openssl::ssl::select_next_proto(SERVER_PROTO, client_proto)
@@ -56,52 +56,39 @@ fn main() -> failure::Fallible<()> {
         builder.build()
     };
 
-    let incoming_service = Incoming::bind_tcp("127.0.0.1:5000")? //
-        .serve(izanami::service::unit())
-        .fixed_service()
-        .and_then(move |(_, stream, mut protocol)| {
-            let remote_addr = stream.remote_addr();
+    let incoming_service = AddrIncoming::bind("127.0.0.1:5000")? //
+        .into_service()
+        .with_adaptors()
+        .and_then({
+            let logger = logger.clone();
+            move |stream| {
+                let remote_addr = stream.remote_addr();
+                slog::info!(logger, "got a connection"; "remote_addr" => %remote_addr);
 
-            slog::info!(logger, "got a connection"; "remote_addr" => %remote_addr);
-            let logger = logger.new(slog::o!("remote_addr" => remote_addr.to_string()));
+                ssl_acceptor.accept_async(stream).map_err(Into::into)
+            }
+        })
+        .map(move |stream| {
+            let service = {
+                let ssl = stream.get_ref().ssl();
 
-            ssl_acceptor
-                .accept_async(stream)
-                .map(move |stream| {
-                    let service = {
-                        let ssl = stream.get_ref().ssl();
+                let servername = ssl
+                    .servername_raw(openssl::ssl::NameType::HOST_NAME)
+                    .map(|name| String::from_utf8_lossy(name).into_owned());
+                slog::info!(
+                    logger,
+                    "establish a SSL session";
+                    "servername" => ?servername,
+                );
 
-                        let servername = ssl
-                            .servername_raw(openssl::ssl::NameType::HOST_NAME)
-                            .map(|name| String::from_utf8_lossy(name).into_owned());
-                        slog::info!(
-                            logger,
-                            "establish a SSL session";
-                            "servername" => ?servername,
-                        );
-
-                        match ssl.selected_alpn_protocol() {
-                            Some(b"h2") => {
-                                protocol.http2_only(true);
-                            }
-                            Some(b"http/1.1") => {
-                                protocol.http1_only(true);
-                            }
-                            _ => (),
-                        }
-
-                        service_fn_ok(move |_req| {
-                            let _ = &remote_addr;
-                            let _ = &servername;
-                            Response::builder()
-                                .header("content-type", "text/plain")
-                                .body("Hello")
-                                .unwrap()
-                        })
-                    };
-                    (service, stream, protocol)
+                izanami::service::service_fn(move |_req| {
+                    Response::builder()
+                        .header("content-type", "text/plain")
+                        .body("Hello")
                 })
-                .map_err(Into::into)
+            };
+
+            (stream, service)
         });
 
     let server = Server::new(incoming_service);

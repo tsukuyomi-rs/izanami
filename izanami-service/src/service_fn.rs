@@ -1,21 +1,28 @@
 use {
     crate::Service,
     futures::{Async, IntoFuture, Poll},
+    std::marker::PhantomData,
 };
 
 /// Creates a `Service` from a function that returns responses asynchronously.
-pub fn service_fn<F, Req, R>(f: F) -> ServiceFn<F>
+pub fn service_fn<F, Req, R>(f: F) -> ServiceFn<F, Req, R>
 where
     F: FnMut(Req) -> R,
     R: IntoFuture,
 {
-    ServiceFn(f)
+    ServiceFn {
+        f,
+        _marker: PhantomData,
+    }
 }
 
 #[derive(Debug)]
-pub struct ServiceFn<F>(F);
+pub struct ServiceFn<F, Req, R> {
+    f: F,
+    _marker: PhantomData<fn(Req) -> R>,
+}
 
-impl<F, Req, R> Service<Req> for ServiceFn<F>
+impl<F, Req, R> Service<Req> for ServiceFn<F, Req, R>
 where
     F: FnMut(Req) -> R,
     R: IntoFuture,
@@ -31,28 +38,34 @@ where
 
     #[inline]
     fn call(&mut self, request: Req) -> Self::Future {
-        (self.0)(request).into_future()
+        (self.f)(request).into_future()
     }
 }
 
 /// Creates a `Service` from a function that returns responses immediately.
 // FIXME: use async fn
-pub fn service_fn_ok<F, Req, Res>(f: F) -> ServiceFnOk<F>
+pub fn service_fn_ok<F, Req, Res, E>(f: F) -> ServiceFnOk<F, Req, Res, E>
 where
     F: FnMut(Req) -> Res,
 {
-    ServiceFnOk(f)
+    ServiceFnOk {
+        f,
+        _marker: PhantomData,
+    }
 }
 
 #[derive(Debug)]
-pub struct ServiceFnOk<F>(F);
+pub struct ServiceFnOk<F, Req, Res, E> {
+    f: F,
+    _marker: PhantomData<fn(Req) -> (Res, E)>,
+}
 
-impl<F, Req, Res> Service<Req> for ServiceFnOk<F>
+impl<F, Req, Res, E> Service<Req> for ServiceFnOk<F, Req, Res, E>
 where
     F: FnMut(Req) -> Res,
 {
     type Response = Res;
-    type Error = std::io::Error; // FIXME: replace with '!'
+    type Error = E;
     type Future = futures::future::FutureResult<Self::Response, Self::Error>;
 
     #[inline]
@@ -62,6 +75,6 @@ where
 
     #[inline]
     fn call(&mut self, request: Req) -> Self::Future {
-        futures::future::ok((self.0)(request))
+        futures::future::ok((self.f)(request))
     }
 }

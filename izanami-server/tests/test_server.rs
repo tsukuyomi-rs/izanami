@@ -14,7 +14,8 @@ mod tcp {
             },
             Body,
         },
-        izanami_server::{incoming::Incoming, Server},
+        izanami_server::Server,
+        izanami_service::{ext::ServiceExt, stream::StreamExt},
         std::{io, net::SocketAddr},
         tokio::{
             net::TcpStream, //
@@ -30,15 +31,17 @@ mod tcp {
         let incoming = izanami_net::tcp::AddrIncoming::bind("127.0.0.1:0")?;
         let local_addr = incoming.local_addr();
 
-        let stream_service = Incoming::builder(incoming) //
-            .serve(izanami_service::service_fn_ok(|()| {
-                izanami_service::service_fn_ok(|_req| {
+        let stream_service = incoming //
+            .into_service()
+            .with_adaptors()
+            .map(|stream| {
+                let service = izanami_service::service_fn(|_req| {
                     http::Response::builder()
                         .header("content-type", "text/plain")
                         .body("hello")
-                        .unwrap()
-                })
-            }));
+                });
+                (stream, service)
+            });
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::new(stream_service) //
@@ -98,7 +101,8 @@ mod unix {
             Body,
         },
         izanami_net::unix::AddrIncoming,
-        izanami_server::{incoming::Incoming, Server},
+        izanami_server::Server,
+        izanami_service::{ext::ServiceExt, stream::StreamExt},
         std::{io, path::PathBuf},
         tempfile::Builder,
         tokio::{
@@ -115,16 +119,17 @@ mod unix {
         let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
         let sock_path = sock_tempdir.path().join("connect.sock");
 
-        let incoming = AddrIncoming::bind(&sock_path)?;
-        let stream_service = Incoming::builder(incoming) //
-            .serve(izanami_service::service_fn_ok(|()| {
-                izanami_service::service_fn_ok(|_req| {
+        let stream_service = AddrIncoming::bind(&sock_path)?
+            .into_service()
+            .with_adaptors()
+            .map(|stream| {
+                let service = izanami_service::service_fn(|_req| {
                     http::Response::builder()
                         .header("content-type", "text/plain")
                         .body("hello")
-                        .unwrap()
-                })
-            }));
+                });
+                (stream, service)
+            });
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::new(stream_service) //
