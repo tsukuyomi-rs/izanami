@@ -9,21 +9,25 @@ use {
 };
 
 fn main() -> io::Result<()> {
-    // A `Service` that produces a tuple of an HTTP service, a TCP stream
-    // and an HTTP protocol configuration.
-    let incoming_service = AddrIncoming::bind("127.0.0.1:5000")? //
-        .into_service()
-        .with_adaptors()
-        .map(|stream| {
-            let service = service_fn(move |_req| {
-                Response::builder()
-                    .header("content-type", "text/plain")
-                    .body("Hello")
-            });
-            (stream, service)
-        });
+    let server = Server::new(
+        AddrIncoming::bind("127.0.0.1:5000")? // Stream<Item = AddrStream>
+            .into_service() // <-- Stream -> Service<()>
+            .with_adaptors()
+            .map(|stream| {
+                let remote_addr = stream.remote_addr();
 
-    // Starts an HTTP server using the above configuration.
-    izanami::rt::run(Server::new(incoming_service));
+                let service = service_fn(move |_req| -> io::Result<_> {
+                    let _ = &remote_addr;
+                    Ok(Response::builder()
+                        .header("content-type", "text/plain")
+                        .body("Hello")
+                        .expect("valid response"))
+                });
+
+                (stream, service)
+            }),
+    );
+
+    izanami::rt::run(server);
     Ok(())
 }

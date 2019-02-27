@@ -15,21 +15,21 @@ fn main() -> failure::Fallible<()> {
         native_tls::TlsAcceptor::builder(der).build()?
     });
 
-    let incoming_service = AddrIncoming::bind("127.0.0.1:5000")?
-        .into_service()
-        .with_adaptors()
-        .and_then(move |stream| tls_acceptor.accept(stream).map_err(Into::into))
-        .map(|stream| {
-            let service = izanami::service::service_fn(|_req| {
-                Response::builder()
-                    .header("content-type", "text/plain")
-                    .body("Hello")
-            });
-            (stream, service)
-        });
+    let server = Server::new(
+        AddrIncoming::bind("127.0.0.1:5000")?
+            .into_service()
+            .with_adaptors()
+            .and_then(move |stream| tls_acceptor.accept(stream).map_err(Into::into))
+            .map(|stream| {
+                let service = izanami::service::service_fn(|_req| {
+                    Response::builder()
+                        .header("content-type", "text/plain")
+                        .body("Hello")
+                });
+                (stream, service)
+            }),
+    );
 
-    let server = Server::new(incoming_service);
     izanami::rt::run(server);
-
     Ok(())
 }

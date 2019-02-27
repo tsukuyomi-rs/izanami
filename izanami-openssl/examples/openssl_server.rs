@@ -56,42 +56,48 @@ fn main() -> failure::Fallible<()> {
         builder.build()
     };
 
-    let incoming_service = AddrIncoming::bind("127.0.0.1:5000")? //
-        .into_service()
-        .with_adaptors()
-        .and_then({
-            let logger = logger.clone();
-            move |stream| {
+    let server = Server::new(
+        AddrIncoming::bind("127.0.0.1:5000")? //
+            .into_service()
+            .with_adaptors()
+            .and_then(move |stream| {
                 let remote_addr = stream.remote_addr();
-                slog::info!(logger, "got a connection"; "remote_addr" => %remote_addr);
+                let logger = logger.new(slog::o!("remote_addr" => remote_addr.to_string()));
+                slog::info!(logger, "got a connection");
 
-                ssl_acceptor.accept_async(stream).map_err(Into::into)
-            }
-        })
-        .map(move |stream| {
-            let service = {
-                let ssl = stream.get_ref().ssl();
+                ssl_acceptor
+                    .accept_async(stream)
+                    .map(move |stream| (stream, logger))
+                    .map_err(Into::into)
+            })
+            .map(move |(stream, logger)| {
+                let service = {
+                    let ssl = stream.get_ref().ssl();
 
-                let servername = ssl
-                    .servername_raw(openssl::ssl::NameType::HOST_NAME)
-                    .map(|name| String::from_utf8_lossy(name).into_owned());
-                slog::info!(
-                    logger,
-                    "establish a SSL session";
-                    "servername" => ?servername,
-                );
+                    let servername = ssl
+                        .servername_raw(openssl::ssl::NameType::HOST_NAME)
+                        .map(|name| String::from_utf8_lossy(name).into_owned());
+                    let logger = logger.new(slog::o!("servername" => servername));
+                    slog::info!(
+                        logger,
+                        "establish a SSL session";
+                    );
 
-                izanami::service::service_fn(move |_req| {
-                    Response::builder()
-                        .header("content-type", "text/plain")
-                        .body("Hello")
-                })
-            };
+                    izanami::service::service_fn(move |req: http::Request<_>| {
+                        slog::info!(logger, "got a request";
+                            "method" => %req.method(),
+                            "path" => %req.uri().path(),
+                        );
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body("Hello")
+                    })
+                };
 
-            (stream, service)
-        });
+                (stream, service)
+            }),
+    );
 
-    let server = Server::new(incoming_service);
     izanami::rt::run(server);
 
     Ok(())
