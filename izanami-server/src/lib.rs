@@ -12,10 +12,10 @@
 
 mod drain;
 
-pub mod request;
+pub mod h1;
 pub mod server;
 
 #[allow(dead_code)]
 type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
-pub use crate::server::{MakeConnection, Server};
+pub use crate::server::Server;

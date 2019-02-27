@@ -1,8 +1,9 @@
 use {
+    futures::Future,
     http::Response,
     izanami::{
         net::tcp::AddrIncoming,
-        server::Server,
+        server::{h1::H1Connection, Server},
         service::{ext::ServiceExt, stream::StreamExt},
     },
     std::io,
@@ -21,17 +22,16 @@ fn main() -> io::Result<()> {
                 // such as the selected ALPN protocol or SNI server name
                 // are available at here.
 
-                // Builds an HTTP service using the above values.
-                let service = izanami::service::service_fn(move |_req| {
-                    eprintln!("remote_addr = {}", remote_addr);
-                    Response::builder()
-                        .header("content-type", "text/plain")
-                        .body("Hello")
-                });
-
-                (stream, service)
+                H1Connection::builder(stream) //
+                    .serve(izanami::service::service_fn(move |_req| {
+                        eprintln!("remote_addr = {}", remote_addr);
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body("Hello")
+                    }))
             }),
-    );
+    )
+    .map_err(|e| eprintln!("server error: {}", e));
 
     izanami::rt::run(server);
 

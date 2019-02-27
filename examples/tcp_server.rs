@@ -1,8 +1,9 @@
 use {
+    futures::Future,
     http::Response,
     izanami::{
         net::tcp::AddrIncoming,
-        server::Server, //
+        server::{h1::H1Connection, Server}, //
         service::{ext::ServiceExt, service_fn, stream::StreamExt},
     },
     std::io,
@@ -15,18 +16,17 @@ fn main() -> io::Result<()> {
             .with_adaptors()
             .map(|stream| {
                 let remote_addr = stream.remote_addr();
-
-                let service = service_fn(move |_req| -> io::Result<_> {
-                    let _ = &remote_addr;
-                    Ok(Response::builder()
-                        .header("content-type", "text/plain")
-                        .body("Hello")
-                        .expect("valid response"))
-                });
-
-                (stream, service)
+                H1Connection::builder(stream) //
+                    .serve(service_fn(move |_req| -> io::Result<_> {
+                        let _ = &remote_addr;
+                        Ok(Response::builder()
+                            .header("content-type", "text/plain")
+                            .body("Hello")
+                            .expect("valid response"))
+                    }))
             }),
-    );
+    )
+    .map_err(|e| eprintln!("server error: {}", e));
 
     izanami::rt::run(server);
     Ok(())

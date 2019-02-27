@@ -3,7 +3,7 @@ use {
     http::Response,
     izanami::{
         net::tcp::AddrIncoming,
-        server::Server,
+        server::{h1::H1Connection, Server},
         service::{ext::ServiceExt, stream::StreamExt},
     },
     openssl::{
@@ -71,7 +71,7 @@ fn main() -> failure::Fallible<()> {
                     .map_err(Into::into)
             })
             .map(move |(stream, logger)| {
-                let service = {
+                let logger = {
                     let ssl = stream.get_ref().ssl();
 
                     let servername = ssl
@@ -83,20 +83,24 @@ fn main() -> failure::Fallible<()> {
                         "establish a SSL session";
                     );
 
-                    izanami::service::service_fn(move |req: http::Request<_>| {
-                        slog::info!(logger, "got a request";
-                            "method" => %req.method(),
-                            "path" => %req.uri().path(),
-                        );
-                        Response::builder()
-                            .header("content-type", "text/plain")
-                            .body("Hello")
-                    })
+                    logger
                 };
 
-                (stream, service)
+                H1Connection::builder(stream) //
+                    .serve(izanami::service::service_fn(
+                        move |req: http::Request<_>| {
+                            slog::info!(logger, "got a request";
+                                "method" => %req.method(),
+                                "path" => %req.uri().path(),
+                            );
+                            Response::builder()
+                                .header("content-type", "text/plain")
+                                .body("Hello")
+                        },
+                    ))
             }),
-    );
+    )
+    .map_err(|e| eprintln!("server error: {}", e));
 
     izanami::rt::run(server);
 

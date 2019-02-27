@@ -14,7 +14,7 @@ mod tcp {
             },
             Body,
         },
-        izanami_server::Server,
+        izanami_server::{h1::H1Connection, Server},
         izanami_service::{ext::ServiceExt, stream::StreamExt},
         std::{io, net::SocketAddr},
         tokio::{
@@ -31,22 +31,24 @@ mod tcp {
         let incoming = izanami_net::tcp::AddrIncoming::bind("127.0.0.1:0")?;
         let local_addr = incoming.local_addr();
 
-        let stream_service = incoming //
-            .into_service()
-            .with_adaptors()
-            .map(|stream| {
-                let service = izanami_service::service_fn(|_req| {
-                    http::Response::builder()
-                        .header("content-type", "text/plain")
-                        .body("hello")
-                });
-                (stream, service)
-            });
-
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = Server::new(stream_service) //
-            .with_graceful_shutdown(rx_shutdown);
-        server.start(&mut rt);
+        let server = Server::builder(
+            incoming //
+                .into_service()
+                .with_adaptors()
+                .map(|stream| {
+                    H1Connection::builder(stream) //
+                        .serve(izanami_service::service_fn(|_req| {
+                            http::Response::builder()
+                                .header("content-type", "text/plain")
+                                .body("hello")
+                        }))
+                }),
+        )
+        .with_graceful_shutdown(rx_shutdown)
+        .build()
+        .map_err(|e| eprintln!("server error: {}", e));
+        rt.spawn(Box::new(server));
 
         let client = Client::builder() //
             .build(TestConnect { local_addr });
@@ -101,7 +103,7 @@ mod unix {
             Body,
         },
         izanami_net::unix::AddrIncoming,
-        izanami_server::Server,
+        izanami_server::{h1::H1Connection, Server},
         izanami_service::{ext::ServiceExt, stream::StreamExt},
         std::{io, path::PathBuf},
         tempfile::Builder,
@@ -119,22 +121,24 @@ mod unix {
         let sock_tempdir = Builder::new().prefix("izanami-tests").tempdir()?;
         let sock_path = sock_tempdir.path().join("connect.sock");
 
-        let stream_service = AddrIncoming::bind(&sock_path)?
-            .into_service()
-            .with_adaptors()
-            .map(|stream| {
-                let service = izanami_service::service_fn(|_req| {
-                    http::Response::builder()
-                        .header("content-type", "text/plain")
-                        .body("hello")
-                });
-                (stream, service)
-            });
-
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = Server::new(stream_service) //
-            .with_graceful_shutdown(rx_shutdown);
-        server.start(&mut rt);
+        let server = Server::builder(
+            AddrIncoming::bind(&sock_path)?
+                .into_service()
+                .with_adaptors()
+                .map(|stream| {
+                    H1Connection::builder(stream) //
+                        .serve(izanami_service::service_fn(|_req| {
+                            http::Response::builder()
+                                .header("content-type", "text/plain")
+                                .body("hello")
+                        }))
+                }),
+        )
+        .with_graceful_shutdown(rx_shutdown)
+        .build()
+        .map_err(|e| eprintln!("server error: {}", e));
+        rt.spawn(Box::new(server));
 
         let client = Client::builder() //
             .build(TestConnect {

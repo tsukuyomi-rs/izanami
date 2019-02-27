@@ -4,7 +4,7 @@ use {
     http::Response,
     izanami::{
         net::tcp::AddrIncoming,
-        server::Server,
+        server::{h1::H1Connection, Server},
         service::{ext::ServiceExt, stream::StreamExt},
     },
     std::{fs, io, sync::Arc},
@@ -44,16 +44,21 @@ fn main() -> failure::Fallible<()> {
         AddrIncoming::bind("127.0.0.1:5000")? //
             .into_service()
             .with_adaptors()
-            .and_then(move |stream| rustls_acceptor.accept(stream).map_err(Into::into))
+            .and_then(move |stream| {
+                rustls_acceptor //
+                    .accept(stream)
+                    .map_err(Into::into)
+            })
             .map(|stream| {
-                let service = izanami::service::service_fn(move |_req| {
-                    Response::builder()
-                        .header("content-type", "text/plain")
-                        .body("Hello")
-                });
-                (stream, service)
+                H1Connection::builder(stream) //
+                    .serve(izanami::service::service_fn(move |_req| {
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body("Hello")
+                    }))
             }),
-    );
+    )
+    .map_err(|e| eprintln!("server error: {}", e));
 
     izanami::rt::run(server);
     Ok(())

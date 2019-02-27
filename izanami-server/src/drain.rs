@@ -63,61 +63,16 @@ impl Future for Draining {
 }
 
 #[derive(Clone, Debug)]
-pub(crate) struct Watch {
+pub struct Watch {
     rx: Shared<oneshot::Receiver<()>>,
     tx_drained: mpsc::Sender<Never>,
 }
 
 impl Watch {
-    pub(crate) fn watching<Fut, FnPoll, FnShutdown, T, E>(
-        self,
-        future: Fut,
-        on_poll: FnPoll,
-        on_drain: FnShutdown,
-    ) -> Watching<Fut, FnPoll, FnShutdown>
-    where
-        FnPoll: Fn(&mut Fut, &Watch) -> Poll<T, E>,
-        FnShutdown: FnOnce(&mut Fut),
-    {
-        Watching {
-            future,
-            on_poll,
-            on_drain: Some(on_drain),
-            watch: self,
-        }
-    }
-}
-
-#[allow(missing_debug_implementations)]
-pub(crate) struct Watching<Fut, FnPoll, FnShutdown> {
-    future: Fut,
-    on_poll: FnPoll,
-    on_drain: Option<FnShutdown>,
-    watch: Watch,
-}
-
-impl<Fut, FnPoll, FnShutdown, T, E> Future for Watching<Fut, FnPoll, FnShutdown>
-where
-    FnPoll: Fn(&mut Fut, &Watch) -> Poll<T, E>,
-    FnShutdown: FnOnce(&mut Fut),
-{
-    type Item = T;
-    type Error = E;
-
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            if let Some(on_drain) = self.on_drain.take() {
-                match self.watch.rx.poll() {
-                    Ok(Async::Ready(..)) | Err(..) => {
-                        on_drain(&mut self.future);
-                        continue;
-                    }
-                    Ok(Async::NotReady) => {
-                        self.on_drain = Some(on_drain);
-                    }
-                }
-            }
-            return (self.on_poll)(&mut self.future, &self.watch);
+    pub(crate) fn poll_signal(&mut self) -> bool {
+        match self.rx.poll() {
+            Ok(Async::Ready(..)) | Err(..) => true,
+            Ok(Async::NotReady) => false,
         }
     }
 }

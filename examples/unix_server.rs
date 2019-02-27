@@ -1,10 +1,11 @@
 #[cfg(unix)]
 mod imp {
     use {
+        futures::Future,
         http::Response,
         izanami::{
             net::unix::AddrIncoming,
-            server::Server, //
+            server::{h1::H1Connection, Server}, //
             service::{ext::ServiceExt, service_fn, stream::StreamExt},
         },
         std::io,
@@ -16,15 +17,15 @@ mod imp {
                 .into_service()
                 .with_adaptors()
                 .map(|stream| {
-                    let service = service_fn(|_req| {
-                        Response::builder()
-                            .header("content-type", "text/plain")
-                            .body("Hello")
-                    });
-
-                    (stream, service)
+                    H1Connection::builder(stream) //
+                        .serve(service_fn(|_req| {
+                            Response::builder()
+                                .header("content-type", "text/plain")
+                                .body("Hello")
+                        }))
                 }),
-        );
+        )
+        .map_err(|_| unimplemented!());
 
         izanami::rt::run(server);
         Ok(())
