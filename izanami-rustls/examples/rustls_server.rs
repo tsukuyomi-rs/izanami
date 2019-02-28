@@ -50,8 +50,8 @@ fn main() -> failure::Fallible<()> {
                     .map_err(Into::into)
             })
             .map(|stream| {
-                H1Connection::builder(stream) //
-                    .serve(izanami::service::service_fn(move |_req| {
+                H1Connection::build(stream) //
+                    .finish(izanami::service::service_fn(move |_req| {
                         Response::builder()
                             .header("content-type", "text/plain")
                             .body("Hello")

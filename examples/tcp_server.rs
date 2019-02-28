@@ -16,8 +16,8 @@ fn main() -> io::Result<()> {
             .with_adaptors()
             .map(|stream| {
                 let remote_addr = stream.remote_addr();
-                H1Connection::builder(stream) //
-                    .serve(service_fn(move |_req| -> io::Result<_> {
+                H1Connection::build(stream) //
+                    .finish(service_fn(move |_req| -> io::Result<_> {
                         let _ = &remote_addr;
                         Ok(Response::builder()
                             .header("content-type", "text/plain")

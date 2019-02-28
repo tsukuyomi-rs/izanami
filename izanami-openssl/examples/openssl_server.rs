@@ -86,8 +86,8 @@ fn main() -> failure::Fallible<()> {
                     logger
                 };
 
-                H1Connection::builder(stream) //
-                    .serve(izanami::service::service_fn(
+                H1Connection::build(stream) //
+                    .finish(izanami::service::service_fn(
                         move |req: http::Request<_>| {
                             slog::info!(logger, "got a request";
                                 "method" => %req.method(),

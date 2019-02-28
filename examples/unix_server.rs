@@ -17,8 +17,8 @@ mod imp {
                 .into_service()
                 .with_adaptors()
                 .map(|stream| {
-                    H1Connection::builder(stream) //
-                        .serve(service_fn(|_req| {
+                    H1Connection::build(stream) //
+                        .finish(service_fn(|_req| {
                             Response::builder()
                                 .header("content-type", "text/plain")
                                 .body("Hello")

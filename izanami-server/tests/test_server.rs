@@ -37,8 +37,8 @@ mod tcp {
                 .into_service()
                 .with_adaptors()
                 .map(|stream| {
-                    H1Connection::builder(stream) //
-                        .serve(izanami_service::service_fn(|_req| {
+                    H1Connection::build(stream) //
+                        .finish(izanami_service::service_fn(|_req| {
                             http::Response::builder()
                                 .header("content-type", "text/plain")
                                 .body("hello")
@@ -127,8 +127,8 @@ mod unix {
                 .into_service()
                 .with_adaptors()
                 .map(|stream| {
-                    H1Connection::builder(stream) //
-                        .serve(izanami_service::service_fn(|_req| {
+                    H1Connection::build(stream) //
+                        .finish(izanami_service::service_fn(|_req| {
                             http::Response::builder()
                                 .header("content-type", "text/plain")
                                 .body("hello")

@@ -22,8 +22,8 @@ fn main() -> io::Result<()> {
                 // such as the selected ALPN protocol or SNI server name
                 // are available at here.
 
-                H1Connection::builder(stream) //
-                    .serve(izanami::service::service_fn(move |_req| {
+                H1Connection::build(stream) //
+                    .finish(izanami::service::service_fn(move |_req| {
                         eprintln!("remote_addr = {}", remote_addr);
                         Response::builder()
                             .header("content-type", "text/plain")
