@@ -1,7 +1,7 @@
 //! HTTP/1 connection using hyper as backend.
 
 use {
-    crate::{drain::Watch, server::Connection, BoxedStdError},
+    crate::{server::Connection, BoxedStdError},
     bytes::{Buf, BufMut, Bytes, IntoBuf},
     futures::{Async, Future, Poll},
     http::{HeaderMap, Request, Response},
@@ -31,6 +31,24 @@ where
     }
 }
 
+#[doc(hidden)]
+#[allow(missing_debug_implementations)]
+pub struct DummyService(());
+
+impl<T> izanami_service::Service<T> for DummyService {
+    type Response = Response<String>;
+    type Error = hyper::Error;
+    type Future = futures::future::Empty<Self::Response, Self::Error>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        unreachable!("DummyService never used")
+    }
+
+    fn call(&mut self, _: T) -> Self::Future {
+        unreachable!("DummyService never used")
+    }
+}
+
 /// A builder for configuration of `H1Connection`.
 #[derive(Debug)]
 pub struct Builder<I> {
@@ -40,7 +58,7 @@ pub struct Builder<I> {
 
 impl<I> Builder<I>
 where
-    I: AsyncRead + AsyncWrite,
+    I: AsyncRead + AsyncWrite + 'static,
 {
     /// Creates a new `Builder` with the specified `stream`.
     pub fn new(stream: I) -> Self {
@@ -91,12 +109,21 @@ where
     /// Consumes itself and create an `H1Connection` with the specified `Service`.
     pub fn finish<S>(self, service: S) -> H1Connection<I, S>
     where
-        S: HttpService<RequestBody<I>>,
+        S: HttpService<RequestBody<I>> + 'static,
+        S::ResponseBody: Send + 'static,
+        <S::ResponseBody as BufStream>::Item: Send,
+        <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
+        <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+        S::Error: Into<BoxedStdError>,
     {
         H1Connection {
-            stream: self.stream,
-            service,
-            protocol: self.protocol,
+            conn: Some(self.protocol.serve_connection(
+                self.stream,
+                InnerService {
+                    inner: service,
+                    tx_upgraded: None,
+                },
+            )),
         }
     }
 }
@@ -104,56 +131,11 @@ where
 /// A `Connection` that serves an HTTP/1 connection using hyper.
 ///
 /// HTTP/2 is disabled.
-#[derive(Debug)]
-pub struct H1Connection<I, S> {
-    stream: I,
-    service: S,
-    protocol: Http<DummyExecutor>,
-}
-
-impl<I> H1Connection<I, ()>
-where
-    I: AsyncRead + AsyncWrite,
-{
-    /// Start building using the specified I/O.
-    pub fn build(stream: I) -> Builder<I> {
-        Builder::new(stream)
-    }
-}
-
-impl<I, S> Connection for H1Connection<I, S>
-where
-    I: AsyncRead + AsyncWrite + 'static,
-    S: HttpService<RequestBody<I>> + 'static,
-    S::ResponseBody: Send + 'static,
-    <S::ResponseBody as BufStream>::Item: Send,
-    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
-    S::Error: Into<BoxedStdError>,
-{
-    type Future = H1Task<I, S>;
-
-    fn into_future(self, watch: Watch) -> Self::Future {
-        H1Task {
-            conn: Some(self.protocol.serve_connection(
-                self.stream,
-                InnerService {
-                    inner: self.service,
-                    tx_upgraded: None,
-                },
-            )),
-            watch,
-            state: H1TaskState::Running,
-        }
-    }
-}
-
-#[doc(hidden)]
 #[allow(missing_debug_implementations)]
-pub struct H1Task<I, S>
+pub struct H1Connection<I, S>
 where
     I: AsyncRead + AsyncWrite + 'static,
-    S: HttpService<RequestBody<I>> + 'static,
+    S: HttpService<RequestBody<I>>,
     S::ResponseBody: Send + 'static,
     <S::ResponseBody as BufStream>::Item: Send,
     <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
@@ -161,64 +143,57 @@ where
     S::Error: Into<BoxedStdError>,
 {
     conn: Option<hyper::server::conn::Connection<I, InnerService<I, S>, DummyExecutor>>,
-    watch: Watch,
-    state: H1TaskState,
 }
 
-enum H1TaskState {
-    Running,
-    Drained,
-}
-
-impl<I, S> Future for H1Task<I, S>
+impl<I> H1Connection<I, DummyService>
 where
     I: AsyncRead + AsyncWrite + 'static,
-    S: HttpService<RequestBody<I>> + 'static,
-    S::ResponseBody: Send + 'static,
-    <S::ResponseBody as BufStream>::Item: Send,
-    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
-    S::Error: Into<BoxedStdError>,
 {
-    type Item = ();
-    type Error = ();
+    /// Start building using the specified I/O.
+    pub fn build(stream: I) -> Builder<I> {
+        Builder::new(stream)
+    }
+}
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        loop {
-            //
-            if let H1TaskState::Running = self.state {
-                if self.watch.poll_signal() {
-                    self.state = H1TaskState::Drained;
-                    if let Some(ref mut conn) = self.conn {
-                        conn.graceful_shutdown();
-                    }
-                    continue;
-                }
-            }
+impl<I, S, Bd> Connection for H1Connection<I, S>
+where
+    I: AsyncRead + AsyncWrite + 'static,
+    S: HttpService<RequestBody<I>, ResponseBody = Bd> + 'static,
+    S::Error: Into<BoxedStdError>,
+    Bd: HttpBody + Send + 'static,
+    Bd::Item: Send,
+    Bd::Error: Into<BoxedStdError>,
+    Bd::TrailersError: Into<BoxedStdError>,
+{
+    type Error = BoxedStdError;
 
-            if let Some(ref mut conn) = self.conn {
-                futures::try_ready!(conn
-                    .poll_without_shutdown()
-                    .map_err(|e| log::error!("connection error: {}", e)));
-            }
+    fn poll_complete(&mut self) -> Poll<(), Self::Error> {
+        if let Some(ref mut conn) = self.conn {
+            futures::try_ready!(conn.poll_without_shutdown());
+        }
 
-            if let Some(conn) = self.conn.take() {
-                let hyper::server::conn::Parts {
+        if let Some(conn) = self.conn.take() {
+            let hyper::server::conn::Parts {
+                io,
+                read_buf,
+                service: InnerService { tx_upgraded, .. },
+                ..
+            } = conn.into_parts();
+
+            if let Some(tx) = tx_upgraded {
+                let _ = tx.send(Upgraded {
                     io,
-                    read_buf,
-                    service: InnerService { tx_upgraded, .. },
-                    ..
-                } = conn.into_parts();
-
-                if let Some(tx) = tx_upgraded {
-                    let _ = tx.send(Upgraded {
-                        io,
-                        read_buf: Some(read_buf),
-                    });
-                }
-
-                return Ok(Async::Ready(()));
+                    read_buf: Some(read_buf),
+                });
             }
+        }
+
+        Ok(Async::Ready(()))
+    }
+
+    fn graceful_shutdown(&mut self) {
+        if let Some(ref mut conn) = self.conn {
+            conn.graceful_shutdown();
         }
     }
 }
@@ -229,23 +204,23 @@ struct InnerService<I, S> {
     tx_upgraded: Option<oneshot::Sender<Upgraded<I>>>,
 }
 
-impl<I, S> hyper::service::Service for InnerService<I, S>
+impl<I, S, Bd> hyper::service::Service for InnerService<I, S>
 where
-    I: AsyncRead + AsyncWrite + 'static,
-    S: HttpService<RequestBody<I>> + 'static,
-    S::ResponseBody: Send + 'static,
-    <S::ResponseBody as BufStream>::Item: Send,
-    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+    I: AsyncRead + AsyncWrite,
+    S: HttpService<RequestBody<I>, ResponseBody = Bd>,
     S::Error: Into<BoxedStdError>,
+    Bd: HttpBody + Send + 'static,
+    Bd::Item: Send,
+    Bd::Error: Into<BoxedStdError>,
+    Bd::TrailersError: Into<BoxedStdError>,
 {
     type ReqBody = hyper::Body;
-    type ResBody = InnerBody<I, S>;
+    type ResBody = InnerBody<Bd>;
     type Error = BoxedStdError;
-    type Future = InnerServiceFuture<I, S>;
+    type Future = InnerServiceFuture<S::Future>;
 
     #[inline]
-    fn call(&mut self, request: Request<hyper::Body>) -> Self::Future {
+    fn call(&mut self, request: Request<Self::ReqBody>) -> Self::Future {
         let (tx_upgraded, rx_upgraded) = oneshot::channel();
         self.tx_upgraded = Some(tx_upgraded);
         let request = request.map(|body| RequestBody { body, rx_upgraded });
@@ -256,21 +231,20 @@ where
 }
 
 #[allow(missing_debug_implementations)]
-struct InnerServiceFuture<I, S: HttpService<RequestBody<I>>> {
-    inner: S::Future,
+struct InnerServiceFuture<Fut> {
+    inner: Fut,
 }
 
-impl<I, S> Future for InnerServiceFuture<I, S>
+impl<Fut, Bd> Future for InnerServiceFuture<Fut>
 where
-    I: AsyncRead + AsyncWrite + 'static,
-    S: HttpService<RequestBody<I>>,
-    S::ResponseBody: Send + 'static,
-    <S::ResponseBody as BufStream>::Item: Send,
-    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
-    S::Error: Into<BoxedStdError>,
+    Fut: Future<Item = Response<Bd>>,
+    Fut::Error: Into<BoxedStdError>,
+    Bd: HttpBody + Send + 'static,
+    Bd::Item: Send,
+    Bd::Error: Into<BoxedStdError>,
+    Bd::TrailersError: Into<BoxedStdError>,
 {
-    type Item = Response<InnerBody<I, S>>;
+    type Item = Response<InnerBody<Bd>>;
     type Error = BoxedStdError;
 
     #[inline]
@@ -283,20 +257,18 @@ where
 }
 
 #[allow(missing_debug_implementations)]
-struct InnerBody<I, S: HttpService<RequestBody<I>>> {
-    inner: S::ResponseBody,
+struct InnerBody<Bd> {
+    inner: Bd,
 }
 
-impl<I, S> hyper::body::Payload for InnerBody<I, S>
+impl<Bd> hyper::body::Payload for InnerBody<Bd>
 where
-    I: AsyncRead + AsyncWrite + 'static,
-    S: HttpService<RequestBody<I>> + 'static,
-    S::ResponseBody: Send + 'static,
-    <S::ResponseBody as BufStream>::Item: Send,
-    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+    Bd: HttpBody + Send + 'static,
+    Bd::Item: Send,
+    Bd::Error: Into<BoxedStdError>,
+    Bd::TrailersError: Into<BoxedStdError>,
 {
-    type Data = <S::ResponseBody as BufStream>::Item;
+    type Data = Bd::Item;
     type Error = BoxedStdError;
 
     #[inline]

@@ -4,34 +4,43 @@ use {
     crate::drain::{Signal, Watch},
     futures::{future::Executor, Async, Future, Poll},
     izanami_service::Service,
+    tokio::executor::DefaultExecutor,
 };
 
+/// An asynchronous object that manages the connection to a remote peer.
 pub trait Connection {
-    type Future: Future<Item = (), Error = ()>;
-
-    fn into_future(self, watch: Watch) -> Self::Future;
-}
-
-/// A trait abstracting a factory that produces the connection with a client
-/// and the service associated with its connection.
-pub trait MakeConnection {
-    type Connection: Connection;
-
-    /// The error type that will be thrown when acquiring a connection.
+    /// The error type which will returned from this connection.
     type Error;
 
-    ///　A `Future` that establishes the connection to client and initializes the service.
+    /// Polls the completion of this connection.
+    fn poll_complete(&mut self) -> Poll<(), Self::Error>;
+
+    /// Notifies a shutdown signal to the connection.
+    ///
+    /// The connection may accept some requests for a while even after
+    /// receiving this notification.
+    fn graceful_shutdown(&mut self);
+}
+
+/// The factory of `Connection`.
+pub trait MakeConnection {
+    /// The connection produced by this factory.
+    type Connection: Connection<Error = Self::Error>;
+
+    /// The error type when producing a connection.
+    type Error;
+
+    ///　A `Future` that produces a value of `Connection`.
     type Future: Future<Item = Self::Connection, Error = Self::Error>;
 
-    /// Polls the connection from client, and create a future that establishes
-    /// its connection asynchronously.
+    /// Polls the connection from client, and create a `Future` if available.
     fn make_connection(&mut self) -> Poll<Self::Future, Self::Error>;
 }
 
 impl<T> MakeConnection for T
 where
     T: Service<()>,
-    T::Response: Connection,
+    T::Response: Connection<Error = T::Error>,
 {
     type Connection = T::Response;
     type Error = T::Error;
@@ -43,8 +52,9 @@ where
     }
 }
 
+/// The builder for creating an instance of `Server`.
 #[derive(Debug)]
-pub struct Builder<T, Sig = futures::future::Empty<(), ()>, Sp = tokio::executor::DefaultExecutor> {
+pub struct Builder<T, Sig = futures::future::Empty<(), ()>, Sp = DefaultExecutor> {
     make_connection: T,
     shutdown_signal: Sig,
     spawner: Sp,
@@ -72,9 +82,10 @@ where
     T: MakeConnection,
     Sig: Future<Item = ()>,
 {
+    /// Specifies the spawner using for spawning the background tasks per connection.
     pub fn spawner<Sp>(self, spawner: Sp) -> Builder<T, Sig, Sp>
     where
-        Sp: Executor<Conn<T>>,
+        Sp: Executor<Background<T>>,
     {
         Builder {
             make_connection: self.make_connection,
@@ -88,8 +99,9 @@ impl<T, Sig, Sp> Builder<T, Sig, Sp>
 where
     T: MakeConnection,
     Sig: Future<Item = ()>,
-    Sp: Executor<Conn<T>>,
+    Sp: Executor<Background<T>>,
 {
+    /// Creates an instance of `Server` using the current configuration.
     pub fn build(self) -> Server<T, Sig, Sp> {
         let (signal, watch) = crate::drain::channel();
         Server {
@@ -106,7 +118,7 @@ where
 
 /// An HTTP server.
 #[derive(Debug)]
-pub struct Server<T, Sig = futures::future::Empty<(), ()>, Sp = tokio::executor::DefaultExecutor> {
+pub struct Server<T, Sig = futures::future::Empty<(), ()>, Sp = DefaultExecutor> {
     state: ServerState<T, Sig, Sp>,
 }
 
@@ -117,7 +129,7 @@ where
     /// Creates a new `Server` with the specified `MakeConnection`.
     pub fn new(make_connection: T) -> Server<T>
     where
-        tokio::executor::DefaultExecutor: Executor<Conn<T>>,
+        DefaultExecutor: Executor<Background<T>>,
     {
         Server::builder(make_connection).build()
     }
@@ -138,7 +150,7 @@ enum ServerState<T, Sig, Sp> {
         make_connection: T,
         shutdown_signal: Sig,
         signal: Option<Signal>,
-        watch: Watch,
+        watch: crate::drain::Watch,
         spawner: Sp,
     },
     Done(crate::drain::Draining),
@@ -148,7 +160,7 @@ impl<T, Sig, Sp> Future for Server<T, Sig, Sp>
 where
     T: MakeConnection,
     Sig: Future<Item = ()>,
-    Sp: Executor<Conn<T>>,
+    Sp: Executor<Background<T>>,
 {
     type Item = ();
     type Error = T::Error;
@@ -168,11 +180,14 @@ where
                         ServerState::Done(signal.drain())
                     }
                     Ok(Async::NotReady) => {
-                        let future = futures::try_ready!(make_connection.make_connection());
+                        let conn = futures::try_ready!(make_connection.make_connection());
+                        let background = Background {
+                            state: BackgroundState::Connecting(conn),
+                            watch: watch.clone(),
+                            signaled: false,
+                        };
                         spawner
-                            .execute(Conn {
-                                state: ConnState::First(future, Some(watch.clone())),
-                            })
+                            .execute(background)
                             .unwrap_or_else(|_e| log::error!("executor error"));
                         continue;
                     }
@@ -187,18 +202,32 @@ where
     }
 }
 
-#[doc(hidden)]
+/// The background task spawned by `Server`.
 #[allow(missing_debug_implementations)]
-pub struct Conn<T: MakeConnection> {
-    state: ConnState<T>,
+pub struct Background<T: MakeConnection> {
+    state: BackgroundState<T>,
+    watch: Watch,
+    signaled: bool,
 }
 
-enum ConnState<T: MakeConnection> {
-    First(T::Future, Option<Watch>),
-    Second(<T::Connection as Connection>::Future),
+impl<T> Background<T>
+where
+    T: MakeConnection,
+{
+    fn poll2(&mut self) -> Poll<(), T::Error> {
+        loop {
+            if !self.signaled && self.watch.poll_signaled() {
+                self.signaled = true;
+                self.state.graceful_shutdown();
+                continue;
+            }
+
+            return self.state.poll_complete();
+        }
+    }
 }
 
-impl<T> Future for Conn<T>
+impl<T> Future for Background<T>
 where
     T: MakeConnection,
 {
@@ -206,17 +235,43 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        self.poll2()
+            .map_err(|_e| log::error!("error during polling background"))
+    }
+}
+
+#[allow(missing_debug_implementations)]
+enum BackgroundState<T: MakeConnection> {
+    Connecting(T::Future),
+    Running(T::Connection),
+    Closing(T::Connection),
+    Gone,
+}
+
+impl<T: MakeConnection> BackgroundState<T> {
+    fn poll_complete(&mut self) -> Poll<(), T::Error> {
         loop {
-            self.state = match self.state {
-                ConnState::First(ref mut future, ref mut watch) => {
-                    let conn = futures::try_ready!(future.poll().map_err(|_e| {
-                        log::error!("make_connection error");
-                    }));
-                    let watch = watch.take().expect("should be available at here");
-                    ConnState::Second(conn.into_future(watch))
+            *self = match self {
+                BackgroundState::Connecting(future) => {
+                    let conn = futures::try_ready!(future.poll());
+                    BackgroundState::Running(conn)
                 }
-                ConnState::Second(ref mut future) => return future.poll(),
+                BackgroundState::Running(conn) => return conn.poll_complete(),
+                BackgroundState::Closing(conn) => return conn.poll_complete(),
+                BackgroundState::Gone => unreachable!("invalid state"),
             };
         }
+    }
+
+    fn graceful_shutdown(&mut self) {
+        let conn = match std::mem::replace(self, BackgroundState::Gone) {
+            BackgroundState::Connecting(..) | BackgroundState::Gone => return,
+            BackgroundState::Running(mut conn) => {
+                conn.graceful_shutdown();
+                conn
+            }
+            BackgroundState::Closing(conn) => conn,
+        };
+        *self = BackgroundState::Closing(conn);
     }
 }

@@ -63,13 +63,13 @@ impl Future for Draining {
 }
 
 #[derive(Clone, Debug)]
-pub struct Watch {
+pub(crate) struct Watch {
     rx: Shared<oneshot::Receiver<()>>,
     tx_drained: mpsc::Sender<Never>,
 }
 
 impl Watch {
-    pub(crate) fn poll_signal(&mut self) -> bool {
+    pub(crate) fn poll_signaled(&mut self) -> bool {
         match self.rx.poll() {
             Ok(Async::Ready(..)) | Err(..) => true,
             Ok(Async::NotReady) => false,
