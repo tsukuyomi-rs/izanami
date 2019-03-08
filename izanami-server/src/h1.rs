@@ -417,14 +417,14 @@ where
 {
     fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
         if let Some(buf) = self.read_buf.take() {
-            if buf.len() > 0 {
+            if !buf.is_empty() {
                 let mut pre_reader = buf.into_buf().reader();
                 let read_cnt = pre_reader.read(dst)?;
 
                 let mut new_pre = pre_reader.into_inner().into_inner();
                 new_pre.advance(read_cnt);
 
-                if new_pre.len() > 0 {
+                if !new_pre.is_empty() {
                     self.read_buf = Some(new_pre);
                 }
 
@@ -468,7 +468,7 @@ where
                 let mut new_pre = xfer.into_inner().into_inner();
                 new_pre.advance(cnt);
 
-                if new_pre.len() > 0 {
+                if !new_pre.is_empty() {
                     self.read_buf = Some(new_pre);
                 }
 
