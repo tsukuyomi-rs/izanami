@@ -17,7 +17,7 @@ pub mod body;
 pub mod upgrade;
 
 pub use crate::{
-    body::{BodyTrailers, HttpBody}, //
+    body::HttpBody, //
     service::HttpService,
     upgrade::Upgrade,
 };

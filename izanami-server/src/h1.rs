@@ -6,10 +6,7 @@ use {
     futures::{Async, Future, Poll},
     http::{HeaderMap, Request, Response},
     hyper::{body::Payload as _Payload, server::conn::Http},
-    izanami_http::{
-        body::{BodyTrailers, ContentLength, HttpBody},
-        HttpService, Upgrade,
-    },
+    izanami_http::{body::HttpBody, HttpService, Upgrade},
     izanami_util::*,
     std::io,
     tokio::{
@@ -111,9 +108,8 @@ where
     where
         S: HttpService<RequestBody<I>> + 'static,
         S::ResponseBody: Send + 'static,
-        <S::ResponseBody as BufStream>::Item: Send,
-        <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-        <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+        <S::ResponseBody as HttpBody>::Data: Send,
+        <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
         S::Error: Into<BoxedStdError>,
     {
         H1Connection {
@@ -137,9 +133,8 @@ where
     I: AsyncRead + AsyncWrite + 'static,
     S: HttpService<RequestBody<I>>,
     S::ResponseBody: Send + 'static,
-    <S::ResponseBody as BufStream>::Item: Send,
-    <S::ResponseBody as BufStream>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as BodyTrailers>::TrailersError: Into<BoxedStdError>,
+    <S::ResponseBody as HttpBody>::Data: Send,
+    <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
     S::Error: Into<BoxedStdError>,
 {
     conn: Option<hyper::server::conn::Connection<I, InnerService<I, S>, DummyExecutor>>,
@@ -161,9 +156,8 @@ where
     S: HttpService<RequestBody<I>, ResponseBody = Bd> + 'static,
     S::Error: Into<BoxedStdError>,
     Bd: HttpBody + Send + 'static,
-    Bd::Item: Send,
+    Bd::Data: Send,
     Bd::Error: Into<BoxedStdError>,
-    Bd::TrailersError: Into<BoxedStdError>,
 {
     type Error = BoxedStdError;
 
@@ -210,9 +204,8 @@ where
     S: HttpService<RequestBody<I>, ResponseBody = Bd>,
     S::Error: Into<BoxedStdError>,
     Bd: HttpBody + Send + 'static,
-    Bd::Item: Send,
+    Bd::Data: Send,
     Bd::Error: Into<BoxedStdError>,
-    Bd::TrailersError: Into<BoxedStdError>,
 {
     type ReqBody = hyper::Body;
     type ResBody = InnerBody<Bd>;
@@ -240,9 +233,8 @@ where
     Fut: Future<Item = Response<Bd>>,
     Fut::Error: Into<BoxedStdError>,
     Bd: HttpBody + Send + 'static,
-    Bd::Item: Send,
+    Bd::Data: Send,
     Bd::Error: Into<BoxedStdError>,
-    Bd::TrailersError: Into<BoxedStdError>,
 {
     type Item = Response<InnerBody<Bd>>;
     type Error = BoxedStdError;
@@ -264,29 +256,25 @@ struct InnerBody<Bd> {
 impl<Bd> hyper::body::Payload for InnerBody<Bd>
 where
     Bd: HttpBody + Send + 'static,
-    Bd::Item: Send,
+    Bd::Data: Send,
     Bd::Error: Into<BoxedStdError>,
-    Bd::TrailersError: Into<BoxedStdError>,
 {
-    type Data = Bd::Item;
+    type Data = Bd::Data;
     type Error = BoxedStdError;
 
     #[inline]
     fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
-        BufStream::poll_buf(&mut self.inner).map_err(Into::into)
+        HttpBody::poll_data(&mut self.inner).map_err(Into::into)
     }
 
     #[inline]
     fn poll_trailers(&mut self) -> Poll<Option<http::HeaderMap>, Self::Error> {
-        BodyTrailers::poll_trailers(&mut self.inner).map_err(Into::into)
+        HttpBody::poll_trailers(&mut self.inner).map_err(Into::into)
     }
 
     #[inline]
     fn content_length(&self) -> Option<u64> {
-        match HttpBody::content_length(&self.inner) {
-            ContentLength::Sized(len) => Some(len),
-            ContentLength::Chunked => None,
-        }
+        None
     }
 }
 
@@ -310,44 +298,43 @@ impl<I> RequestBody<I> {
 }
 
 impl<I> BufStream for RequestBody<I> {
-    type Item = io::Cursor<Bytes>;
+    type Item = Data;
     type Error = BoxedStdError;
 
     fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
         self.body
             .poll_data()
-            .map(|x| x.map(|opt| opt.map(|chunk| io::Cursor::new(chunk.into_bytes()))))
+            .map_async_opt(Data)
             .map_err(Into::into)
     }
 
     fn size_hint(&self) -> SizeHint {
-        let mut hint = SizeHint::new();
-        if let Some(len) = self.body.content_length() {
-            hint.set_upper(len);
-            hint.set_lower(len);
-        }
-        hint
-    }
-}
-
-impl<I> BodyTrailers for RequestBody<I> {
-    type TrailersError = BoxedStdError;
-
-    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::TrailersError> {
-        self.body.poll_trailers().map_err(Into::into)
+        SizeHint::new()
     }
 }
 
 impl<I> HttpBody for RequestBody<I> {
+    type Data = Data;
+    type Error = BoxedStdError;
+
+    fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
+        BufStream::poll_buf(self)
+    }
+
+    fn size_hint(&self) -> tokio_buf::SizeHint {
+        BufStream::size_hint(self)
+    }
+
+    fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::Error> {
+        self.body.poll_trailers().map_err(Into::into)
+    }
+
     fn is_end_stream(&self) -> bool {
         self.body.is_end_stream()
     }
 
-    fn content_length(&self) -> ContentLength {
-        match self.body.content_length() {
-            Some(len) => ContentLength::Sized(len),
-            None => ContentLength::Chunked,
-        }
+    fn content_length(&self) -> Option<u64> {
+        self.body.content_length()
     }
 }
 
@@ -361,6 +348,35 @@ where
 
     fn on_upgrade(self) -> Self::Future {
         OnUpgrade(self.rx_upgraded)
+    }
+}
+
+#[derive(Debug)]
+pub struct Data(hyper::body::Chunk);
+
+impl Data {
+    pub fn into_bytes(self) -> Bytes {
+        self.0.into_bytes()
+    }
+}
+
+impl AsRef<[u8]> for Data {
+    fn as_ref(&self) -> &[u8] {
+        self.0.bytes()
+    }
+}
+
+impl Buf for Data {
+    fn remaining(&self) -> usize {
+        self.0.remaining()
+    }
+
+    fn bytes(&self) -> &[u8] {
+        self.0.bytes()
+    }
+
+    fn advance(&mut self, cnt: usize) {
+        self.0.advance(cnt);
     }
 }
 
