@@ -210,19 +210,34 @@ pub struct Background<T: MakeConnection> {
     signaled: bool,
 }
 
+#[allow(missing_debug_implementations)]
+enum BackgroundState<T: MakeConnection> {
+    Connecting(T::Future),
+    Running(T::Connection),
+    Closed,
+}
+
 impl<T> Background<T>
 where
     T: MakeConnection,
 {
     fn poll2(&mut self) -> Poll<(), T::Error> {
         loop {
-            if !self.signaled && self.watch.poll_signaled() {
-                self.signaled = true;
-                self.state.graceful_shutdown();
-                continue;
-            }
-
-            return self.state.poll_complete();
+            self.state = match self.state {
+                BackgroundState::Connecting(ref mut future) => {
+                    let conn = futures::try_ready!(future.poll());
+                    BackgroundState::Running(conn)
+                }
+                BackgroundState::Running(ref mut conn) => {
+                    if !self.signaled && self.watch.poll_signaled() {
+                        self.signaled = true;
+                        conn.graceful_shutdown();
+                    }
+                    futures::try_ready!(conn.poll_complete());
+                    return Ok(Async::Ready(()));
+                }
+                BackgroundState::Closed => unreachable!("invalid state"),
+            };
         }
     }
 }
@@ -235,43 +250,12 @@ where
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.poll2()
-            .map_err(|_e| log::error!("error during polling background"))
-    }
-}
-
-#[allow(missing_debug_implementations)]
-enum BackgroundState<T: MakeConnection> {
-    Connecting(T::Future),
-    Running(T::Connection),
-    Closing(T::Connection),
-    Gone,
-}
-
-impl<T: MakeConnection> BackgroundState<T> {
-    fn poll_complete(&mut self) -> Poll<(), T::Error> {
-        loop {
-            *self = match self {
-                BackgroundState::Connecting(future) => {
-                    let conn = futures::try_ready!(future.poll());
-                    BackgroundState::Running(conn)
-                }
-                BackgroundState::Running(conn) => return conn.poll_complete(),
-                BackgroundState::Closing(conn) => return conn.poll_complete(),
-                BackgroundState::Gone => unreachable!("invalid state"),
-            };
+        match self.poll2() {
+            Ok(Async::Ready(())) => (),
+            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            Err(_e) => log::error!("error during polling background"),
         }
-    }
-
-    fn graceful_shutdown(&mut self) {
-        let conn = match std::mem::replace(self, BackgroundState::Gone) {
-            BackgroundState::Connecting(..) | BackgroundState::Gone => return,
-            BackgroundState::Running(mut conn) => {
-                conn.graceful_shutdown();
-                conn
-            }
-            BackgroundState::Closing(conn) => conn,
-        };
-        *self = BackgroundState::Closing(conn);
+        self.state = BackgroundState::Closed;
+        Ok(Async::Ready(()))
     }
 }
