@@ -2,17 +2,16 @@
 
 use {
     crate::{server::Connection, BoxedStdError},
-    bytes::{Buf, BufMut, Bytes, IntoBuf},
+    bytes::{Buf, Bytes},
     futures::{Async, Future, Poll},
     http::{HeaderMap, Request, Response},
-    hyper::{body::Payload as _Payload, server::conn::Http},
+    hyper::{
+        body::Payload as _Payload,
+        server::conn::{Connection as HyperConnection, Http},
+    },
     izanami_http::{body::HttpBody, HttpService, Upgrade},
     izanami_util::*,
-    std::io,
-    tokio::{
-        io::{AsyncRead, AsyncWrite},
-        sync::oneshot,
-    },
+    tokio::io::{AsyncRead, AsyncWrite},
     tokio_buf::{BufStream, SizeHint},
 };
 
@@ -112,14 +111,15 @@ where
         <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
         S::Error: Into<BoxedStdError>,
     {
+        let conn = self.protocol.serve_connection(
+            self.stream,
+            InnerService {
+                inner: service,
+                send_upgrade: None,
+            },
+        );
         H1Connection {
-            conn: Some(self.protocol.serve_connection(
-                self.stream,
-                InnerService {
-                    inner: service,
-                    tx_upgraded: None,
-                },
-            )),
+            state: State::InFlight(conn),
         }
     }
 }
@@ -137,7 +137,22 @@ where
     <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
     S::Error: Into<BoxedStdError>,
 {
-    conn: Option<hyper::server::conn::Connection<I, InnerService<I, S>, DummyExecutor>>,
+    state: State<I, S>,
+}
+
+#[allow(missing_debug_implementations)]
+enum State<I, S>
+where
+    I: AsyncRead + AsyncWrite + 'static,
+    S: HttpService<RequestBody<I>>,
+    S::ResponseBody: Send + 'static,
+    <S::ResponseBody as HttpBody>::Data: Send,
+    <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
+    S::Error: Into<BoxedStdError>,
+{
+    InFlight(HyperConnection<I, InnerService<I, S>, DummyExecutor>),
+    Shutdown(I),
+    Closed,
 }
 
 impl<I> H1Connection<I, DummyService>
@@ -147,6 +162,56 @@ where
     /// Start building using the specified I/O.
     pub fn build(stream: I) -> Builder<I> {
         Builder::new(stream)
+    }
+}
+
+impl<I, S, Bd> H1Connection<I, S>
+where
+    I: AsyncRead + AsyncWrite + 'static,
+    S: HttpService<RequestBody<I>, ResponseBody = Bd> + 'static,
+    S::Error: Into<BoxedStdError>,
+    Bd: HttpBody + Send + 'static,
+    Bd::Data: Send,
+    Bd::Error: Into<BoxedStdError>,
+{
+    fn poll_complete_inner(&mut self) -> Poll<(), BoxedStdError> {
+        loop {
+            match self.state {
+                State::InFlight(ref mut conn) => {
+                    // run HTTP dispatcher without calling `AsyncRead::shutdown`.
+                    futures::try_ready!(conn.poll_without_shutdown());
+                }
+                State::Shutdown(ref mut io) => {
+                    // shutdown the underlying I/O manually.
+                    return io.shutdown().map_err(Into::into);
+                }
+                State::Closed => return Ok(Async::Ready(())),
+            }
+
+            self.state = match std::mem::replace(&mut self.state, State::Closed) {
+                State::InFlight(conn) => {
+                    let hyper::server::conn::Parts {
+                        io,
+                        read_buf,
+                        service: InnerService { send_upgrade, .. },
+                        ..
+                    } = conn.into_parts();
+
+                    // send the I/O object to request handler.
+                    let io = match send_upgrade {
+                        Some(tx) => match tx.send(io, read_buf) {
+                            Ok(()) => return Ok(Async::Ready(())),
+                            Err(io) => io,
+                        },
+                        None => io,
+                    };
+
+                    State::Shutdown(io)
+                }
+
+                State::Shutdown(..) | State::Closed => unreachable!(),
+            }
+        }
     }
 }
 
@@ -162,32 +227,18 @@ where
     type Error = BoxedStdError;
 
     fn poll_complete(&mut self) -> Poll<(), Self::Error> {
-        if let Some(ref mut conn) = self.conn {
-            futures::try_ready!(conn.poll_without_shutdown());
-        }
-
-        if let Some(conn) = self.conn.take() {
-            let hyper::server::conn::Parts {
-                io,
-                read_buf,
-                service: InnerService { tx_upgraded, .. },
-                ..
-            } = conn.into_parts();
-
-            if let Some(tx) = tx_upgraded {
-                let _ = tx.send(Upgraded {
-                    io,
-                    read_buf: Some(read_buf),
-                });
-            }
-        }
-
-        Ok(Async::Ready(()))
+        let res = match self.poll_complete_inner() {
+            Ok(Async::NotReady) => return Ok(Async::NotReady),
+            res => res,
+        };
+        self.state = State::Closed;
+        res
     }
 
     fn graceful_shutdown(&mut self) {
-        if let Some(ref mut conn) = self.conn {
-            conn.graceful_shutdown();
+        match self.state {
+            State::InFlight(ref mut conn) => conn.graceful_shutdown(),
+            _ => (),
         }
     }
 }
@@ -195,7 +246,7 @@ where
 #[allow(missing_debug_implementations)]
 struct InnerService<I, S> {
     inner: S,
-    tx_upgraded: Option<oneshot::Sender<Upgraded<I>>>,
+    send_upgrade: Option<upgrade::SendUpgrade<I>>,
 }
 
 impl<I, S, Bd> hyper::service::Service for InnerService<I, S>
@@ -213,10 +264,23 @@ where
     type Future = InnerServiceFuture<S::Future>;
 
     #[inline]
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        self.inner.poll_ready().map_err(Into::into)
+    }
+
+    #[inline]
     fn call(&mut self, request: Request<Self::ReqBody>) -> Self::Future {
-        let (tx_upgraded, rx_upgraded) = oneshot::channel();
-        self.tx_upgraded = Some(tx_upgraded);
-        let request = request.map(|body| RequestBody { body, rx_upgraded });
+        let (tx, rx) = upgrade::pair();
+        if let Some(tx_old) = self.send_upgrade.replace(tx) {
+            // TODO: send appropriate error value to rx.
+            drop(tx_old);
+        }
+
+        let request = request.map(|body| RequestBody {
+            body,
+            on_upgrade: rx,
+        });
+
         InnerServiceFuture {
             inner: self.inner.respond(request),
         }
@@ -282,7 +346,7 @@ where
 #[derive(Debug)]
 pub struct RequestBody<I> {
     body: hyper::Body,
-    rx_upgraded: oneshot::Receiver<Upgraded<I>>,
+    on_upgrade: upgrade::OnUpgrade<I>,
 }
 
 impl<I> RequestBody<I> {
@@ -342,12 +406,12 @@ impl<I> Upgrade for RequestBody<I>
 where
     I: AsyncRead + AsyncWrite,
 {
-    type Upgraded = Upgraded<I>;
+    type Upgraded = upgrade::Upgraded<I>;
     type Error = BoxedStdError;
-    type Future = OnUpgrade<I>;
+    type Future = upgrade::OnUpgrade<I>;
 
     fn on_upgrade(self) -> Self::Future {
-        OnUpgrade(self.rx_upgraded)
+        self.on_upgrade
     }
 }
 
@@ -380,117 +444,133 @@ impl Buf for Data {
     }
 }
 
-#[derive(Debug)]
-pub struct OnUpgrade<I>(oneshot::Receiver<Upgraded<I>>);
-
-impl<I> Future for OnUpgrade<I> {
-    type Item = Upgraded<I>;
-    type Error = BoxedStdError;
-
-    #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        self.0
-            .poll()
-            .map_err(|_| failure::format_err!("recv error").compat().into())
-    }
-}
-
-// FIXME: impl AsyncRead, AsyncWrite
-#[derive(Debug)]
-pub struct Upgraded<I> {
-    io: I,
-    read_buf: Option<Bytes>,
-}
-
-impl<I> Upgraded<I>
-where
-    I: AsyncRead + AsyncWrite,
-{
-    pub fn into_parts(self) -> (I, Option<Bytes>) {
-        (self.io, self.read_buf)
-    }
-}
-
-impl<I> io::Read for Upgraded<I>
-where
-    I: AsyncRead + AsyncWrite,
-{
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        if let Some(buf) = self.read_buf.take() {
-            if !buf.is_empty() {
-                let mut pre_reader = buf.into_buf().reader();
-                let read_cnt = pre_reader.read(dst)?;
-
-                let mut new_pre = pre_reader.into_inner().into_inner();
-                new_pre.advance(read_cnt);
-
-                if !new_pre.is_empty() {
-                    self.read_buf = Some(new_pre);
-                }
-
-                return Ok(read_cnt);
-            }
-        }
-        self.io.read(dst)
-    }
-}
-
-impl<I> io::Write for Upgraded<I>
-where
-    I: AsyncRead + AsyncWrite,
-{
-    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.io.write(src)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.io.flush()
-    }
-}
-
-impl<I> AsyncRead for Upgraded<I>
-where
-    I: AsyncRead + AsyncWrite,
-{
-    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [u8]) -> bool {
-        self.io.prepare_uninitialized_buffer(buf)
-    }
-
-    fn read_buf<B: BufMut>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
-        if let Some(bs) = self.read_buf.take() {
-            let pre_len = bs.len();
-            if pre_len > 0 {
-                let cnt = std::cmp::min(buf.remaining_mut(), pre_len);
-                let pre_buf = bs.into_buf();
-                let mut xfer = Buf::take(pre_buf, cnt);
-                buf.put(&mut xfer);
-
-                let mut new_pre = xfer.into_inner().into_inner();
-                new_pre.advance(cnt);
-
-                if !new_pre.is_empty() {
-                    self.read_buf = Some(new_pre);
-                }
-
-                return Ok(Async::Ready(cnt));
-            }
-        }
-        self.io.read_buf(buf)
-    }
-}
-
-impl<I> AsyncWrite for Upgraded<I>
-where
-    I: AsyncRead + AsyncWrite,
-{
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        AsyncWrite::shutdown(&mut self.io)
-    }
-
-    fn write_buf<B: Buf>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
-        AsyncWrite::write_buf(&mut self.io, buf)
-    }
-}
-
 /// Type alias representing the HTTP request passed to the services.
 pub type HttpRequest<I> = http::Request<RequestBody<I>>;
+
+// ==== upgrade ====
+
+pub mod upgrade {
+    use {
+        super::BoxedStdError,
+        bytes::{Buf, BufMut, Bytes, IntoBuf},
+        futures::{Async, Future, Poll},
+        tokio::{io, sync::oneshot},
+    };
+
+    pub(super) fn pair<I>() -> (SendUpgrade<I>, OnUpgrade<I>) {
+        let (tx, rx) = oneshot::channel();
+        let send_upgrade = SendUpgrade(tx);
+        let on_upgrade = OnUpgrade(rx);
+        (send_upgrade, on_upgrade)
+    }
+
+    #[derive(Debug)]
+    pub(super) struct SendUpgrade<I>(oneshot::Sender<Upgraded<I>>);
+
+    impl<I> SendUpgrade<I> {
+        pub(super) fn send(self, io: I, read_buf: Bytes) -> Result<(), I> {
+            let upgraded = Upgraded {
+                io,
+                read_buf: Some(read_buf),
+            };
+            self.0.send(upgraded).map_err(|Upgraded { io, .. }| io)
+        }
+    }
+
+    #[derive(Debug)]
+    pub struct OnUpgrade<I>(oneshot::Receiver<Upgraded<I>>);
+
+    impl<I> Future for OnUpgrade<I> {
+        type Item = Upgraded<I>;
+        type Error = BoxedStdError;
+
+        #[inline]
+        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+            self.0
+                .poll()
+                .map_err(|_| failure::format_err!("recv error").compat().into())
+        }
+    }
+
+    // FIXME: impl AsyncRead, AsyncWrite
+    #[derive(Debug)]
+    pub struct Upgraded<I> {
+        io: I,
+        read_buf: Option<Bytes>,
+    }
+
+    impl<I> Upgraded<I> {
+        pub fn into_parts(self) -> (I, Option<Bytes>) {
+            (self.io, self.read_buf)
+        }
+    }
+
+    impl<I: io::Read> io::Read for Upgraded<I> {
+        fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
+            if let Some(buf) = self.read_buf.take() {
+                if !buf.is_empty() {
+                    let mut pre_reader = buf.into_buf().reader();
+                    let read_cnt = pre_reader.read(dst)?;
+
+                    let mut new_pre = pre_reader.into_inner().into_inner();
+                    new_pre.advance(read_cnt);
+
+                    if !new_pre.is_empty() {
+                        self.read_buf = Some(new_pre);
+                    }
+
+                    return Ok(read_cnt);
+                }
+            }
+            self.io.read(dst)
+        }
+    }
+
+    impl<I: io::Write> io::Write for Upgraded<I> {
+        fn write(&mut self, src: &[u8]) -> io::Result<usize> {
+            self.io.write(src)
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            self.io.flush()
+        }
+    }
+
+    impl<I: io::AsyncRead> io::AsyncRead for Upgraded<I> {
+        unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [u8]) -> bool {
+            self.io.prepare_uninitialized_buffer(buf)
+        }
+
+        fn read_buf<B: BufMut>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
+            if let Some(bs) = self.read_buf.take() {
+                let pre_len = bs.len();
+                if pre_len > 0 {
+                    let cnt = std::cmp::min(buf.remaining_mut(), pre_len);
+                    let pre_buf = bs.into_buf();
+                    let mut xfer = Buf::take(pre_buf, cnt);
+                    buf.put(&mut xfer);
+
+                    let mut new_pre = xfer.into_inner().into_inner();
+                    new_pre.advance(cnt);
+
+                    if !new_pre.is_empty() {
+                        self.read_buf = Some(new_pre);
+                    }
+
+                    return Ok(Async::Ready(cnt));
+                }
+            }
+            self.io.read_buf(buf)
+        }
+    }
+
+    impl<I: io::AsyncWrite> io::AsyncWrite for Upgraded<I> {
+        fn shutdown(&mut self) -> Poll<(), io::Error> {
+            self.io.shutdown()
+        }
+
+        fn write_buf<B: Buf>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
+            self.io.write_buf(buf)
+        }
+    }
+}
