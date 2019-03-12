@@ -16,15 +16,23 @@ include = [
 
 [dependencies]
 izanami-http = { version = "0.1.0-preview.1", path = "izanami-http" }
-izanami-net = { version = "0.1.0-preview.1", path = "izanami-net" }
-izanami-rt = { version = "0.1.0-preview.1", path = "izanami-rt" }
-izanami-server = { version = "0.1.0-preview.1", path = "izanami-server" }
 izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
 izanami-util = { version = "0.1.0-preview.1", path = "izanami-util" }
 
-[dev-dependencies]
+bytes = "0.4"
+failure = "0.1.3"
 futures = "0.1"
 http = "0.1"
+hyper = "0.12"
+log = "0.4"
+tokio = { version = "0.1.15", features = ["sync"] }
+tokio-buf = "0.1"
+tokio-executor = "0.1"
+tokio-threadpool = "0.1"
+
+[dev-dependencies]
+http = "0.1"
+tempfile = "3"
 version-sync = "0.7"
 
 [dev-dependencies.cargo-husky]
@@ -35,9 +43,6 @@ features = ["user-hooks"]
 [workspace]
 members = [
   "izanami-http",
-  "izanami-net",
-  "izanami-rt",
-  "izanami-server",
   "izanami-service",
   "izanami-util",
 

@@ -10,12 +10,12 @@
 )]
 #![forbid(clippy::unimplemented)]
 
+pub mod net;
+pub mod rt;
+pub mod server;
+
 #[doc(no_inline)]
 pub use {
     izanami_http as http, //
-    izanami_net as net,
-    izanami_rt as rt,
-    izanami_server as server,
     izanami_service as service,
-    izanami_util as util,
 };

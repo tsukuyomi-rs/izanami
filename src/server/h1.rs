@@ -1,7 +1,7 @@
 //! HTTP/1 connection using hyper as backend.
 
 use {
-    crate::{server::Connection, BoxedStdError},
+    super::{BoxedStdError, Connection},
     bytes::{Buf, Bytes},
     futures::{Async, Future, Poll},
     http::{HeaderMap, Request, Response},

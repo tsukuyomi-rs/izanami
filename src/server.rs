@@ -1,7 +1,13 @@
-//! Abstraction around HTTP services.
+//! An HTTP server implementation powered by `hyper` and `tower-service`.
+
+pub mod h1;
+mod watch;
+
+#[allow(dead_code)]
+type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
 
 use {
-    crate::drain::{Signal, Watch},
+    self::watch::{Signal, Watch},
     futures::{future::Executor, Async, Future, Poll},
     izanami_service::Service,
     tokio::executor::DefaultExecutor,
@@ -103,7 +109,7 @@ where
 {
     /// Creates an instance of `Server` using the current configuration.
     pub fn build(self) -> Server<T, Sig, Sp> {
-        let (signal, watch) = crate::drain::channel();
+        let (signal, watch) = watch::channel();
         Server {
             state: ServerState::Running {
                 make_connection: self.make_connection,
@@ -150,10 +156,10 @@ enum ServerState<T, Sig, Sp> {
         make_connection: T,
         shutdown_signal: Sig,
         signal: Option<Signal>,
-        watch: crate::drain::Watch,
+        watch: watch::Watch,
         spawner: Sp,
     },
-    Done(crate::drain::Draining),
+    Done(watch::Draining),
 }
 
 impl<T, Sig, Sp> Future for Server<T, Sig, Sp>
