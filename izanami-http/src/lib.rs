@@ -19,5 +19,4 @@ pub mod upgrade;
 pub use crate::{
     body::HttpBody, //
     service::HttpService,
-    upgrade::Upgrade,
 };
