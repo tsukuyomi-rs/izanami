@@ -2,10 +2,7 @@ use {
     futures::{Async, Future, Poll},
     http::{Response, StatusCode},
     izanami::{
-        http::{
-            body::HttpBody,
-            upgrade::{HttpUpgrade, Upgraded},
-        },
+        http::upgrade::{HttpUpgrade, MaybeUpgrade},
         net::tcp::AddrIncoming,
         server::{
             h1::{H1Connection, HttpRequest as H1Request},
@@ -16,69 +13,6 @@ use {
     std::io,
     tokio::io::{AsyncRead, AsyncWrite},
 };
-
-enum WithUpgrade<T, U> {
-    Data(T),
-    Upgrade(U),
-}
-
-impl<T, U> HttpBody for WithUpgrade<T, U>
-where
-    T: HttpBody,
-{
-    type Data = T::Data;
-    type Error = T::Error;
-
-    fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
-        match self {
-            WithUpgrade::Data(ref mut data) => data.poll_data(),
-            WithUpgrade::Upgrade(..) => Ok(Async::Ready(None)),
-        }
-    }
-
-    fn poll_trailers(&mut self) -> Poll<Option<http::HeaderMap>, Self::Error> {
-        match self {
-            WithUpgrade::Data(ref mut data) => data.poll_trailers(),
-            WithUpgrade::Upgrade(..) => Ok(Async::Ready(None)),
-        }
-    }
-
-    fn is_end_stream(&self) -> bool {
-        match self {
-            WithUpgrade::Data(ref data) => data.is_end_stream(),
-            WithUpgrade::Upgrade(..) => true,
-        }
-    }
-
-    fn content_length(&self) -> Option<u64> {
-        match self {
-            WithUpgrade::Data(ref data) => data.content_length(),
-            WithUpgrade::Upgrade(..) => None,
-        }
-    }
-
-    fn size_hint(&self) -> tokio_buf::SizeHint {
-        match self {
-            WithUpgrade::Data(ref data) => data.size_hint(),
-            WithUpgrade::Upgrade(..) => Default::default(),
-        }
-    }
-}
-
-impl<T, U, I> HttpUpgrade<I> for WithUpgrade<T, U>
-where
-    U: HttpUpgrade<I>,
-{
-    type Upgraded = U::Upgraded;
-    type Error = U::Error;
-
-    fn upgrade(self, stream: I) -> Result<Self::Upgraded, I> {
-        match self {
-            WithUpgrade::Upgrade(cx) => cx.upgrade(stream),
-            WithUpgrade::Data(..) => Err(stream),
-        }
-    }
-}
 
 struct FooBar(());
 
@@ -107,13 +41,14 @@ enum State<I> {
     Closed,
 }
 
-impl<I> Upgraded for FooBarConnection<I>
+impl<I> Future for FooBarConnection<I>
 where
     I: AsyncRead + AsyncWrite,
 {
+    type Item = ();
     type Error = std::io::Error;
 
-    fn poll_done(&mut self) -> Poll<(), Self::Error> {
+    fn poll(&mut self) -> Poll<(), Self::Error> {
         loop {
             self.state = match self.state {
                 State::Reading(ref mut read_exact) => {
@@ -135,14 +70,6 @@ where
             };
         }
     }
-
-    fn graceful_shutdown(&mut self) {}
-}
-
-fn bad_request<T, U>(body: T) -> Response<WithUpgrade<T, U>> {
-    let mut res = Response::new(WithUpgrade::Data(body));
-    *res.status_mut() = StatusCode::BAD_REQUEST;
-    res
 }
 
 fn main() -> io::Result<()> {
@@ -153,29 +80,28 @@ fn main() -> io::Result<()> {
             .map(|stream| {
                 H1Connection::build(stream) //
                     .finish(service_fn(move |req: H1Request| -> io::Result<_> {
-                        match req.headers().get(http::header::CONNECTION) {
-                            Some(h) if h == "upgrade" => (),
+                        let err_msg = match req.headers().get(http::header::UPGRADE) {
+                            Some(h) if h == "foobar" => None,
                             Some(..) => {
-                                return Ok(bad_request(
-                                    "the header field `connection' must be equal to 'upgrade'.",
-                                ));
+                                Some("the header field `upgrade' must be equal to 'foobar'.")
                             }
-                            None => return Ok(bad_request("missing header field: `connection'")),
+                            None => Some("missing header field: `upgrade'"),
+                        };
+
+                        if let Some(err_msg) = err_msg {
+                            let mut res = Response::new(MaybeUpgrade::Data(err_msg));
+                            *res.status_mut() = StatusCode::BAD_REQUEST;
+                            return Ok(res);
                         }
-                        match req.headers().get(http::header::UPGRADE) {
-                            Some(h) if h == "foobar" => (),
-                            Some(..) => {
-                                return Ok(bad_request(
-                                    "the header field `upgrade' must be equal to 'foobar'.",
-                                ));
-                            }
-                            None => return Ok(bad_request("missing header field: `upgrade'")),
-                        }
+
+                        // When the response has a status code `101 Switching Protocols`, the connection
+                        // upgrades the protocol using the associated response body.
                         let response = Response::builder()
                             .status(101)
                             .header("upgrade", "foobar")
-                            .body(WithUpgrade::Upgrade(FooBar(())))
+                            .body(MaybeUpgrade::Upgrade(FooBar(())))
                             .unwrap();
+
                         Ok(response)
                     }))
             }),
