@@ -35,6 +35,32 @@ where
     }
 }
 
+pub fn upgrade_fn<I, R>(
+    f: impl FnOnce(I) -> Result<R, I>,
+) -> impl HttpUpgrade<I, Upgraded = R, Error = R::Error>
+where
+    R: Upgraded,
+{
+    #[allow(missing_debug_implementations)]
+    struct UpgradeFn<F>(F);
+
+    impl<F, I, R> HttpUpgrade<I> for UpgradeFn<F>
+    where
+        F: FnOnce(I) -> Result<R, I>,
+        R: Upgraded,
+    {
+        type Upgraded = R;
+        type Error = R::Error;
+
+        #[inline]
+        fn upgrade(self, stream: I) -> Result<Self::Upgraded, I> {
+            (self.0)(stream)
+        }
+    }
+
+    UpgradeFn(f)
+}
+
 pub trait Upgraded {
     type Error;
 
