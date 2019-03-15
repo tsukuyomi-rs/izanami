@@ -2,8 +2,8 @@
 
 use {
     super::sleep_on_errors::{Listener, SleepOnErrors},
-    futures::{Poll, Stream},
-    izanami_util::MapAsyncExt,
+    futures::Poll,
+    izanami_service::Service,
     std::{io, os::unix::net::SocketAddr, path::Path, time::Duration},
     tokio::{
         io::{AsyncRead, AsyncWrite},
@@ -103,19 +103,24 @@ impl AddrIncoming {
     }
 }
 
-impl Stream for AddrIncoming {
-    type Item = AddrStream;
+impl Service<()> for AddrIncoming {
+    type Response = AddrStream;
     type Error = io::Error;
+    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
+
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        self.listener.poll_ready()
+    }
 
     #[inline]
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.listener
-            .poll_accept()
-            .map_async(|(stream, remote_addr)| {
-                Some(AddrStream {
-                    stream,
-                    remote_addr,
-                })
-            })
+    fn call(&mut self, _: ()) -> Self::Future {
+        let (stream, remote_addr) = self
+            .listener
+            .next_incoming()
+            .expect("the connection is not ready");
+        futures::future::ok(AddrStream {
+            stream,
+            remote_addr,
+        })
     }
 }

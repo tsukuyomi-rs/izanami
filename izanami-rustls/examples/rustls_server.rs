@@ -3,9 +3,10 @@ use {
     futures::prelude::*,
     http::Response,
     izanami::{
+        h1::H1Connection, //
         net::tcp::AddrIncoming,
-        server::{h1::H1Connection, Server},
-        service::{ext::ServiceExt, stream::StreamExt},
+        server::Server,
+        service::ext::ServiceExt,
     },
     std::{fs, io, sync::Arc},
     tokio_rustls::{
@@ -42,8 +43,8 @@ fn main() -> failure::Fallible<()> {
 
     let server = Server::new(
         AddrIncoming::bind("127.0.0.1:5000")? //
-            .into_service()
             .with_adaptors()
+            .err_into::<Box<dyn std::error::Error + Send + Sync>>()
             .and_then(move |stream| {
                 rustls_acceptor //
                     .accept(stream)

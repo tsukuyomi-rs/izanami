@@ -1,58 +1,38 @@
 //! An HTTP server implementation powered by `hyper` and `tower-service`.
 
-pub mod h1;
-mod watch;
-
-#[allow(dead_code)]
-type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;
-
 use {
-    self::watch::{Signal, Watch},
+    crate::watch::{Signal, Watch},
     futures::{future::Executor, Async, Future, Poll},
+    izanami_http::Connection,
     izanami_service::Service,
     tokio::executor::DefaultExecutor,
 };
 
-/// An asynchronous object that manages the connection to a remote peer.
-pub trait Connection {
-    /// The error type which will returned from this connection.
-    type Error;
-
-    /// Polls the completion of this connection.
-    fn poll_complete(&mut self) -> Poll<(), Self::Error>;
-
-    /// Notifies a shutdown signal to the connection.
-    ///
-    /// The connection may accept some requests for a while even after
-    /// receiving this notification.
-    fn graceful_shutdown(&mut self);
-}
-
 /// The factory of `Connection`.
 pub trait MakeConnection {
     /// The connection produced by this factory.
-    type Connection: Connection<Error = Self::Error>;
+    type Connection: Connection;
 
     /// The error type when producing a connection.
-    type Error;
+    type MakeError;
 
     ///　A `Future` that produces a value of `Connection`.
-    type Future: Future<Item = Self::Connection, Error = Self::Error>;
+    type Future: Future<Item = Self::Connection, Error = Self::MakeError>;
 
     /// Polls the connection from client, and create a `Future` if available.
-    fn make_connection(&mut self) -> Poll<Self::Future, Self::Error>;
+    fn make_connection(&mut self) -> Poll<Self::Future, Self::MakeError>;
 }
 
 impl<T> MakeConnection for T
 where
     T: Service<()>,
-    T::Response: Connection<Error = T::Error>,
+    T::Response: Connection,
 {
     type Connection = T::Response;
-    type Error = T::Error;
+    type MakeError = T::Error;
     type Future = T::Future;
 
-    fn make_connection(&mut self) -> Poll<Self::Future, Self::Error> {
+    fn make_connection(&mut self) -> Poll<Self::Future, Self::MakeError> {
         futures::try_ready!(self.poll_ready());
         Ok(Async::Ready(self.call(())))
     }
@@ -109,7 +89,7 @@ where
 {
     /// Creates an instance of `Server` using the current configuration.
     pub fn build(self) -> Server<T, Sig, Sp> {
-        let (signal, watch) = watch::channel();
+        let (signal, watch) = crate::watch::channel();
         Server {
             state: ServerState::Running {
                 make_connection: self.make_connection,
@@ -156,10 +136,10 @@ enum ServerState<T, Sig, Sp> {
         make_connection: T,
         shutdown_signal: Sig,
         signal: Option<Signal>,
-        watch: watch::Watch,
+        watch: Watch,
         spawner: Sp,
     },
-    Done(watch::Draining),
+    Done(crate::watch::Draining),
 }
 
 impl<T, Sig, Sp> Future for Server<T, Sig, Sp>
@@ -169,7 +149,7 @@ where
     Sp: Executor<Background<T>>,
 {
     type Item = ();
-    type Error = T::Error;
+    type Error = T::MakeError;
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
@@ -227,11 +207,13 @@ impl<T> Background<T>
 where
     T: MakeConnection,
 {
-    fn poll2(&mut self) -> Poll<(), T::Error> {
+    fn poll2(&mut self) -> Poll<(), ()> {
         loop {
             self.state = match self.state {
                 BackgroundState::Connecting(ref mut future) => {
-                    let conn = futures::try_ready!(future.poll());
+                    let conn = futures::try_ready!(future.poll().map_err(|_| {
+                        log::trace!("make connection error");
+                    }));
                     BackgroundState::Running(conn)
                 }
                 BackgroundState::Running(ref mut conn) => {
@@ -239,7 +221,9 @@ where
                         self.signaled = true;
                         conn.graceful_shutdown();
                     }
-                    futures::try_ready!(conn.poll_complete());
+                    futures::try_ready!(conn.poll_close().map_err(|_| {
+                        log::trace!("connection error");
+                    }));
                     return Ok(Async::Ready(()));
                 }
                 BackgroundState::Closed => unreachable!("invalid state"),
@@ -259,7 +243,7 @@ where
         match self.poll2() {
             Ok(Async::Ready(())) => (),
             Ok(Async::NotReady) => return Ok(Async::NotReady),
-            Err(_e) => log::error!("error during polling background"),
+            Err(()) => log::error!("error during polling background"),
         }
         self.state = BackgroundState::Closed;
         Ok(Async::Ready(()))

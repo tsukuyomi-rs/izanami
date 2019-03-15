@@ -3,15 +3,14 @@
 #![allow(missing_docs)]
 
 use {
-    crate::body::HttpBody, //
-    futures::{Async, Future, Poll},
-    std::fmt,
+    crate::{body::HttpBody, conn::Connection}, //
+    futures::{Async, Poll},
     tokio_buf::{BufStream, SizeHint},
 };
 
 pub trait HttpUpgrade<I> {
     /// The type of asynchronous process that drives upgraded protocol.
-    type Upgraded: Upgraded<Error = Self::Error>;
+    type Upgraded: Connection<Error = Self::Error>;
 
     /// The error type that will be returned from the upgraded stream.
     type Error;
@@ -27,8 +26,8 @@ impl<Bd, I> HttpUpgrade<I> for Bd
 where
     Bd: BufStream,
 {
-    type Upgraded = Never;
-    type Error = Never;
+    type Upgraded = futures::future::Empty<(), std::io::Error>;
+    type Error = std::io::Error;
 
     fn upgrade(self, stream: I) -> Result<Self::Upgraded, I> {
         Err(stream)
@@ -39,7 +38,7 @@ pub fn upgrade_fn<I, R>(
     f: impl FnOnce(I) -> Result<R, I>,
 ) -> impl HttpUpgrade<I, Upgraded = R, Error = R::Error>
 where
-    R: Upgraded,
+    R: Connection,
 {
     #[allow(missing_debug_implementations)]
     struct UpgradeFn<F>(F);
@@ -47,7 +46,7 @@ where
     impl<F, I, R> HttpUpgrade<I> for UpgradeFn<F>
     where
         F: FnOnce(I) -> Result<R, I>,
-        R: Upgraded,
+        R: Connection,
     {
         type Upgraded = R;
         type Error = R::Error;
@@ -59,57 +58,6 @@ where
     }
 
     UpgradeFn(f)
-}
-
-pub trait Upgraded {
-    type Error;
-
-    fn poll_done(&mut self) -> Poll<(), Self::Error>;
-
-    fn graceful_shutdown(&mut self) {}
-}
-
-impl<F> Upgraded for F
-where
-    F: Future<Item = ()>,
-{
-    type Error = F::Error;
-
-    fn poll_done(&mut self) -> Poll<(), Self::Error> {
-        Future::poll(self)
-    }
-}
-
-pub enum Never {}
-
-impl fmt::Debug for Never {
-    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {}
-    }
-}
-
-impl fmt::Display for Never {
-    fn fmt(&self, _: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match *self {}
-    }
-}
-
-impl std::error::Error for Never {
-    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-        match *self {}
-    }
-}
-
-impl Upgraded for Never {
-    type Error = Never;
-
-    fn poll_done(&mut self) -> Poll<(), Self::Error> {
-        match *self {}
-    }
-
-    fn graceful_shutdown(&mut self) {
-        match *self {}
-    }
 }
 
 #[derive(Debug)]
@@ -147,8 +95,8 @@ impl<T, I> HttpUpgrade<I> for NoUpgrade<T>
 where
     T: HttpBody,
 {
-    type Upgraded = Never;
-    type Error = Never;
+    type Upgraded = futures::future::Empty<(), std::io::Error>;
+    type Error = std::io::Error;
 
     fn upgrade(self, stream: I) -> Result<Self::Upgraded, I> {
         Err(stream)

@@ -2,9 +2,10 @@ use {
     futures::Future,
     http::Response,
     izanami::{
+        h1::H1Connection,
         net::tcp::AddrIncoming,
-        server::{h1::H1Connection, Server},
-        service::{ext::ServiceExt, stream::StreamExt},
+        server::Server,
+        service::{ext::ServiceExt, service_fn},
     },
     std::io,
 };
@@ -12,7 +13,6 @@ use {
 fn main() -> io::Result<()> {
     let server = Server::new(
         AddrIncoming::bind("127.0.0.1:5000")? //
-            .into_service()
             .with_adaptors()
             .map(|stream| {
                 // Extract the value of remote peer's address from stream.
@@ -23,7 +23,7 @@ fn main() -> io::Result<()> {
                 // are available at here.
 
                 H1Connection::build(stream) //
-                    .finish(izanami::service::service_fn(move |_req| {
+                    .finish(service_fn(move |_req| {
                         eprintln!("remote_addr = {}", remote_addr);
                         Response::builder()
                             .header("content-type", "text/plain")

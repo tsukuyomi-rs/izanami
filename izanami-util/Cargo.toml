@@ -8,7 +8,9 @@ license = "MIT OR Apache-2.0"
 repository = "https://github.com/ubnt-intrepid/izanami.git"
 
 [dependencies]
+bytes = "0.4"
 futures = "0.1"
+tokio-io = "0.1"
 
 [dev-dependencies]
 version-sync = "0.7"

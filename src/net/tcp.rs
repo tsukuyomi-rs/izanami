@@ -1,7 +1,7 @@
 use {
     super::sleep_on_errors::{Listener, SleepOnErrors},
-    futures::{Poll, Stream},
-    izanami_util::*,
+    futures::Poll,
+    izanami_service::Service,
     std::{
         io,
         net::{SocketAddr, TcpListener as StdTcpListener, ToSocketAddrs},
@@ -125,28 +125,34 @@ impl AddrIncoming {
     }
 }
 
-impl Stream for AddrIncoming {
-    type Item = AddrStream;
+impl Service<()> for AddrIncoming {
+    type Response = AddrStream;
     type Error = io::Error;
+    type Future = futures::future::FutureResult<Self::Response, Self::Error>;
 
-    fn poll(&mut self) -> Poll<Option<Self::Item>, io::Error> {
-        self.listener
-            .poll_accept() //
-            .map_async(|(stream, remote_addr)| {
-                if let Some(timeout) = self.tcp_keepalive_timeout {
-                    if let Err(e) = stream.set_keepalive(Some(timeout)) {
-                        log::trace!("error trying to set TCP keepalive: {}", e);
-                    }
-                }
+    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
+        self.listener.poll_ready()
+    }
 
-                if let Err(e) = stream.set_nodelay(self.tcp_nodelay) {
-                    log::trace!("error trying to set TCP nodelay: {}", e);
-                }
+    fn call(&mut self, _: ()) -> Self::Future {
+        let (stream, remote_addr) = self
+            .listener
+            .next_incoming()
+            .expect("the connection is not ready");
 
-                Some(AddrStream {
-                    stream,
-                    remote_addr,
-                })
-            })
+        if let Some(timeout) = self.tcp_keepalive_timeout {
+            if let Err(e) = stream.set_keepalive(Some(timeout)) {
+                log::trace!("error trying to set TCP keepalive: {}", e);
+            }
+        }
+
+        if let Err(e) = stream.set_nodelay(self.tcp_nodelay) {
+            log::trace!("error trying to set TCP nodelay: {}", e);
+        }
+
+        futures::future::ok(AddrStream {
+            stream,
+            remote_addr,
+        })
     }
 }

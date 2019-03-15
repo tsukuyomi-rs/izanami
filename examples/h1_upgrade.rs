@@ -2,21 +2,18 @@ use {
     futures::Future,
     http::{Response, StatusCode},
     izanami::{
+        h1::{H1Connection, H1Request},
         http::upgrade::MaybeUpgrade,
         net::tcp::AddrIncoming,
-        server::{
-            h1::{H1Connection, HttpRequest as H1Request},
-            Server,
-        }, //
-        service::{ext::ServiceExt, service_fn, stream::StreamExt},
+        server::Server, //
+        service::{ext::ServiceExt, service_fn},
     },
     std::io,
 };
 
 fn main() -> io::Result<()> {
     let server = Server::new(
-        AddrIncoming::bind("127.0.0.1:5000")? // Stream<Item = AddrStream>
-            .into_service() // <-- Stream -> Service<()>
+        AddrIncoming::bind("127.0.0.1:5000")?
             .with_adaptors()
             .map(|stream| {
                 H1Connection::build(stream) //

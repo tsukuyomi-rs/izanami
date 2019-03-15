@@ -6,7 +6,7 @@ fn version_sync() {
 mod tcp {
     use {
         futures::{Future, Stream},
-        http::Request,
+        http::{Request, Response},
         hyper::{
             client::{
                 connect::{Connect, Connected, Destination},
@@ -14,8 +14,9 @@ mod tcp {
             },
             Body,
         },
-        izanami::server::{h1::H1Connection, Server},
-        izanami_service::{ext::ServiceExt, stream::StreamExt},
+        izanami::{
+            h1::H1Connection, net::tcp::AddrIncoming, server::Server, service::ext::ServiceExt,
+        },
         std::{io, net::SocketAddr},
         tokio::{
             net::TcpStream, //
@@ -28,18 +29,17 @@ mod tcp {
     fn tcp_server() -> failure::Fallible<()> {
         let mut rt = Runtime::new()?;
 
-        let incoming = izanami::net::tcp::AddrIncoming::bind("127.0.0.1:0")?;
+        let incoming = AddrIncoming::bind("127.0.0.1:0")?;
         let local_addr = incoming.local_addr();
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::builder(
-            incoming //
-                .into_service()
-                .with_adaptors()
+            incoming
+                .with_adaptors() //
                 .map(|stream| {
                     H1Connection::build(stream) //
-                        .finish(izanami_service::service_fn(|_req| {
-                            http::Response::builder()
+                        .finish(izanami::service::service_fn(|_req| {
+                            Response::builder()
                                 .header("content-type", "text/plain")
                                 .body("hello")
                         }))
@@ -94,7 +94,7 @@ mod tcp {
 mod unix {
     use {
         futures::{Future, Stream},
-        http::Request,
+        http::{Request, Response},
         hyper::{
             client::{
                 connect::{Connect, Connected, Destination},
@@ -102,9 +102,9 @@ mod unix {
             },
             Body,
         },
-        izanami::net::unix::AddrIncoming,
-        izanami::server::{h1::H1Connection, Server},
-        izanami_service::{ext::ServiceExt, stream::StreamExt},
+        izanami::{
+            h1::H1Connection, net::unix::AddrIncoming, server::Server, service::ext::ServiceExt,
+        },
         std::{io, path::PathBuf},
         tempfile::Builder,
         tokio::{
@@ -122,19 +122,16 @@ mod unix {
         let sock_path = sock_tempdir.path().join("connect.sock");
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = Server::builder(
-            AddrIncoming::bind(&sock_path)?
-                .into_service()
-                .with_adaptors()
-                .map(|stream| {
-                    H1Connection::build(stream) //
-                        .finish(izanami_service::service_fn(|_req| {
-                            http::Response::builder()
-                                .header("content-type", "text/plain")
-                                .body("hello")
-                        }))
-                }),
-        )
+        let server = Server::builder(AddrIncoming::bind(&sock_path)?.with_adaptors().map(
+            |stream| {
+                H1Connection::build(stream) //
+                    .finish(izanami::service::service_fn(|_req| {
+                        Response::builder()
+                            .header("content-type", "text/plain")
+                            .body("hello")
+                    }))
+            },
+        ))
         .with_graceful_shutdown(rx_shutdown)
         .build()
         .map_err(|e| eprintln!("server error: {}", e));

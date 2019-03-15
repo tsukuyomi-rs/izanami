@@ -13,10 +13,11 @@ pub(super) trait Listener {
 }
 
 #[derive(Debug)]
-pub(super) struct SleepOnErrors<T> {
+pub(super) struct SleepOnErrors<T: Listener> {
     listener: T,
     duration: Option<Duration>,
     timeout: Option<Delay>,
+    pending: Option<T::Conn>,
 }
 
 impl<T> SleepOnErrors<T>
@@ -28,6 +29,7 @@ where
             listener,
             duration: Some(Duration::from_secs(1)),
             timeout: None,
+            pending: None,
         }
     }
 
@@ -36,7 +38,12 @@ where
     }
 
     #[inline]
-    pub(super) fn poll_accept(&mut self) -> Poll<T::Conn, io::Error> {
+    pub(super) fn poll_ready(&mut self) -> Poll<(), io::Error> {
+        if self.pending.is_some() {
+            // a connection has already been established.
+            return Ok(Async::Ready(()));
+        }
+
         if let Some(timeout) = &mut self.timeout {
             match timeout.poll() {
                 Ok(Async::Ready(())) => {}
@@ -46,9 +53,14 @@ where
             self.timeout = None;
         }
 
+        debug_assert!(self.pending.is_none());
         loop {
             match self.listener.poll_accept() {
-                Ok(ok) => return Ok(ok),
+                Ok(Async::Ready(conn)) => {
+                    self.pending = Some(conn);
+                    return Ok(Async::Ready(()));
+                }
+                Ok(Async::NotReady) => return Ok(Async::NotReady),
                 Err(ref err) if is_connection_error(err) => {
                     log::trace!("connection error: {}", err);
                     continue;
@@ -74,6 +86,10 @@ where
             }
         }
     }
+
+    pub(super) fn next_incoming(&mut self) -> Option<T::Conn> {
+        self.pending.take()
+    }
 }
 
 /// Returns whether the kind of provided error is caused by connection to the peer.
@@ -88,7 +104,7 @@ fn is_connection_error(err: &io::Error) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use {super::*, tokio::util::FutureExt};
+    use {super::*, izanami_util::*, tokio::util::FutureExt};
 
     type DummyConnection = io::Cursor<Vec<u8>>;
 
@@ -126,7 +142,11 @@ mod tests {
         let result = rt.block_on(
             futures::future::poll_fn({
                 let listener = &mut listener;
-                move || listener.poll_accept()
+                move || {
+                    listener
+                        .poll_ready()
+                        .map_async(|()| listener.next_incoming().unwrap())
+                }
             })
             .timeout(Duration::from_millis(1)),
         );
@@ -154,7 +174,11 @@ mod tests {
         let result = rt.block_on(
             futures::future::poll_fn({
                 let listener = &mut listener;
-                move || listener.poll_accept()
+                move || {
+                    listener
+                        .poll_ready()
+                        .map_async(|()| listener.next_incoming().unwrap())
+                }
             })
             .timeout(Duration::from_millis(1)),
         );
@@ -182,7 +206,11 @@ mod tests {
         let result = rt.block_on(
             futures::future::poll_fn({
                 let listener = &mut listener;
-                move || listener.poll_accept()
+                move || {
+                    listener
+                        .poll_ready()
+                        .map_async(|()| listener.next_incoming().unwrap())
+                }
             })
             .timeout(Duration::from_millis(1)),
         );

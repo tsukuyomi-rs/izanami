@@ -2,17 +2,17 @@ use {
     futures::Future,
     http::Response,
     izanami::{
+        h1::H1Connection,
         net::tcp::AddrIncoming,
-        server::{h1::H1Connection, Server}, //
-        service::{ext::ServiceExt, service_fn, stream::StreamExt},
+        server::Server, //
+        service::{ext::ServiceExt, service_fn},
     },
     std::io,
 };
 
 fn main() -> io::Result<()> {
     let server = Server::new(
-        AddrIncoming::bind("127.0.0.1:5000")? // Stream<Item = AddrStream>
-            .into_service() // <-- Stream -> Service<()>
+        AddrIncoming::bind("127.0.0.1:5000")?
             .with_adaptors()
             .map(|stream| {
                 let remote_addr = stream.remote_addr();

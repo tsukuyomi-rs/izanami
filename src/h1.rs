@@ -1,22 +1,18 @@
-//! HTTP/1 connection using hyper as backend.
+//! HTTP/1 connection.
 
 use {
-    super::{BoxedStdError, Connection},
-    bytes::{Buf, BufMut, Bytes, IntoBuf},
+    crate::BoxedStdError,
+    bytes::{Buf, Bytes},
     futures::{try_ready, Async, Future, Poll},
     http::{HeaderMap, Request, Response},
     hyper::{
         body::Payload as _Payload,
         server::conn::{Connection as HyperConnection, Http},
     },
-    izanami_http::{
-        body::HttpBody,
-        upgrade::{HttpUpgrade, Upgraded},
-        HttpService,
-    },
-    izanami_util::*,
+    izanami_http::{body::HttpBody, upgrade::HttpUpgrade, Connection, HttpService},
+    izanami_util::{MapAsyncOptExt, RewindIo},
     tokio::{
-        io::{self, AsyncRead, AsyncWrite},
+        io::{AsyncRead, AsyncWrite},
         sync::oneshot,
     },
     tokio_buf::{BufStream, SizeHint},
@@ -51,6 +47,9 @@ impl<T> izanami_service::Service<T> for DummyService {
         unreachable!("DummyService never used")
     }
 }
+
+/// Type alias of `http::Request<T>` passed by `H1Connection`.
+pub type H1Request = http::Request<RequestBody>;
 
 /// A builder for configuration of `H1Connection`.
 #[derive(Debug)]
@@ -113,10 +112,10 @@ where
     pub fn finish<S>(self, service: S) -> H1Connection<I, S>
     where
         S: HttpService<RequestBody> + 'static,
-        S::ResponseBody: HttpUpgrade<Rewind<I>> + Send + 'static,
+        S::ResponseBody: HttpUpgrade<RewindIo<I>> + Send + 'static,
         <S::ResponseBody as HttpBody>::Data: Send,
         <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
-        <S::ResponseBody as HttpUpgrade<Rewind<I>>>::Error: Into<BoxedStdError>,
+        <S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
         S::Error: Into<BoxedStdError>,
     {
         let conn = self.protocol.serve_connection(
@@ -132,18 +131,19 @@ where
     }
 }
 
-/// A `Connection` that serves an HTTP/1 connection using hyper.
+/// A `Connection` that serves an HTTP/1 connection.
 ///
-/// HTTP/2 is disabled.
+/// It uses the low level server API of `hyper`, with the modified
+/// implementation around HTTP/1.1 upgrade mechanism.
 #[allow(missing_debug_implementations)]
 pub struct H1Connection<I, S>
 where
     I: AsyncRead + AsyncWrite + 'static,
     S: HttpService<RequestBody>,
-    S::ResponseBody: HttpUpgrade<Rewind<I>> + Send + 'static,
+    S::ResponseBody: HttpUpgrade<RewindIo<I>> + Send + 'static,
     <S::ResponseBody as HttpBody>::Data: Send,
     <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as HttpUpgrade<Rewind<I>>>::Error: Into<BoxedStdError>,
+    <S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
     S::Error: Into<BoxedStdError>,
 {
     state: State<I, S>,
@@ -154,19 +154,19 @@ enum State<I, S>
 where
     I: AsyncRead + AsyncWrite + 'static,
     S: HttpService<RequestBody>,
-    S::ResponseBody: HttpUpgrade<Rewind<I>> + Send + 'static,
+    S::ResponseBody: HttpUpgrade<RewindIo<I>> + Send + 'static,
     <S::ResponseBody as HttpBody>::Data: Send,
     <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as HttpUpgrade<Rewind<I>>>::Error: Into<BoxedStdError>,
+    <S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
     S::Error: Into<BoxedStdError>,
 {
     InFlight(HyperConnection<I, InnerService<S>, DummyExecutor>),
     WillUpgrade {
-        rewind: Rewind<I>,
+        rewind: RewindIo<I>,
         rx_body: oneshot::Receiver<S::ResponseBody>,
     },
-    Upgraded(<S::ResponseBody as HttpUpgrade<Rewind<I>>>::Upgraded),
-    Shutdown(Rewind<I>),
+    Upgraded(<S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Upgraded),
+    Shutdown(RewindIo<I>),
     Closed,
 }
 
@@ -185,10 +185,10 @@ where
     I: AsyncRead + AsyncWrite + 'static,
     S: HttpService<RequestBody, ResponseBody = Bd> + 'static,
     S::Error: Into<BoxedStdError>,
-    Bd: HttpBody + HttpUpgrade<Rewind<I>> + Send + 'static,
+    Bd: HttpBody + HttpUpgrade<RewindIo<I>> + Send + 'static,
     Bd::Data: Send,
     <Bd as HttpBody>::Error: Into<BoxedStdError>,
-    <Bd as HttpUpgrade<Rewind<I>>>::Error: Into<BoxedStdError>,
+    <Bd as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
 {
     fn poll_complete_inner(&mut self) -> Poll<(), BoxedStdError> {
         loop {
@@ -207,7 +207,7 @@ where
                     )));
                 }
                 State::Upgraded(ref mut upgraded) => {
-                    return upgraded.poll_done().map_err(Into::into);
+                    return upgraded.poll_close().map_err(Into::into);
                 }
                 State::Shutdown(ref mut stream) => {
                     // shutdown the underlying I/O manually.
@@ -226,7 +226,7 @@ where
                         ..
                     } = conn.into_parts();
 
-                    let rewind = Rewind::new_buffered(io, read_buf);
+                    let rewind = RewindIo::new_buffered(io, read_buf);
 
                     if let Some(rx_body) = rx_body {
                         State::WillUpgrade { rewind, rx_body }
@@ -254,14 +254,14 @@ where
     I: AsyncRead + AsyncWrite + 'static,
     S: HttpService<RequestBody, ResponseBody = Bd> + 'static,
     S::Error: Into<BoxedStdError>,
-    Bd: HttpBody + HttpUpgrade<Rewind<I>> + Send + 'static,
+    Bd: HttpBody + HttpUpgrade<RewindIo<I>> + Send + 'static,
     Bd::Data: Send,
     <Bd as HttpBody>::Error: Into<BoxedStdError>,
-    <Bd as HttpUpgrade<Rewind<I>>>::Error: Into<BoxedStdError>,
+    <Bd as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
 {
     type Error = BoxedStdError;
 
-    fn poll_complete(&mut self) -> Poll<(), Self::Error> {
+    fn poll_close(&mut self) -> Poll<(), Self::Error> {
         let res = match self.poll_complete_inner() {
             Ok(Async::NotReady) => return Ok(Async::NotReady),
             res => res,
@@ -478,6 +478,7 @@ impl HttpBody for RequestBody {
     }
 }
 
+/// A chunk of bytes received from the client.
 #[derive(Debug)]
 pub struct Data(hyper::body::Chunk);
 
@@ -504,108 +505,5 @@ impl Buf for Data {
 
     fn advance(&mut self, cnt: usize) {
         self.0.advance(cnt);
-    }
-}
-
-/// Type alias representing the HTTP request passed to the services.
-pub type HttpRequest = http::Request<RequestBody>;
-
-#[derive(Debug)]
-pub struct Rewind<I> {
-    io: I,
-    read_buf: Option<Bytes>,
-}
-
-impl<I> Rewind<I> {
-    pub fn new(io: I) -> Self {
-        Rewind { io, read_buf: None }
-    }
-
-    pub fn new_buffered(io: I, read_buf: Bytes) -> Self {
-        Rewind {
-            io,
-            read_buf: Some(read_buf),
-        }
-    }
-
-    pub fn get_ref(&self) -> &I {
-        &self.io
-    }
-
-    pub fn get_mut(&mut self) -> &mut I {
-        &mut self.io
-    }
-
-    pub fn into_parts(self) -> (I, Option<Bytes>) {
-        (self.io, self.read_buf)
-    }
-}
-
-impl<I: io::Read> io::Read for Rewind<I> {
-    fn read(&mut self, dst: &mut [u8]) -> io::Result<usize> {
-        if let Some(buf) = self.read_buf.take() {
-            if !buf.is_empty() {
-                let mut pre_reader = buf.into_buf().reader();
-                let read_cnt = pre_reader.read(dst)?;
-
-                let mut new_pre = pre_reader.into_inner().into_inner();
-                new_pre.advance(read_cnt);
-
-                if !new_pre.is_empty() {
-                    self.read_buf = Some(new_pre);
-                }
-
-                return Ok(read_cnt);
-            }
-        }
-        self.io.read(dst)
-    }
-}
-
-impl<I: io::Write> io::Write for Rewind<I> {
-    fn write(&mut self, src: &[u8]) -> io::Result<usize> {
-        self.io.write(src)
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        self.io.flush()
-    }
-}
-
-impl<I: io::AsyncRead> io::AsyncRead for Rewind<I> {
-    unsafe fn prepare_uninitialized_buffer(&self, buf: &mut [u8]) -> bool {
-        self.io.prepare_uninitialized_buffer(buf)
-    }
-
-    fn read_buf<B: BufMut>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
-        if let Some(bs) = self.read_buf.take() {
-            let pre_len = bs.len();
-            if pre_len > 0 {
-                let cnt = std::cmp::min(buf.remaining_mut(), pre_len);
-                let pre_buf = bs.into_buf();
-                let mut xfer = Buf::take(pre_buf, cnt);
-                buf.put(&mut xfer);
-
-                let mut new_pre = xfer.into_inner().into_inner();
-                new_pre.advance(cnt);
-
-                if !new_pre.is_empty() {
-                    self.read_buf = Some(new_pre);
-                }
-
-                return Ok(Async::Ready(cnt));
-            }
-        }
-        self.io.read_buf(buf)
-    }
-}
-
-impl<I: io::AsyncWrite> io::AsyncWrite for Rewind<I> {
-    fn shutdown(&mut self) -> Poll<(), io::Error> {
-        self.io.shutdown()
-    }
-
-    fn write_buf<B: Buf>(&mut self, buf: &mut B) -> Poll<usize, io::Error> {
-        self.io.write_buf(buf)
     }
 }

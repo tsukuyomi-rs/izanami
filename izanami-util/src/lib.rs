@@ -10,6 +10,10 @@
 )]
 #![forbid(clippy::unimplemented)]
 
+mod rewind_io;
+
+pub use crate::rewind_io::RewindIo;
+
 use futures::Poll;
 
 pub trait MapAsyncExt<T, E> {

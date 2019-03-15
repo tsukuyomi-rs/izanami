@@ -4,9 +4,10 @@ mod imp {
         futures::Future,
         http::Response,
         izanami::{
+            h1::H1Connection,
             net::unix::AddrIncoming,
-            server::{h1::H1Connection, Server}, //
-            service::{ext::ServiceExt, service_fn, stream::StreamExt},
+            server::Server, //
+            service::{ext::ServiceExt, service_fn},
         },
         std::io,
     };
@@ -14,7 +15,6 @@ mod imp {
     pub fn main() -> io::Result<()> {
         let server = Server::new(
             AddrIncoming::bind("/tmp/echo-service.sock")? //
-                .into_service()
                 .with_adaptors()
                 .map(|stream| {
                     H1Connection::build(stream) //
