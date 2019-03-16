@@ -6,12 +6,12 @@ use {
 };
 
 #[derive(Debug)]
-pub struct With<S1, S2> {
+pub struct Join<S1, S2> {
     pub(super) s1: S1,
     pub(super) s2: S2,
 }
 
-impl<S1, S2, Req> Service<Req> for With<S1, S2>
+impl<S1, S2, Req> Service<Req> for Join<S1, S2>
 where
     S1: Service<Req>,
     S2: Service<Req, Error = S1::Error>,

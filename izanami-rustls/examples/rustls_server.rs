@@ -43,14 +43,13 @@ fn main() -> failure::Fallible<()> {
 
     let server = Server::new(
         AddrIncoming::bind("127.0.0.1:5000")? //
-            .with_adaptors()
-            .err_into::<Box<dyn std::error::Error + Send + Sync>>()
-            .and_then(move |stream| {
+            .service_err_into::<Box<dyn std::error::Error + Send + Sync>>()
+            .service_and_then(move |stream| {
                 rustls_acceptor //
                     .accept(stream)
                     .map_err(Into::into)
             })
-            .map(|stream| {
+            .service_map(|stream| {
                 H1Connection::build(stream) //
                     .finish(izanami::service::service_fn(move |_req| {
                         Response::builder()

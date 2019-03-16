@@ -13,8 +13,7 @@ use {
 fn main() -> io::Result<()> {
     let server = Server::new(
         AddrIncoming::bind("127.0.0.1:5000")? //
-            .with_adaptors()
-            .map(|stream| {
+            .service_map(|stream| {
                 // Extract the value of remote peer's address from stream.
                 let remote_addr = stream.remote_addr();
 

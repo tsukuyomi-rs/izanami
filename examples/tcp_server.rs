@@ -12,9 +12,8 @@ use {
 
 fn main() -> io::Result<()> {
     let server = Server::new(
-        AddrIncoming::bind("127.0.0.1:5000")?
-            .with_adaptors()
-            .map(|stream| {
+        AddrIncoming::bind("127.0.0.1:5000")? //
+            .service_map(|stream| {
                 let remote_addr = stream.remote_addr();
                 H1Connection::build(stream) //
                     .finish(service_fn(move |_req| -> io::Result<_> {

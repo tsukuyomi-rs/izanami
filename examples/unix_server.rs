@@ -15,8 +15,7 @@ mod imp {
     pub fn main() -> io::Result<()> {
         let server = Server::new(
             AddrIncoming::bind("/tmp/echo-service.sock")? //
-                .with_adaptors()
-                .map(|stream| {
+                .service_map(|stream| {
                     H1Connection::build(stream) //
                         .finish(service_fn(|_req| {
                             Response::builder()

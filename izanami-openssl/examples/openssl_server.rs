@@ -59,9 +59,8 @@ fn main() -> failure::Fallible<()> {
 
     let server = Server::new(
         AddrIncoming::bind("127.0.0.1:5000")? //
-            .with_adaptors()
-            .err_into::<Box<dyn std::error::Error + Send + Sync>>()
-            .and_then(move |stream| {
+            .service_err_into::<Box<dyn std::error::Error + Send + Sync>>()
+            .service_and_then(move |stream| {
                 let remote_addr = stream.remote_addr();
                 let logger = logger.new(slog::o!("remote_addr" => remote_addr.to_string()));
                 slog::info!(logger, "got a connection");
@@ -71,7 +70,7 @@ fn main() -> failure::Fallible<()> {
                     .map(move |stream| (stream, logger))
                     .map_err(Into::into)
             })
-            .map(move |(stream, logger)| {
+            .service_map(move |(stream, logger)| {
                 let logger = {
                     let ssl = stream.get_ref().ssl();
 

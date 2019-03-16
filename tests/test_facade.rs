@@ -34,9 +34,8 @@ mod tcp {
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
         let server = Server::builder(
-            incoming
-                .with_adaptors() //
-                .map(|stream| {
+            incoming //
+                .service_map(|stream| {
                     H1Connection::build(stream) //
                         .finish(izanami::service::service_fn(|_req| {
                             Response::builder()
@@ -122,16 +121,17 @@ mod unix {
         let sock_path = sock_tempdir.path().join("connect.sock");
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = Server::builder(AddrIncoming::bind(&sock_path)?.with_adaptors().map(
-            |stream| {
-                H1Connection::build(stream) //
-                    .finish(izanami::service::service_fn(|_req| {
-                        Response::builder()
-                            .header("content-type", "text/plain")
-                            .body("hello")
-                    }))
-            },
-        ))
+        let server = Server::builder(
+            AddrIncoming::bind(&sock_path)? //
+                .service_map(|stream| {
+                    H1Connection::build(stream) //
+                        .finish(izanami::service::service_fn(|_req| {
+                            Response::builder()
+                                .header("content-type", "text/plain")
+                                .body("hello")
+                        }))
+                }),
+        )
         .with_graceful_shutdown(rx_shutdown)
         .build()
         .map_err(|e| eprintln!("server error: {}", e));
