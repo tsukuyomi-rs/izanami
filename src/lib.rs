@@ -13,6 +13,7 @@
 mod watch;
 
 pub mod h1;
+pub mod h2;
 pub mod net;
 pub mod rt;
 pub mod server;
