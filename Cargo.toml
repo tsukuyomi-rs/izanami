@@ -35,6 +35,7 @@ tokio-threadpool = "0.1"
 [dev-dependencies]
 http = "0.1"
 tempfile = "3"
+trust-dns-resolver = "0.10"
 version-sync = "0.7"
 
 [dev-dependencies.cargo-husky]
