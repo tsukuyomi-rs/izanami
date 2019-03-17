@@ -228,7 +228,7 @@ where
 
                     let rewind = RewindIo::new_buffered(io, read_buf);
 
-                    if let Some(rx_body) = rx_body {
+                    if let Some((rx_body, _reqbd)) = rx_body {
                         State::WillUpgrade { rewind, rx_body }
                     } else {
                         State::Shutdown(rewind)
@@ -285,7 +285,7 @@ where
     S: HttpService<RequestBody>,
 {
     service: S,
-    rx_body: Option<oneshot::Receiver<S::ResponseBody>>,
+    rx_body: Option<(oneshot::Receiver<S::ResponseBody>, hyper::Body)>,
 }
 
 impl<S, Bd> hyper::service::Service for InnerService<S>
@@ -307,19 +307,34 @@ where
     }
 
     #[inline]
-    fn call(&mut self, request: Request<Self::ReqBody>) -> Self::Future {
-        let is_connect = request.method() == http::Method::CONNECT;
+    fn call(&mut self, mut request: Request<Self::ReqBody>) -> Self::Future {
+        // clears the previous upgrade context.
+        drop(self.rx_body.take());
 
-        let (tx, rx) = oneshot::channel();
-        if let Some(rx_old) = self.rx_body.replace(rx) {
-            // disconnect the channel to transmit the upgrade context.
-            drop(rx_old);
+        let is_connect = request.method() == http::Method::CONNECT;
+        let will_upgrade = is_connect
+            || request
+                .headers()
+                .get(http::header::CONNECTION)
+                .map_or(false, |h| match h.as_bytes() {
+                    b"upgrade" | b"Upgrade" => {
+                        request.headers().contains_key(http::header::UPGRADE)
+                    }
+                    _ => false,
+                });
+
+        let mut tx_body = None;
+        if will_upgrade {
+            let (tx, rx) = oneshot::channel();
+            let body = std::mem::replace(request.body_mut(), hyper::Body::empty());
+            tx_body = Some(tx);
+            self.rx_body = Some((rx, body));
         }
 
         InnerServiceFuture {
             future: self.service.respond(request.map(RequestBody)),
             is_connect,
-            tx_body: Some(tx),
+            tx_body,
         }
     }
 }
@@ -329,19 +344,6 @@ struct InnerServiceFuture<S: HttpService<RequestBody>> {
     future: S::Future,
     is_connect: bool,
     tx_body: Option<oneshot::Sender<S::ResponseBody>>,
-}
-
-impl<S, Bd> InnerServiceFuture<S>
-where
-    S: HttpService<RequestBody, ResponseBody = Bd>,
-    S::Error: Into<BoxedStdError>,
-    Bd: HttpBody + Send + 'static,
-    Bd::Data: Send,
-    Bd::Error: Into<BoxedStdError>,
-{
-    fn is_upgrade(&self, status: http::StatusCode) -> bool {
-        status == http::StatusCode::SWITCHING_PROTOCOLS || (self.is_connect && status.is_success())
-    }
 }
 
 impl<S, Bd> Future for InnerServiceFuture<S>
@@ -358,22 +360,24 @@ where
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         let response = try_ready!(self.future.poll().map_err(Into::into));
-        let tx_body = self
-            .tx_body
-            .take()
-            .expect("the future has already been polled.");
+        let tx_body = self.tx_body.take();
 
-        let (parts, body) = response.into_parts();
-        let body_inner = if self.is_upgrade(parts.status) {
-            log::trace!("send the response body for protocol upgrade.");
-            match tx_body.send(body) {
-                Ok(()) => None,
-                Err(body) => Some(body),
-            }
-        } else {
-            Some(body)
+        let upgraded = response.status() == http::StatusCode::SWITCHING_PROTOCOLS
+            || (self.is_connect && response.status().is_success());
+
+        let response = {
+            let (parts, body) = response.into_parts();
+
+            let body_inner = match (tx_body, upgraded) {
+                (Some(tx), true) => {
+                    log::trace!("send the response body for protocol upgrade.");
+                    tx.send(body).err()
+                }
+                _ => Some(body),
+            };
+
+            Response::from_parts(parts, InnerBody(body_inner))
         };
-        let response = Response::from_parts(parts, InnerBody(body_inner));
 
         Ok(Async::Ready(response))
     }
