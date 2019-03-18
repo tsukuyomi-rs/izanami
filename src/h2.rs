@@ -30,9 +30,8 @@ enum H2ErrorKind<S: HttpService<RequestBody>> {
 }
 
 /// A builder for creating an `H2Connection`.
-#[derive(Debug)]
-pub struct Builder<I> {
-    stream: I,
+#[derive(Debug, Clone)]
+pub struct H2 {
     protocol: h2::server::Builder,
 }
 
@@ -174,18 +173,6 @@ where
     S: HttpService<RequestBody>,
     <S::ResponseBody as HttpBody>::Data: 'static,
 {
-    /// Creates a new `H2Connection` with the default configuration.
-    pub fn new(stream: I, service: S) -> Self {
-        Builder::new(stream).build(service)
-    }
-}
-
-impl<I, S> H2Connection<I, S>
-where
-    I: AsyncRead + AsyncWrite,
-    S: HttpService<RequestBody>,
-    <S::ResponseBody as HttpBody>::Data: 'static,
-{
     fn poll_foreground2(&mut self) -> Poll<(), H2Error<S>> {
         loop {
             self.state = match self.state {
@@ -271,16 +258,12 @@ where
     }
 }
 
-// ===== impl Builder =====
+// ===== impl H2 =====
 
-impl<I> Builder<I>
-where
-    I: AsyncRead + AsyncWrite,
-{
+impl H2 {
     /// Creates a new `Builder` with the specified transport.
-    pub fn new(stream: I) -> Self {
+    pub fn new() -> Self {
         Self {
-            stream,
             protocol: h2::server::Builder::new(),
         }
     }
@@ -291,17 +274,24 @@ where
     }
 
     /// Builds a `H2Connection` with the specified service.
-    pub fn build<S>(self, service: S) -> H2Connection<I, S>
+    pub fn serve<I, S>(&self, stream: I, service: S) -> H2Connection<I, S>
     where
+        I: AsyncRead + AsyncWrite,
         S: HttpService<RequestBody>,
         <S::ResponseBody as HttpBody>::Data: 'static,
     {
-        let handshake = self.protocol.handshake(self.stream);
+        let handshake = self.protocol.handshake(stream);
         H2Connection {
             state: State::Handshake(handshake),
             service,
             backgrounds: FuturesUnordered::new(),
         }
+    }
+}
+
+impl Default for H2 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

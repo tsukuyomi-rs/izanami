@@ -4,7 +4,7 @@ mod imp {
         futures::Future,
         http::Response,
         izanami::{
-            h1::H1Connection,
+            h1::H1,
             net::unix::AddrIncoming,
             server::Server, //
             service::{ext::ServiceExt, service_fn},
@@ -13,15 +13,18 @@ mod imp {
     };
 
     pub fn main() -> io::Result<()> {
+        let protocol = H1::new();
         let server = Server::new(
             AddrIncoming::bind("/tmp/echo-service.sock")? //
-                .service_map(|stream| {
-                    H1Connection::build(stream) //
-                        .finish(service_fn(|_req| {
+                .service_map(move |stream| {
+                    protocol.serve(
+                        stream,
+                        service_fn(|_req| {
                             Response::builder()
                                 .header("content-type", "text/plain")
                                 .body("Hello")
-                        }))
+                        }),
+                    )
                 }),
         )
         .map_err(|_| unimplemented!());

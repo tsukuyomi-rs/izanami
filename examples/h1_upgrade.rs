@@ -2,7 +2,7 @@ use {
     futures::Future,
     http::{Response, StatusCode},
     izanami::{
-        h1::{H1Connection, H1Request},
+        h1::{H1Request, H1},
         http::upgrade::MaybeUpgrade,
         net::tcp::AddrIncoming,
         server::Server, //
@@ -15,8 +15,9 @@ fn main() -> io::Result<()> {
     let server = Server::new(
         AddrIncoming::bind("127.0.0.1:5000")? //
             .service_map(|stream| {
-                H1Connection::build(stream) //
-                    .finish(service_fn(move |req: H1Request| -> io::Result<_> {
+                H1::new().serve(
+                    stream,
+                    service_fn(move |req: H1Request| -> io::Result<_> {
                         let err_msg = match req.headers().get(http::header::UPGRADE) {
                             Some(h) if h == "foobar" => None,
                             Some(..) => {
@@ -60,7 +61,8 @@ fn main() -> io::Result<()> {
                             .unwrap();
 
                         Ok(response)
-                    }))
+                    }),
+                )
             }),
     )
     .map_err(|e| eprintln!("server error: {}", e));

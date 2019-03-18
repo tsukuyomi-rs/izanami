@@ -30,44 +30,26 @@ where
     }
 }
 
-#[doc(hidden)]
-#[allow(missing_debug_implementations)]
-pub struct DummyService(());
-
-impl<T> izanami_service::Service<T> for DummyService {
-    type Response = Response<String>;
-    type Error = hyper::Error;
-    type Future = futures::future::Empty<Self::Response, Self::Error>;
-
-    fn poll_ready(&mut self) -> Poll<(), Self::Error> {
-        unreachable!("DummyService never used")
-    }
-
-    fn call(&mut self, _: T) -> Self::Future {
-        unreachable!("DummyService never used")
-    }
-}
-
 /// Type alias of `http::Request<T>` passed by `H1Connection`.
 pub type H1Request = http::Request<RequestBody>;
 
-/// A builder for configuration of `H1Connection`.
-#[derive(Debug)]
-pub struct Builder<I> {
-    stream: I,
+/// A builder for configuration H1 connections.
+#[derive(Debug, Clone)]
+pub struct H1 {
     protocol: Http<DummyExecutor>,
 }
 
-impl<I> Builder<I>
-where
-    I: AsyncRead + AsyncWrite + 'static,
-{
-    /// Creates a new `Builder` with the specified `stream`.
-    pub fn new(stream: I) -> Self {
-        let mut protocol = Http::new() //
-            .with_executor(DummyExecutor);
-        protocol.http1_only(true);
-        Self { stream, protocol }
+impl H1 {
+    /// Creates a new `H1` with the default configuration.
+    pub fn new() -> Self {
+        Self {
+            protocol: {
+                let mut protocol = Http::new() //
+                    .with_executor(DummyExecutor);
+                protocol.http1_only(true);
+                protocol
+            },
+        }
     }
 
     /// Sets whether the connection should support half-closures.
@@ -77,7 +59,7 @@ where
     /// The default value is `true`.
     ///
     /// [`http1_half_close`]: https://docs.rs/hyper/0.12/hyper/server/conn/struct.Http.html#method.http1_half_close
-    pub fn half_close(mut self, enabled: bool) -> Self {
+    pub fn half_close(&mut self, enabled: bool) -> &mut Self {
         self.protocol.http1_half_close(enabled);
         self
     }
@@ -89,7 +71,7 @@ where
     /// The default value is `true`.
     ///
     /// [`http1_writev`]: https://docs.rs/hyper/0.12/hyper/server/conn/struct.Http.html#method.http1_writev
-    pub fn writev(mut self, enabled: bool) -> Self {
+    pub fn writev(&mut self, enabled: bool) -> &mut Self {
         self.protocol.http1_writev(enabled);
         self
     }
@@ -97,20 +79,21 @@ where
     /// Sets whether to enable HTTP keep-alive.
     ///
     /// The default value is `true`.
-    pub fn keep_alive(mut self, enabled: bool) -> Self {
+    pub fn keep_alive(&mut self, enabled: bool) -> &mut Self {
         self.protocol.keep_alive(enabled);
         self
     }
 
     /// Sets the maximum buffer size for this connection.
-    pub fn max_buf_size(mut self, amt: usize) -> Self {
+    pub fn max_buf_size(&mut self, amt: usize) -> &mut Self {
         self.protocol.max_buf_size(amt);
         self
     }
 
-    /// Consumes itself and create an `H1Connection` with the specified `Service`.
-    pub fn finish<S>(self, service: S) -> H1Connection<I, S>
+    /// Build an `H1Connection` using the current configuration.
+    pub fn serve<I, S>(&self, stream: I, service: S) -> H1Connection<I, S>
     where
+        I: AsyncRead + AsyncWrite + 'static,
         S: HttpService<RequestBody> + 'static,
         S::ResponseBody: HttpUpgrade<RewindIo<I>> + Send + 'static,
         <S::ResponseBody as HttpBody>::Data: Send,
@@ -118,16 +101,20 @@ where
         <S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
         S::Error: Into<BoxedStdError>,
     {
-        let conn = self.protocol.serve_connection(
-            self.stream,
-            InnerService {
-                service,
-                rx_body: None,
-            },
-        );
+        let service = InnerService {
+            service,
+            rx_body: None,
+        };
+        let conn = self.protocol.serve_connection(stream, service);
         H1Connection {
             state: State::InFlight(conn),
         }
+    }
+}
+
+impl Default for H1 {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -168,16 +155,6 @@ where
     Upgraded(<S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Upgraded),
     Shutdown(RewindIo<I>),
     Closed,
-}
-
-impl<I> H1Connection<I, DummyService>
-where
-    I: AsyncRead + AsyncWrite + 'static,
-{
-    /// Start building using the specified I/O.
-    pub fn build(stream: I) -> Builder<I> {
-        Builder::new(stream)
-    }
 }
 
 impl<I, S, Bd> H1Connection<I, S>

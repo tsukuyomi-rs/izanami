@@ -4,7 +4,7 @@ use {
     futures::Future,
     http::Response,
     izanami::{
-        h1::{H1Connection, H1Request},
+        h1::{H1Request, H1},
         http::upgrade::MaybeUpgrade,
         net::tcp::AddrIncoming,
         server::Server, //
@@ -23,9 +23,9 @@ fn main() -> io::Result<()> {
         AddrIncoming::bind("127.0.0.1:5000")? //
             .service_map(move |stream| {
                 let resolver = resolver.clone();
-
-                H1Connection::build(stream) //
-                    .finish(service_fn(move |req: H1Request| {
+                H1::new().serve(
+                    stream,
+                    service_fn(move |req: H1Request| {
                         let hostname = req.uri().host().unwrap_or("localhost");
                         let port = req.uri().port_u16().unwrap_or(80);
                         resolver
@@ -43,7 +43,8 @@ fn main() -> io::Result<()> {
                                 };
                                 Ok(response)
                             })
-                    }))
+                    }),
+                )
             }),
     )
     .map_err(|e| eprintln!("server error: {}", e));

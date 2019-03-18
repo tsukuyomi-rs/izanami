@@ -2,7 +2,7 @@ use {
     futures::prelude::*,
     http::Response,
     izanami::{
-        h1::H1Connection, //
+        h1::H1, //
         net::tcp::AddrIncoming,
         server::Server,
         service::ext::ServiceExt,
@@ -25,12 +25,14 @@ fn main() -> failure::Fallible<()> {
                     .map_err(Into::into)
             })
             .service_map(|stream| {
-                H1Connection::build(stream) //
-                    .finish(izanami::service::service_fn(|_req| {
+                H1::new().serve(
+                    stream,
+                    izanami::service::service_fn(|_req| {
                         Response::builder()
                             .header("content-type", "text/plain")
                             .body("Hello")
-                    }))
+                    }),
+                )
             }),
     )
     .map_err(|e| eprintln!("server error: {}", e));

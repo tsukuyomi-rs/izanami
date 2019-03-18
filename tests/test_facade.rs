@@ -15,8 +15,8 @@ mod tcp {
             Body,
         },
         izanami::{
-            h1::H1Connection, //
-            h2::H2Connection,
+            h1::H1, //
+            h2::H2,
             net::tcp::AddrIncoming,
             server::Server,
             service::ext::ServiceExt,
@@ -56,12 +56,14 @@ mod tcp {
         let local_addr = incoming.local_addr();
         let make_connection = incoming //
             .service_map(|stream| {
-                H1Connection::build(stream) //
-                    .finish(izanami::service::service_fn(|_req| {
+                H1::new().serve(
+                    stream,
+                    izanami::service::service_fn(|_req| {
                         Response::builder()
                             .header("content-type", "text/plain")
                             .body("hello")
-                    }))
+                    }),
+                )
             });
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
@@ -99,7 +101,7 @@ mod tcp {
         let local_addr = incoming.local_addr();
         let make_connection = incoming //
             .service_map(|stream| {
-                H2Connection::new(
+                H2::new().serve(
                     stream,
                     izanami::service::service_fn(|_req| {
                         Response::builder()
@@ -150,9 +152,7 @@ mod unix {
             },
             Body,
         },
-        izanami::{
-            h1::H1Connection, net::unix::AddrIncoming, server::Server, service::ext::ServiceExt,
-        },
+        izanami::{h1::H1, net::unix::AddrIncoming, server::Server, service::ext::ServiceExt},
         std::{io, path::PathBuf},
         tempfile::Builder,
         tokio::{
@@ -173,12 +173,14 @@ mod unix {
         let server = Server::builder(
             AddrIncoming::bind(&sock_path)? //
                 .service_map(|stream| {
-                    H1Connection::build(stream) //
-                        .finish(izanami::service::service_fn(|_req| {
+                    H1::new().serve(
+                        stream,
+                        izanami::service::service_fn(|_req| {
                             Response::builder()
                                 .header("content-type", "text/plain")
                                 .body("hello")
-                        }))
+                        }),
+                    )
                 }),
         )
         .with_graceful_shutdown(rx_shutdown)

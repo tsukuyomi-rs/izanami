@@ -2,7 +2,7 @@ use {
     futures::Future,
     http::Response,
     izanami::{
-        h1::H1Connection,
+        h1::H1,
         net::tcp::AddrIncoming,
         server::Server,
         service::{ext::ServiceExt, service_fn},
@@ -21,13 +21,15 @@ fn main() -> io::Result<()> {
                 // such as the selected ALPN protocol or SNI server name
                 // are available at here.
 
-                H1Connection::build(stream) //
-                    .finish(service_fn(move |_req| {
+                H1::new().serve(
+                    stream,
+                    service_fn(move |_req| {
                         eprintln!("remote_addr = {}", remote_addr);
                         Response::builder()
                             .header("content-type", "text/plain")
                             .body("Hello")
-                    }))
+                    }),
+                )
             }),
     )
     .map_err(|e| eprintln!("server error: {}", e));
