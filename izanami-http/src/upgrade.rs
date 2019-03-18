@@ -1,6 +1,4 @@
-//! HTTP/1 upgrade.
-
-#![allow(missing_docs)]
+//! HTTP upgrade abstraction.
 
 use {
     crate::{body::HttpBody, conn::Connection}, //
@@ -8,6 +6,7 @@ use {
     tokio_buf::{BufStream, SizeHint},
 };
 
+/// A trait that represents HTTP protocol upgrade.
 pub trait HttpUpgrade<I> {
     /// The type of asynchronous process that drives upgraded protocol.
     type Upgraded: Connection<Error = Self::Error>;
@@ -17,8 +16,9 @@ pub trait HttpUpgrade<I> {
 
     /// Upgrades the specified stream to another protocol.
     ///
-    /// The implementation of this method may return a `Err(stream)`
-    /// when the value cannot upgrade the stream.
+    /// When the value cannot upgrade the stream, the implementation
+    /// of this method should return a `Err(stream)` to properly shut
+    /// down the stream.
     fn upgrade(self, stream: I) -> Result<Self::Upgraded, I>;
 }
 
@@ -34,6 +34,7 @@ where
     }
 }
 
+/// Creates an instance of `HttpUpgrade` using the provided function.
 pub fn upgrade_fn<I, R>(
     f: impl FnOnce(I) -> Result<R, I>,
 ) -> impl HttpUpgrade<I, Upgraded = R, Error = R::Error>
@@ -60,6 +61,7 @@ where
     UpgradeFn(f)
 }
 
+/// An `HttpUpgrade` that does not upgrade the stream.
 #[derive(Debug)]
 pub struct NoUpgrade<T: HttpBody>(pub T);
 
@@ -103,9 +105,13 @@ where
     }
 }
 
+/// An `HttpUpgrade` that contains either of an `HttpBody` or `HttpUpgrade`.
 #[derive(Debug)]
 pub enum MaybeUpgrade<T: HttpBody, U> {
+    /// The body will be sent to the client without upgrading.
     Data(T),
+
+    /// The body will be upgraded.
     Upgrade(U),
 }
 

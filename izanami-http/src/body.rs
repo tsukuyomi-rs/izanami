@@ -42,10 +42,7 @@ pub trait HttpBody {
     }
 }
 
-impl<T> HttpBody for T
-where
-    T: BufStream + AsRef<[u8]>,
-{
+impl<T: BufStream> HttpBody for T {
     type Data = T::Item;
     type Error = T::Error;
 
@@ -62,10 +59,45 @@ where
     }
 
     fn is_end_stream(&self) -> bool {
-        self.as_ref().is_empty()
+        let hint = self.size_hint();
+        hint.upper()
+            .map(|u| u == 0 && u == hint.lower())
+            .unwrap_or(false)
+    }
+}
+
+// ===== HttpBodyExt =====
+
+/// An extension trait for adding some adaptor methods to `HttpBody`s.
+pub trait HttpBodyExt: HttpBody {
+    /// Lift this body into a `BufStream`.
+    fn into_buf_stream(self) -> IntoBufStream<Self>
+    where
+        Self: Sized,
+    {
+        IntoBufStream { inner: self }
+    }
+}
+
+impl<T: HttpBody> HttpBodyExt for T {}
+
+/// A wrapper for `HttpBody` for lifting the instance into a `BufStream`.
+#[derive(Debug)]
+pub struct IntoBufStream<T: HttpBody> {
+    inner: T,
+}
+
+impl<T: HttpBody> BufStream for IntoBufStream<T> {
+    type Item = T::Data;
+    type Error = T::Error;
+
+    #[inline]
+    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
+        HttpBody::poll_data(&mut self.inner)
     }
 
-    fn content_length(&self) -> Option<u64> {
-        Some(self.as_ref().len() as u64)
+    #[inline]
+    fn size_hint(&self) -> SizeHint {
+        HttpBody::size_hint(&self.inner)
     }
 }

@@ -1,4 +1,8 @@
 //! HTTP-specific abstraction for izanami.
+//!
+//! The types and traits provided by this crate intentionally imitates
+//! the unreleased `tower-http-service`, and there will be replaced with
+//! them in the future version.
 
 #![doc(html_root_url = "https://docs.rs/izanami-http/0.1.0-preview.1")]
 #![deny(
@@ -12,13 +16,14 @@
 #![forbid(clippy::unimplemented)]
 
 mod conn;
-mod service;
 
 pub mod body;
+pub mod service;
 pub mod upgrade;
 
 pub use crate::{
     body::HttpBody, //
     conn::Connection,
     service::HttpService,
+    upgrade::HttpUpgrade,
 };

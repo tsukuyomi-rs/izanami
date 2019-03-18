@@ -67,7 +67,7 @@ enum BackgroundState<S: HttpService<RequestBody>> {
 
 #[allow(missing_debug_implementations)]
 struct Respond<S: HttpService<RequestBody>> {
-    future: S::Future,
+    respond: S::Respond,
     reply: h2::server::SendResponse<SendBuf<<S::ResponseBody as HttpBody>::Data>>,
 }
 
@@ -205,9 +205,9 @@ where
                         try_ready!(conn.poll().map_err(H2Error::new_protocol))
                     {
                         let req = req.map(|recv| RequestBody { recv });
-                        let future = self.service.respond(req);
+                        let respond = self.service.respond(req);
                         self.backgrounds.push(Background {
-                            state: BackgroundState::Responding(Respond { future, reply }),
+                            state: BackgroundState::Responding(Respond { respond, reply }),
                         });
                         continue;
                     } else {
@@ -378,7 +378,7 @@ where
     S: HttpService<RequestBody>,
 {
     fn poll_send_body(&mut self) -> Poll<Option<SendBody<S>>, H2Error<S>> {
-        let response = match self.future.poll() {
+        let response = match self.respond.poll() {
             Ok(Async::Ready(res)) => res,
             Ok(Async::NotReady) => {
                 if let Async::Ready(reason) =

@@ -15,7 +15,7 @@ use {
         io::{AsyncRead, AsyncWrite},
         sync::oneshot,
     },
-    tokio_buf::{BufStream, SizeHint},
+    tokio_buf::SizeHint,
 };
 
 #[derive(Debug, Clone)]
@@ -332,7 +332,7 @@ where
         }
 
         InnerServiceFuture {
-            future: self.service.respond(request.map(RequestBody)),
+            respond: self.service.respond(request.map(RequestBody)),
             is_connect,
             tx_body,
         }
@@ -341,7 +341,7 @@ where
 
 #[allow(missing_debug_implementations)]
 struct InnerServiceFuture<S: HttpService<RequestBody>> {
-    future: S::Future,
+    respond: S::Respond,
     is_connect: bool,
     tx_body: Option<oneshot::Sender<S::ResponseBody>>,
 }
@@ -359,7 +359,7 @@ where
 
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let response = try_ready!(self.future.poll().map_err(Into::into));
+        let response = try_ready!(self.respond.poll().map_err(Into::into));
         let tx_body = self.tx_body.take();
 
         let upgraded = response.status() == http::StatusCode::SWITCHING_PROTOCOLS
@@ -444,29 +444,16 @@ impl RequestBody {
     }
 }
 
-impl BufStream for RequestBody {
-    type Item = Data;
-    type Error = BoxedStdError;
-
-    fn poll_buf(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        self.0.poll_data().map_async_opt(Data).map_err(Into::into)
-    }
-
-    fn size_hint(&self) -> SizeHint {
-        SizeHint::new()
-    }
-}
-
 impl HttpBody for RequestBody {
     type Data = Data;
     type Error = BoxedStdError;
 
     fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
-        BufStream::poll_buf(self)
+        self.0.poll_data().map_async_opt(Data).map_err(Into::into)
     }
 
     fn size_hint(&self) -> tokio_buf::SizeHint {
-        BufStream::size_hint(self)
+        SizeHint::new()
     }
 
     fn poll_trailers(&mut self) -> Poll<Option<HeaderMap>, Self::Error> {
