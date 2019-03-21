@@ -20,15 +20,15 @@ jobs:
   parameters:
     name: Windows
     vmImage: 'vs2017-win2016'
-    variables:
-      OPENSSL_DIR: C:\OpenSSL
-      OPENSSL_VERSION: 1_1_0j
-    before_script:
-    - script: |
-        mkdir %OPENSSL_DIR%
-        curl -sSfO http://slproweb.com/download/Win64OpenSSL-%OPENSSL_VERSION%.exe
-        Win64OpenSSL-%OPENSSL_VERSION%.exe /SILENT /VERYSILENT /SP- /DIR=%OPENSSL_DIR%
-      displayName: 'install OpenSSL'
+    # variables:
+    #   OPENSSL_DIR: C:\OpenSSL
+    #   OPENSSL_VERSION: 1_1_0j
+    # before_script:
+    # - script: |
+    #     mkdir %OPENSSL_DIR%
+    #     curl -sSfO http://slproweb.com/download/Win64OpenSSL-%OPENSSL_VERSION%.exe
+    #     Win64OpenSSL-%OPENSSL_VERSION%.exe /SILENT /VERYSILENT /SP- /DIR=%OPENSSL_DIR%
+    #   displayName: 'install OpenSSL'
 
 - template: .ci/jobs/test.yml
   parameters:
