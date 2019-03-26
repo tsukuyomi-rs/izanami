@@ -18,6 +18,7 @@
 mod conn;
 
 pub mod body;
+pub mod response;
 pub mod service;
 pub mod upgrade;
 
