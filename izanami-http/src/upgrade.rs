@@ -1,7 +1,10 @@
 //! HTTP upgrade abstraction.
 
 use {
-    crate::{body::HttpBody, conn::Connection}, //
+    crate::{
+        body::{Body, HttpBody},
+        conn::Connection,
+    }, //
     futures::{Async, Poll},
     tokio_buf::{BufStream, SizeHint},
 };
@@ -61,7 +64,7 @@ where
     UpgradeFn(f)
 }
 
-/// An `HttpUpgrade` that does not upgrade the stream.
+/// A wrapper for `HttpBody` for adding implementation of `HttpUpgrade`.
 #[derive(Debug)]
 pub struct NoUpgrade<T: HttpBody>(pub T);
 
@@ -171,5 +174,14 @@ where
             MaybeUpgrade::Upgrade(cx) => cx.upgrade(stream),
             MaybeUpgrade::Data(..) => Err(stream),
         }
+    }
+}
+
+impl<I> HttpUpgrade<I> for Body {
+    type Upgraded = futures::future::Empty<(), Self::Error>;
+    type Error = std::io::Error;
+
+    fn upgrade(self, stream: I) -> Result<Self::Upgraded, I> {
+        Err(stream)
     }
 }
