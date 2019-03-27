@@ -3,7 +3,6 @@ name = "izanami-http"
 description = "HTTP-specific abstraction for izanami."
 version = "0.1.0-preview.1"
 edition = "2018"
-publish = false
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/ubnt-intrepid/izanami.git"
@@ -15,8 +14,8 @@ default = ["serde_json"]
 bytes = "0.4"
 futures = "0.1"
 http = "0.1"
-izanami-service = { version = "0.1.0-preview.1", path = "../izanami-service" }
-izanami-util = { version = "0.1.0-preview.1", path = "../izanami-util" }
+izanami-service = { version = "0.1.0-preview.2", path = "../izanami-service" }
+izanami-util = { version = "0.1.0-preview.2", path = "../izanami-util" }
 tokio-buf = "0.1"
 tokio-io = "0.1"
 

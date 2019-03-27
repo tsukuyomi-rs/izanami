@@ -1,6 +1,6 @@
 //! Miscellaneous primitives used within izanami.
 
-#![doc(html_root_url = "https://docs.rs/izanami-util/0.1.0-preview.1")]
+#![doc(html_root_url = "https://docs.rs/izanami-util/0.1.0-preview.2")]
 #![deny(
     missing_debug_implementations,
     nonstandard_style,

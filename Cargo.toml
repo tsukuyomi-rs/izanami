@@ -1,7 +1,7 @@
 [package]
 name = "izanami"
 description = "An HTTP server implementation powered by hyper and tower-service."
-version = "0.1.0-preview.2"
+version = "0.1.0-preview.3"
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"

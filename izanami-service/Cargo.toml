@@ -1,7 +1,7 @@
 [package]
 name = "izanami-service"
 description = "Abstraction of network services based on tower-service."
-version = "0.1.0-preview.1"
+version = "0.1.0-preview.2"
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"
@@ -9,7 +9,7 @@ repository = "https://github.com/ubnt-intrepid/izanami.git"
 
 [dependencies]
 futures = "0.1"
-izanami-util = { version = "0.1.0-preview.1", path = "../izanami-util" }
+izanami-util = { version = "0.1.0-preview.2", path = "../izanami-util" }
 tower-service = "0.2"
 
 [dev-dependencies]

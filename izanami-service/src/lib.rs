@@ -2,7 +2,7 @@
 //!
 //! [`tower-service`]: https://crates.io/crates/tower-service
 
-#![doc(html_root_url = "https://docs.rs/izanami-service/0.1.0-preview.1")]
+#![doc(html_root_url = "https://docs.rs/izanami-service/0.1.0-preview.2")]
 #![deny(
     missing_docs,
     missing_debug_implementations,

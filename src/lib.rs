@@ -1,6 +1,6 @@
 //! An HTTP server implementation powered by `hyper` and `tower-service`.
 
-#![doc(html_root_url = "https://docs.rs/izanami/0.1.0-preview.2")]
+#![doc(html_root_url = "https://docs.rs/izanami/0.1.0-preview.3")]
 #![deny(
     missing_debug_implementations,
     nonstandard_style,
