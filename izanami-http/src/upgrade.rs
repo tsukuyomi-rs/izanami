@@ -125,7 +125,7 @@ where
     type Data = T::Data;
     type Error = T::Error;
 
-    fn poll_data(&mut self) -> Poll<Option<Self::Data>, Self::Error> {
+    fn poll_data(&mut self) -> Poll<Option<<Self as HttpBody>::Data>, Self::Error> {
         match self {
             MaybeUpgrade::Data(ref mut data) => data.poll_data(),
             MaybeUpgrade::Upgrade(..) => Ok(Async::Ready(None)),

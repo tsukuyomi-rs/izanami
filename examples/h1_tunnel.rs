@@ -130,6 +130,7 @@ mod proxy {
         }
     }
 
+    #[allow(clippy::type_complexity)]
     pub struct ProxyConnection<C, S>
     where
         C: io::AsyncRead + io::AsyncWrite,

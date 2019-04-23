@@ -265,7 +265,7 @@ impl HttpBody for Body {
     fn is_end_stream(&self) -> bool {
         match self.0 {
             Inner::Empty => true,
-            Inner::Sized(ref data) => data.as_ref().map_or(true, |data| data.is_empty()),
+            Inner::Sized(ref data) => data.as_ref().map_or(true, Bytes::is_empty),
             Inner::Chunked(..) => false,
         }
     }
