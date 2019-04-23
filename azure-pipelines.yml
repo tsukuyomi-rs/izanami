@@ -1,7 +1,5 @@
 resources:
   containers:
-    - container: cargo-local-registry
-      image: ubntintrepid/tsukuyomi:0.6
     - container: tarpaulin
       image: xd009642/tarpaulin:latest
       options: --security-opt seccomp=unconfined
@@ -10,12 +8,6 @@ variables:
   CARGO_TERM_VERBOSE: true
 
 jobs:
-- template: .ci/jobs/prepare.yml
-  parameters:
-    name: Prepare
-    artifactName: 'registry-index'
-    targetPath: '.registry-index'
-
 - template: .ci/jobs/test.yml
   parameters:
     name: Windows
@@ -59,13 +51,10 @@ jobs:
         GH_TOKEN: $(myGitHubToken)
 
 - job: coverage
-  dependsOn: Prepare
-  condition: succeeded()
   pool:
     vmImage: 'ubuntu-16.04'
   container: tarpaulin
   steps:
-  - template: .ci/steps/sync-registry-index.yml
   - script: |
       rustup --version
       rustc --version

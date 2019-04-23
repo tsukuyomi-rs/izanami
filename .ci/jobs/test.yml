@@ -11,8 +11,6 @@ parameters:
 
 jobs:
 - job: ${{ parameters.name }}
-  dependsOn: Prepare
-  condition: succeeded()
   pool:
     vmImage: ${{ parameters.vmImage }}
   strategy:
@@ -21,8 +19,6 @@ jobs:
     ${{ insert }}: ${{ parameters.variables }}
   steps:
   - ${{ parameters.before_script }}
-
-  - template: ../steps/sync-registry-index.yml
 
   - ${{ if eq(parameters.name, 'Windows') }}:
     - script: |
