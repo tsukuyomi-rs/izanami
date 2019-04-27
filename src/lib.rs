@@ -1,4 +1,4 @@
-//! An HTTP server implementation powered by `hyper` and `tower-service`.
+//! A lightweight HTTP server interface for Rust.
 
 #![doc(html_root_url = "https://docs.rs/izanami/0.1.0-preview.3")]
 #![deny(
@@ -9,12 +9,12 @@
     unused
 )]
 #![forbid(clippy::unimplemented)]
+#![cfg_attr(test, deny(warnings))]
 
 pub mod blocking;
-
-#[doc(no_inline)]
-pub use {
-    izanami_http as http, //
-    izanami_server as server,
-    izanami_service as service,
-};
+pub mod body;
+pub mod context;
+pub mod error;
+pub mod handler;
+pub mod launcher;
+pub mod localmap;
