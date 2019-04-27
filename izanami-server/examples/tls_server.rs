@@ -76,7 +76,7 @@ fn main() -> failure::Fallible<()> {
 
 struct MyService;
 
-impl<ReqBd> izanami::service::Service<Request<ReqBd>> for MyService {
+impl<ReqBd> izanami_service::Service<Request<ReqBd>> for MyService {
     type Response = Response<String>;
     type Error = io::Error;
     type Future = futures::future::FutureResult<Self::Response, Self::Error>;
