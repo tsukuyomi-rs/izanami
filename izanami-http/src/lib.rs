@@ -15,16 +15,11 @@
 )]
 #![forbid(clippy::unimplemented)]
 
-mod conn;
-
 pub mod body;
 pub mod response;
 pub mod service;
-pub mod upgrade;
 
 pub use crate::{
     body::HttpBody, //
-    conn::Connection,
     service::HttpService,
-    upgrade::HttpUpgrade,
 };

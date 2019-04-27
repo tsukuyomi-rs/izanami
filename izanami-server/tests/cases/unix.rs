@@ -10,12 +10,12 @@ use {
         },
         Body,
     },
-    izanami::{
-        h1::H1, //
+    izanami_server::{
         net::unix::AddrIncoming,
-        server::Server,
-        service::ext::ServiceExt,
+        protocol::H1, //
+        Server,
     },
+    izanami_service::ServiceExt,
     std::{io, path::PathBuf},
     tempfile::Builder,
     tokio::{
@@ -38,7 +38,7 @@ fn smoke() -> failure::Fallible<()> {
             .service_map(|stream| {
                 H1::new().serve(
                     stream,
-                    izanami::service::service_fn(|_req| {
+                    izanami_service::service_fn(|_req| {
                         Response::builder()
                             .header("content-type", "text/plain")
                             .body("hello")

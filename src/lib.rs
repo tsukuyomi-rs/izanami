@@ -10,19 +10,11 @@
 )]
 #![forbid(clippy::unimplemented)]
 
-mod watch;
-
-pub mod h1;
-pub mod h2;
-pub mod net;
-pub mod rt;
-pub mod server;
+pub mod blocking;
 
 #[doc(no_inline)]
 pub use {
     izanami_http as http, //
+    izanami_server as server,
     izanami_service as service,
 };
-
-#[allow(dead_code)]
-type BoxedStdError = Box<dyn std::error::Error + Send + Sync + 'static>;

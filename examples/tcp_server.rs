@@ -1,12 +1,12 @@
 use {
     futures::Future,
     http::Response,
-    izanami::{
-        h1::H1,
-        net::tcp::AddrIncoming,
-        server::Server, //
-        service::{ext::ServiceExt, service_fn},
+    izanami_server::{
+        net::tcp::AddrIncoming, //
+        protocol::H1,
+        Server,
     },
+    izanami_service::{service_fn, ServiceExt},
     std::io,
 };
 
@@ -30,6 +30,6 @@ fn main() -> io::Result<()> {
     )
     .map_err(|e| eprintln!("server error: {}", e));
 
-    izanami::rt::run(server);
+    tokio::run(server);
     Ok(())
 }

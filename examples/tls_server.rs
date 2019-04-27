@@ -2,14 +2,12 @@ use {
     failure::format_err,
     futures::prelude::*,
     http::{Request, Response},
-    izanami::{
-        h1::H1, //
-        h2::H2,
-        http::Connection,
+    izanami_server::{
         net::tcp::AddrIncoming,
-        server::Server,
-        service::ext::ServiceExt,
+        protocol::{H1, H2},
+        Connection, Server,
     },
+    izanami_service::ServiceExt,
     std::{fs, io, sync::Arc},
     tokio_rustls::{
         rustls::{NoClientAuth, ServerConfig, Session},
@@ -72,7 +70,7 @@ fn main() -> failure::Fallible<()> {
     )
     .map_err(|e| eprintln!("server error: {}", e));
 
-    izanami::rt::run(server);
+    tokio::run(server);
     Ok(())
 }
 

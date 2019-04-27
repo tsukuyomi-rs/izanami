@@ -6,12 +6,12 @@
 // * graceful shutdown of background streams
 
 use {
-    crate::BoxedStdError, //
+    crate::{server::Connection, BoxedStdError}, //
     bytes::{Buf, BufMut, Bytes, BytesMut},
     futures::{stream::FuturesUnordered, try_ready, Async, Future, Poll, Stream},
     http::{Request, Response},
     httpdate::HttpDate,
-    izanami_http::{Connection, HttpBody, HttpService},
+    izanami_http::{HttpBody, HttpService},
     std::{error, fmt, time::SystemTime},
     tokio::io::{AsyncRead, AsyncWrite},
 };

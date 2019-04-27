@@ -1,11 +1,9 @@
 //! HTTP upgrade abstraction.
 
 use {
-    crate::{
-        body::{Body, HttpBody},
-        conn::Connection,
-    }, //
+    crate::server::Connection, //
     futures::{Async, Poll},
+    izanami_http::body::HttpBody,
     tokio_buf::{BufStream, SizeHint},
 };
 
@@ -174,14 +172,5 @@ where
             MaybeUpgrade::Upgrade(cx) => cx.upgrade(stream),
             MaybeUpgrade::Data(..) => Err(stream),
         }
-    }
-}
-
-impl<I> HttpUpgrade<I> for Body {
-    type Upgraded = futures::future::Empty<(), Self::Error>;
-    type Error = std::io::Error;
-
-    fn upgrade(self, stream: I) -> Result<Self::Upgraded, I> {
-        Err(stream)
     }
 }

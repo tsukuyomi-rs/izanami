@@ -6,11 +6,11 @@ use {
         client::connect::{Connect, Connected, Destination},
         Body, Client,
     },
-    izanami::{
-        http::Connection,
+    izanami_server::{
         net::tcp::{AddrIncoming, AddrStream},
-        service::ServiceExt,
+        Connection, Server,
     },
+    izanami_service::ServiceExt,
     std::{io, net::SocketAddr},
     tokio::{net::TcpStream, runtime::current_thread::Runtime, sync::oneshot},
 };
@@ -79,7 +79,7 @@ impl TestServer {
         };
 
         let (tx_shutdown, rx_shutdown) = oneshot::channel();
-        let server = izanami::server::Server::builder(incoming.service_map(dispatch))
+        let server = Server::builder(incoming.service_map(dispatch))
             .with_graceful_shutdown(rx_shutdown)
             .spawner(tokio::runtime::current_thread::TaskExecutor::current())
             .build()

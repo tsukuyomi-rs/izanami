@@ -3,13 +3,13 @@
 use {
     futures::Future,
     http::Response,
-    izanami::{
-        h1::{H1Request, H1},
-        http::upgrade::MaybeUpgrade,
+    izanami_server::{
         net::tcp::AddrIncoming,
-        server::Server, //
-        service::{ext::ServiceExt, service_fn},
+        protocol::h1::{H1Request, H1},
+        upgrade::MaybeUpgrade,
+        Server,
     },
+    izanami_service::{service_fn, ServiceExt},
     tokio::io,
 };
 
@@ -49,7 +49,7 @@ fn main() -> io::Result<()> {
     )
     .map_err(|e| eprintln!("server error: {}", e));
 
-    izanami::rt::run(server);
+    tokio::run(server);
     Ok(())
 }
 
@@ -103,7 +103,7 @@ mod resolve {
 mod proxy {
     use {
         futures::{Async, Future, Poll},
-        izanami::http::{upgrade::HttpUpgrade, Connection},
+        izanami_server::{upgrade::HttpUpgrade, Connection},
         std::sync::{Arc, Mutex},
         tokio::io,
     };

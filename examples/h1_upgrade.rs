@@ -1,13 +1,13 @@
 use {
     futures::Future,
     http::{Response, StatusCode},
-    izanami::{
-        h1::{H1Request, H1},
-        http::upgrade::MaybeUpgrade,
+    izanami_server::{
         net::tcp::AddrIncoming,
-        server::Server, //
-        service::{ext::ServiceExt, service_fn},
+        protocol::h1::{H1Request, H1},
+        upgrade::MaybeUpgrade,
+        Server,
     },
+    izanami_service::{service_fn, ServiceExt},
     std::io,
 };
 
@@ -33,7 +33,7 @@ fn main() -> io::Result<()> {
                         }
 
                         //
-                        let foobar = izanami::http::upgrade::upgrade_fn(|stream| {
+                        let foobar = izanami_server::upgrade::upgrade_fn(|stream| {
                             Ok(tokio::io::read_exact(stream, vec![0; 7])
                                 .and_then(|(stream, buf)| {
                                     println!(
@@ -67,6 +67,6 @@ fn main() -> io::Result<()> {
     )
     .map_err(|e| eprintln!("server error: {}", e));
 
-    izanami::rt::run(server);
+    tokio::run(server);
     Ok(())
 }

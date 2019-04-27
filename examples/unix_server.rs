@@ -3,12 +3,12 @@ mod imp {
     use {
         futures::Future,
         http::Response,
-        izanami::{
-            h1::H1,
+        izanami_server::{
             net::unix::AddrIncoming,
-            server::Server, //
-            service::{ext::ServiceExt, service_fn},
+            protocol::H1,
+            Server, //
         },
+        izanami_service::{service_fn, ServiceExt},
         std::io,
     };
 
@@ -29,7 +29,7 @@ mod imp {
         )
         .map_err(|_| unimplemented!());
 
-        izanami::rt::run(server);
+        tokio::run(server);
         Ok(())
     }
 }

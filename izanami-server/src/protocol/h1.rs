@@ -2,6 +2,7 @@
 
 use {
     crate::BoxedStdError,
+    crate::{server::Connection, upgrade::HttpUpgrade},
     bytes::{Buf, Bytes},
     futures::{try_ready, Async, Future, Poll},
     http::{HeaderMap, Request, Response},
@@ -9,7 +10,7 @@ use {
         body::Payload as _Payload,
         server::conn::{Connection as HyperConnection, Http},
     },
-    izanami_http::{body::HttpBody, upgrade::HttpUpgrade, Connection, HttpService},
+    izanami_http::{body::HttpBody, HttpService},
     izanami_util::{MapAsyncOptExt, RewindIo},
     tokio::{
         io::{AsyncRead, AsyncWrite},

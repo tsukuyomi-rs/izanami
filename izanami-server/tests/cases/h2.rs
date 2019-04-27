@@ -2,20 +2,18 @@ use {
     crate::common::TestServer,
     futures::Future,
     http::{Request, Response},
-    izanami::{
-        h1::{H1Request, H1}, //
-        http::body::HttpBodyExt,
-    },
+    izanami_http::body::HttpBodyExt,
+    izanami_server::protocol::h2::{H2Request, H2},
     std::io,
     tokio_buf::BufStreamExt,
 };
 
 #[test]
 fn get() -> failure::Fallible<()> {
-    let mut server = TestServer::start_h1(|stream| {
-        H1::new().serve(
+    let mut server = TestServer::start_h2(|stream| {
+        H2::new().serve(
             stream,
-            izanami::service::service_fn(|_req| {
+            izanami_service::service_fn(|_req| {
                 Response::builder()
                     .header("content-type", "text/plain")
                     .body("hello")
@@ -36,10 +34,10 @@ fn get() -> failure::Fallible<()> {
 
 #[test]
 fn post() -> failure::Fallible<()> {
-    let mut server = TestServer::start_h1(|stream| {
-        H1::new().serve(
+    let mut server = TestServer::start_h2(|stream| {
+        H2::new().serve(
             stream,
-            izanami::service::service_fn(|req: H1Request| {
+            izanami_service::service_fn(|req: H2Request| {
                 req.into_body()
                     .into_buf_stream()
                     .collect::<Vec<u8>>()
