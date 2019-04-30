@@ -10,8 +10,11 @@ use {
         header::{HeaderValue, SERVER, SET_COOKIE},
         Request, Response,
     },
-    izanami_http::HttpBody,
-    izanami_server::upgrade::HttpUpgrade,
+    izanami_http::{
+        body::HttpBody,
+        upgrade::{HttpUpgrade, Upgraded},
+        ResponseBody,
+    },
     izanami_service::Service,
     izanami_util::MapAsyncOptExt,
     std::{convert::Infallible, io, rc::Rc, sync::Arc},
@@ -21,7 +24,7 @@ const VERSION_STR: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_V
 
 /// Asynchronous HTTP handler dispatched per incoming requests.
 pub trait Handler {
-    type Body: HttpBody;
+    type Body: ResponseBody;
     type Error: Into<Error>;
 
     fn poll_response(&mut self, cx: &mut Context<'_>) -> Poll<Response<Self::Body>, Self::Error>;
@@ -31,7 +34,7 @@ impl<F, B> Handler for F
 where
     F: Future<Item = Response<B>>,
     F::Error: Into<Error>,
-    B: HttpBody,
+    B: ResponseBody,
 {
     type Body = B;
     type Error = F::Error;
@@ -43,7 +46,7 @@ where
 
 /// A factory of `Handlers`.
 pub trait NewHandler {
-    type Body: HttpBody;
+    type Body: ResponseBody;
     type Error: Into<Error>;
     type Handler: Handler<Body = Self::Body, Error = Self::Error>;
 
@@ -91,7 +94,7 @@ where
 }
 
 pub trait ModifyHandler<H: Handler> {
-    type Body: HttpBody;
+    type Body: ResponseBody;
     type Error: Into<Error>;
     type Handler: Handler<Body = Self::Body, Error = Self::Error>;
 
@@ -210,7 +213,7 @@ pub(crate) enum HandlerServiceBody<B> {
 
 impl<B> HttpBody for HandlerServiceBody<B>
 where
-    B: HttpBody,
+    B: ResponseBody,
 {
     type Data = Either<B::Data, io::Cursor<String>>;
     type Error = B::Error;
@@ -263,14 +266,22 @@ where
     }
 }
 
-impl<B, I> HttpUpgrade<I> for HandlerServiceBody<B>
+impl<B> HttpUpgrade for HandlerServiceBody<B>
 where
-    B: HttpBody,
+    B: HttpUpgrade,
 {
-    type Upgraded = futures::future::Empty<(), <Self as HttpUpgrade<I>>::Error>;
-    type Error = Infallible;
+    type UpgradeError = B::UpgradeError;
 
-    fn upgrade(self, stream: I) -> Result<Self::Upgraded, I> {
-        Err(stream)
+    fn poll_upgraded(&mut self, io: &mut Upgraded<'_>) -> Poll<(), Self::UpgradeError> {
+        match self {
+            HandlerServiceBody::Success(body) => body.poll_upgraded(io),
+            _ => Ok(Async::Ready(())),
+        }
+    }
+
+    fn notify_shutdown(&mut self) {
+        if let HandlerServiceBody::Success(body) = self {
+            body.notify_shutdown()
+        }
     }
 }

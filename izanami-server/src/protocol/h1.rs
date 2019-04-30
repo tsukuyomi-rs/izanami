@@ -1,8 +1,7 @@
 //! HTTP/1 connection.
 
 use {
-    crate::BoxedStdError,
-    crate::{server::Connection, upgrade::HttpUpgrade},
+    crate::{server::Connection, BoxedStdError},
     bytes::{Buf, Bytes},
     futures::{try_ready, Async, Future, Poll},
     http::{HeaderMap, Request, Response},
@@ -10,7 +9,11 @@ use {
         body::Payload as _Payload,
         server::conn::{Connection as HyperConnection, Http},
     },
-    izanami_http::{body::HttpBody, HttpService},
+    izanami_http::{
+        body::HttpBody,
+        upgrade::{HttpUpgrade, Upgraded},
+        HttpService, ResponseBody,
+    },
     izanami_util::{MapAsyncOptExt, RewindIo},
     tokio::{
         io::{AsyncRead, AsyncWrite},
@@ -96,10 +99,10 @@ impl H1 {
     where
         I: AsyncRead + AsyncWrite + 'static,
         S: HttpService<RequestBody> + 'static,
-        S::ResponseBody: HttpUpgrade<RewindIo<I>> + Send + 'static,
+        S::ResponseBody: Send + 'static,
         <S::ResponseBody as HttpBody>::Data: Send,
         <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
-        <S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
+        <S::ResponseBody as HttpUpgrade>::UpgradeError: Into<BoxedStdError>,
         S::Error: Into<BoxedStdError>,
     {
         let service = InnerService {
@@ -128,10 +131,10 @@ pub struct H1Connection<I, S>
 where
     I: AsyncRead + AsyncWrite + 'static,
     S: HttpService<RequestBody>,
-    S::ResponseBody: HttpUpgrade<RewindIo<I>> + Send + 'static,
+    S::ResponseBody: Send + 'static,
     <S::ResponseBody as HttpBody>::Data: Send,
     <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
+    <S::ResponseBody as HttpUpgrade>::UpgradeError: Into<BoxedStdError>,
     S::Error: Into<BoxedStdError>,
 {
     state: State<I, S>,
@@ -142,10 +145,10 @@ enum State<I, S>
 where
     I: AsyncRead + AsyncWrite + 'static,
     S: HttpService<RequestBody>,
-    S::ResponseBody: HttpUpgrade<RewindIo<I>> + Send + 'static,
+    S::ResponseBody: Send + 'static,
     <S::ResponseBody as HttpBody>::Data: Send,
     <S::ResponseBody as HttpBody>::Error: Into<BoxedStdError>,
-    <S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
+    <S::ResponseBody as HttpUpgrade>::UpgradeError: Into<BoxedStdError>,
     S::Error: Into<BoxedStdError>,
 {
     InFlight(HyperConnection<I, InnerService<S>, DummyExecutor>),
@@ -153,7 +156,10 @@ where
         rewind: RewindIo<I>,
         rx_body: oneshot::Receiver<S::ResponseBody>,
     },
-    Upgraded(<S::ResponseBody as HttpUpgrade<RewindIo<I>>>::Upgraded),
+    Upgraded {
+        body: S::ResponseBody,
+        rewind: RewindIo<I>,
+    },
     Shutdown(RewindIo<I>),
     Closed,
 }
@@ -163,10 +169,10 @@ where
     I: AsyncRead + AsyncWrite + 'static,
     S: HttpService<RequestBody, ResponseBody = Bd> + 'static,
     S::Error: Into<BoxedStdError>,
-    Bd: HttpBody + HttpUpgrade<RewindIo<I>> + Send + 'static,
+    Bd: ResponseBody + Send + 'static,
     Bd::Data: Send,
-    <Bd as HttpBody>::Error: Into<BoxedStdError>,
-    <Bd as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
+    Bd::Error: Into<BoxedStdError>,
+    Bd::UpgradeError: Into<BoxedStdError>,
 {
     fn poll_complete_inner(&mut self) -> Poll<(), BoxedStdError> {
         loop {
@@ -184,8 +190,14 @@ where
                         |_| failure::format_err!("error during receiving upgrade context")
                     )));
                 }
-                State::Upgraded(ref mut upgraded) => {
-                    return upgraded.poll_close().map_err(Into::into);
+                State::Upgraded {
+                    ref mut body,
+                    ref mut rewind,
+                    ..
+                } => {
+                    return body
+                        .poll_upgraded(&mut Upgraded::from(rewind))
+                        .map_err(Into::into);
                 }
                 State::Shutdown(ref mut stream) => {
                     // shutdown the underlying I/O manually.
@@ -215,10 +227,7 @@ where
 
                 State::WillUpgrade { rewind, .. } => {
                     let body = body.expect("the response body must be available");
-                    match body.upgrade(rewind) {
-                        Ok(upgraded) => State::Upgraded(upgraded),
-                        Err(rewind) => State::Shutdown(rewind),
-                    }
+                    State::Upgraded { body, rewind }
                 }
 
                 State::Upgraded { .. } | State::Shutdown { .. } | State::Closed => unreachable!(),
@@ -232,10 +241,10 @@ where
     I: AsyncRead + AsyncWrite + 'static,
     S: HttpService<RequestBody, ResponseBody = Bd> + 'static,
     S::Error: Into<BoxedStdError>,
-    Bd: HttpBody + HttpUpgrade<RewindIo<I>> + Send + 'static,
+    Bd: ResponseBody + Send + 'static,
     Bd::Data: Send,
-    <Bd as HttpBody>::Error: Into<BoxedStdError>,
-    <Bd as HttpUpgrade<RewindIo<I>>>::Error: Into<BoxedStdError>,
+    Bd::Error: Into<BoxedStdError>,
+    Bd::UpgradeError: Into<BoxedStdError>,
 {
     type Error = BoxedStdError;
 
@@ -251,7 +260,7 @@ where
     fn graceful_shutdown(&mut self) {
         match self.state {
             State::InFlight(ref mut conn) => conn.graceful_shutdown(),
-            State::Upgraded(ref mut upgraded) => upgraded.graceful_shutdown(),
+            State::Upgraded { ref mut body, .. } => body.notify_shutdown(),
             _ => (),
         }
     }
@@ -270,7 +279,7 @@ impl<S, Bd> hyper::service::Service for InnerService<S>
 where
     S: HttpService<RequestBody, ResponseBody = Bd>,
     S::Error: Into<BoxedStdError>,
-    Bd: HttpBody + Send + 'static,
+    Bd: ResponseBody + Send + 'static,
     Bd::Data: Send,
     Bd::Error: Into<BoxedStdError>,
 {
@@ -328,7 +337,7 @@ impl<S, Bd> Future for InnerServiceFuture<S>
 where
     S: HttpService<RequestBody, ResponseBody = Bd>,
     S::Error: Into<BoxedStdError>,
-    Bd: HttpBody + Send + 'static,
+    Bd: ResponseBody + Send + 'static,
     Bd::Data: Send,
     Bd::Error: Into<BoxedStdError>,
 {

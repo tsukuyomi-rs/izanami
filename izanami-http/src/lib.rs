@@ -16,10 +16,16 @@
 #![forbid(clippy::unimplemented)]
 
 pub mod body;
-pub mod response;
 pub mod service;
+pub mod upgrade;
 
 pub use crate::{
     body::HttpBody, //
     service::HttpService,
+    upgrade::HttpUpgrade,
 };
+
+/// A trait alias that behaves as HTTP response body.
+pub trait ResponseBody: HttpBody + HttpUpgrade {}
+
+impl<B: HttpBody + HttpUpgrade> ResponseBody for B {}

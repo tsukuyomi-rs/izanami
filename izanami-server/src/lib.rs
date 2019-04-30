@@ -13,7 +13,6 @@
 pub mod net;
 pub mod protocol;
 mod server;
-pub mod upgrade;
 mod watch;
 
 #[allow(dead_code)]

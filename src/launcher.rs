@@ -1,7 +1,7 @@
 use {
     crate::handler::{HandlerService, NewHandler},
     futures::Future,
-    izanami_http::HttpBody,
+    izanami_http::{HttpBody, HttpUpgrade},
     izanami_server::{net::tcp::AddrIncoming, protocol::H1, Server},
     izanami_service::ServiceExt,
     std::{io, net::ToSocketAddrs},
@@ -20,6 +20,7 @@ where
     H::Body: Send + 'static,
     <H::Body as HttpBody>::Data: Send + 'static,
     <H::Body as HttpBody>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+    <H::Body as HttpUpgrade>::UpgradeError: Into<Box<dyn std::error::Error + Send + Sync>>,
     H::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
     H::Handler: Send + 'static,
 {

@@ -1,7 +1,7 @@
 //! HTTP services.
 
 use {
-    crate::body::HttpBody,
+    crate::{body::HttpBody, ResponseBody},
     futures::{Future, Poll},
     http::{Request, Response},
     izanami_service::Service,
@@ -13,7 +13,7 @@ where
     RequestBody: HttpBody,
 {
     /// The type of HTTP response returned from `respond`.
-    type ResponseBody: HttpBody;
+    type ResponseBody: ResponseBody;
 
     /// The error type which will be returned from this service.
     type Error;
@@ -32,7 +32,7 @@ impl<S, ReqBd, ResBd> HttpService<ReqBd> for S
 where
     S: Service<Request<ReqBd>, Response = Response<ResBd>>,
     ReqBd: HttpBody,
-    ResBd: HttpBody,
+    ResBd: ResponseBody,
 {
     type ResponseBody = ResBd;
     type Error = S::Error;
