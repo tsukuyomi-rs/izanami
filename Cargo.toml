@@ -1,7 +1,8 @@
 [package]
 name = "izanami"
 description = "An HTTP server implementation powered by hyper and tower-service."
-version = "0.1.0-preview.3"
+version = "0.2.0"
+publish = false
 edition = "2018"
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 license = "MIT OR Apache-2.0"
@@ -15,34 +16,33 @@ include = [
 ]
 
 [dependencies]
-izanami-http = { version = "0.1.0-preview.1", path = "izanami-http" }
-izanami-server = { version = "0.1.0-preview.1", path = "izanami-server" }
-izanami-service = { version = "0.1.0-preview.1", path = "izanami-service" }
-izanami-util = { version = "0.1.0-preview.1", path = "izanami-util" }
-
 bytes = { version = "0.4", features = ["either"] }
-cookie2 = { version = "0.12", features = ["percent-encode"] }
-either = "1"
+cookie = { version = "0.12", features = ["percent-encode"] }
+either = "1.5"
 failure = "0.1.5"
 futures = "0.1"
+h2 = "0.1"
 http = "0.1"
-tokio = "0.1"
+httpdate = "0.3"
+hyper = "0.12"
+log = "0.4"
+tokio = { version = "0.1.15", features = ["sync"] }
 tokio-buf = "0.1"
 tokio-executor = "0.1"
 tokio-threadpool = "0.1"
+tokio-tungstenite = { version = "0.6", default-features = false }
+tower-service = "0.2"
+tungstenite = { version = "0.6", default-features = false }
 
 [dev-dependencies]
+failure = "0.1.3"
+tempfile = "3"
+tokio-rustls = "0.9"
+trust-dns-resolver = "0.10"
+unicase = "2.4"
 version-sync = "0.7"
 
 [dev-dependencies.cargo-husky]
 version = "1"
 default-features = false
 features = ["user-hooks"]
-
-[workspace]
-members = [
-  "izanami-http",
-  "izanami-service",
-  "izanami-server",
-  "izanami-util",
-]

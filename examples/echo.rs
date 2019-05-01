@@ -1,7 +1,7 @@
 use {
     futures::{Async, Poll},
     http::Response,
-    izanami::{context::Context, handler::Handler, launcher::Launcher},
+    izanami::{Context, Handler, Launcher},
 };
 
 #[derive(Default)]
@@ -11,7 +11,7 @@ impl Handler for Echo {
     type Body = String;
     type Error = std::convert::Infallible;
 
-    fn poll_response(&mut self, _: &mut Context<'_>) -> Poll<Response<Self::Body>, Self::Error> {
+    fn poll_http(&mut self, _: &mut Context<'_>) -> Poll<Response<Self::Body>, Self::Error> {
         Ok(Async::Ready(
             Response::builder()
                 .header("content-type", "text/plain")

@@ -1,8 +1,15 @@
+//! HTTP-specific context values.
+
 use {
-    crate::{body::Body, localmap::LocalMap},
-    cookie2::{Cookie, CookieJar},
-    http::{HeaderMap, Request},
-    std::{cell::Cell, error, fmt, mem, ptr::NonNull, str},
+    crate::{
+        body::Body,
+        error::HttpError,
+        localmap::LocalMap,
+        ws::{WebSocket, WebSocketDriver},
+    },
+    cookie::{Cookie, CookieJar},
+    http::{HeaderMap, Request, Response, StatusCode},
+    std::{cell::Cell, error, fmt, marker::PhantomData, mem, ptr::NonNull, rc::Rc, str},
 };
 
 thread_local! {
@@ -21,7 +28,7 @@ impl Drop for SetOnDrop {
 }
 
 /// Set a reference to the request context to task local storage.
-pub fn set_tls_context<F, R>(cx: &mut Context<'_>, f: F) -> R
+pub fn set_tls<F, R>(cx: &mut Context<'_>, f: F) -> R
 where
     F: FnOnce() -> R,
 {
@@ -36,7 +43,7 @@ where
 /// # Panics
 ///
 /// This function will panic if the request context is not set at the current task.
-pub fn get_tls_context<F, R>(f: F) -> R
+pub fn get_tls<F, R>(f: F) -> R
 where
     F: FnOnce(&mut Context<'_>) -> R,
 {
@@ -46,43 +53,58 @@ where
     unsafe { f(cx_ptr.as_mut()) }
 }
 
+/// The instance of request-local context data managed by Web application servers.
 #[derive(Debug)]
-pub(crate) struct ContextInner {
+pub(crate) struct ContextData {
     pub(crate) request: Request<()>,
     pub(crate) body: Option<Body>,
     pub(crate) cookies: Option<CookieJar>,
     pub(crate) response_headers: Option<HeaderMap>,
     pub(crate) locals: LocalMap,
+    pub(crate) ws_driver: Option<WebSocketDriver>,
+    _p: (),
 }
 
-impl ContextInner {
+impl ContextData {
     pub(crate) fn new(request: Request<Body>) -> Self {
         let (parts, body) = request.into_parts();
-        Self {
+        ContextData {
             request: Request::from_parts(parts, ()),
             body: Some(body),
             cookies: None,
             response_headers: None,
             locals: LocalMap::default(),
+            ws_driver: None,
+            _p: (),
+        }
+    }
+
+    pub(crate) fn context(&mut self) -> Context<'_> {
+        Context {
+            data: self,
+            _anchor: PhantomData,
         }
     }
 }
 
 /// A set of context values associated with an incoming request.
 #[derive(Debug)]
-pub struct Context<'a>(pub(crate) &'a mut ContextInner);
+pub struct Context<'a> {
+    data: &'a mut ContextData,
+    _anchor: PhantomData<Rc<()>>,
+}
 
 impl<'a> Context<'a> {
     pub fn protocol_version(&self) -> http::Version {
-        self.0.request.version()
+        self.data.request.version()
     }
 
     pub fn method(&self) -> &http::Method {
-        self.0.request.method()
+        self.data.request.method()
     }
 
     pub fn uri(&self) -> &http::Uri {
-        self.0.request.uri()
+        self.data.request.uri()
     }
 
     pub fn path(&self) -> &str {
@@ -94,19 +116,19 @@ impl<'a> Context<'a> {
     }
 
     pub fn headers(&self) -> &http::HeaderMap {
-        self.0.request.headers()
+        self.data.request.headers()
     }
 
     pub fn extensions(&self) -> &http::Extensions {
-        self.0.request.extensions()
+        self.data.request.extensions()
     }
 
     pub fn body(&mut self) -> Option<Body> {
-        self.0.body.take()
+        self.data.body.take()
     }
 
     pub fn cookies(&mut self) -> Result<&mut CookieJar, CookieParseError> {
-        if let Some(ref mut jar) = self.0.cookies {
+        if let Some(ref mut jar) = self.data.cookies {
             return Ok(jar);
         }
 
@@ -122,19 +144,27 @@ impl<'a> Context<'a> {
             }
         }
 
-        Ok(self.0.cookies.get_or_insert(jar))
+        Ok(self.data.cookies.get_or_insert(jar))
     }
 
     pub fn response_headers(&mut self) -> &mut HeaderMap {
-        self.0.response_headers.get_or_insert_with(Default::default)
+        self.data
+            .response_headers
+            .get_or_insert_with(Default::default)
     }
 
     pub fn locals(&self) -> &LocalMap {
-        &self.0.locals
+        &self.data.locals
     }
 
     pub fn locals_mut(&mut self) -> &mut LocalMap {
-        &mut self.0.locals
+        &mut self.data.locals
+    }
+
+    pub fn start_websocket(
+        &mut self,
+    ) -> Result<Option<(Response<()>, WebSocket)>, WsHandshakeError> {
+        Ok(None)
     }
 }
 
@@ -161,5 +191,22 @@ impl error::Error for CookieParseError {
         self.0
             .as_ref()
             .map(|e| &**e as &(dyn error::Error + 'static))
+    }
+}
+
+#[derive(Debug)]
+pub struct WsHandshakeError(());
+
+impl fmt::Display for WsHandshakeError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("WebSocket handshake error")
+    }
+}
+
+impl error::Error for WsHandshakeError {}
+
+impl HttpError for WsHandshakeError {
+    fn status_code(&self) -> StatusCode {
+        StatusCode::BAD_REQUEST
     }
 }

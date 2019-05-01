@@ -1,4 +1,4 @@
-//! An implementation of typemap for managing request-local data.
+//! Typed map for managing request-local data.
 
 use std::{
     any::TypeId,

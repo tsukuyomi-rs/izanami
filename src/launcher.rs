@@ -1,51 +1,96 @@
 use {
-    crate::handler::{HandlerService, NewHandler},
+    crate::{
+        app::{App, AppService},
+        body::HttpBody,
+        server::{
+            net::tcp::AddrIncoming,
+            protocol::{H1, H2},
+            service::ServiceExt,
+            MakeConnection, Server,
+        },
+    },
     futures::Future,
-    izanami_http::{HttpBody, HttpUpgrade},
-    izanami_server::{net::tcp::AddrIncoming, protocol::H1, Server},
-    izanami_service::ServiceExt,
     std::{io, net::ToSocketAddrs},
     tokio::runtime::Runtime,
 };
 
 #[derive(Debug)]
-pub struct Launcher<H> {
-    new_handler: H,
+enum Protocol {
+    H1(H1),
+    H2(H2),
+}
+
+/// Web application launcher.
+#[derive(Debug)]
+pub struct Launcher<T> {
+    app: T,
+    protocol: Protocol,
     runtime: Runtime,
 }
 
-impl<H> Launcher<H>
+impl<T> Launcher<T>
 where
-    H: NewHandler + Clone + Send + 'static,
-    H::Body: Send + 'static,
-    <H::Body as HttpBody>::Data: Send + 'static,
-    <H::Body as HttpBody>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    <H::Body as HttpUpgrade>::UpgradeError: Into<Box<dyn std::error::Error + Send + Sync>>,
-    H::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    H::Handler: Send + 'static,
+    T: App + Clone + Send + 'static,
+    T::Body: Send + 'static,
+    T::Handler: Send + 'static,
+    <T::Body as HttpBody>::Data: Send + 'static,
+    <T::Body as HttpBody>::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
-    pub fn new(new_handler: H) -> io::Result<Self> {
+    pub fn new(app: T) -> io::Result<Self> {
         Ok(Launcher {
-            new_handler,
+            app,
+            protocol: Protocol::H1(H1::new()),
             runtime: Runtime::new()?,
         })
+    }
+
+    pub fn use_h1(&mut self, protocol: H1) {
+        self.protocol = Protocol::H1(protocol);
+    }
+
+    pub fn use_h2(&mut self, protocol: H2) {
+        self.protocol = Protocol::H2(protocol);
+    }
+
+    fn bind_connection<C>(&mut self, make_connection: C)
+    where
+        C: MakeConnection + Send + 'static,
+        C::Connection: Send + 'static,
+        C::Future: Send + 'static,
+        C::MakeError: std::fmt::Display,
+    {
+        self.runtime
+            .spawn(Server::new(make_connection).map_err(|e| eprintln!("server error: {}", e)));
     }
 
     pub fn bind<A>(&mut self, addr: A) -> io::Result<()>
     where
         A: ToSocketAddrs,
     {
-        let new_handler = self.new_handler.clone();
-        self.runtime.spawn(
-            Server::new(
-                AddrIncoming::bind(addr)? //
-                    .service_map(move |stream| {
-                        let service = HandlerService(new_handler.clone());
-                        H1::new().serve(stream, service)
-                    }),
-            )
-            .map_err(|e| eprintln!("server error: {}", e)),
-        );
+        let app = self.app.clone();
+        match self.protocol {
+            Protocol::H1(ref proto) => {
+                let proto = proto.clone();
+                self.bind_connection(
+                    AddrIncoming::bind(addr)? //
+                        .service_map(move |stream| {
+                            let service = AppService::from(app.clone());
+                            proto.serve(stream, service)
+                        }),
+                );
+            }
+            Protocol::H2(ref proto) => {
+                let proto = proto.clone();
+                self.bind_connection(
+                    AddrIncoming::bind(addr)? //
+                        .service_map(move |stream| {
+                            let service = AppService::from(app.clone());
+                            proto.serve(stream, service)
+                        }),
+                );
+            }
+        }
+
         Ok(())
     }
 
