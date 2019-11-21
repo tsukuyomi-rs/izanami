@@ -1,10 +1,5 @@
 # `izanami`
 
-[![crates.io](https://img.shields.io/crates/v/izanami.svg)](https://crates.io/crates/izanami)
-[![rust toolchain](https://img.shields.io/badge/rust%20toolchain-1.34.1%2B-yellowgreen.svg)](https://blog.rust-lang.org/2019/04/25/Rust-1.34.1.html)
-[![Build Status](https://ubnt-intrepid.visualstudio.com/izanami/_apis/build/status/ubnt-intrepid.izanami?branchName=master)](https://ubnt-intrepid.visualstudio.com/izanami/_build/latest?definitionId=2?branchName=master)
-[![codecov](https://codecov.io/gh/ubnt-intrepid/izanami/branch/master/graph/badge.svg)](https://codecov.io/gh/ubnt-intrepid/izanami)
-
 > This library is in the experimental stage, and it cannot be used for production use.
 
 An HTTP server implementation powered by `hyper` and `tower-service`.
