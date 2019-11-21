@@ -1,6 +1,6 @@
 //! A lightweight Web server interface for building Web frameworks.
 
-#![doc(html_root_url = "https://docs.rs/izanami/0.2.0")]
+#![doc(html_root_url = "https://docs.rs/izanami/0.2.0-dev")]
 #![deny(
     missing_debug_implementations,
     nonstandard_style,
