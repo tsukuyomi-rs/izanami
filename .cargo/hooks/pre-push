@@ -2,21 +2,8 @@
 
 set -e
 
-[[ -n "${DISABLE_GIT_HOOKS}" ]] && {
-    echo "[warn] Git hooks are disabled by user."
-    exit 0
-}
+(set -x; cargo build --workspace --all-targets)
 
-BRANCH="$(git symbolic-ref --short HEAD)"
-[[ "${BRANCH:-}" = wip-* ]] && {
-    echo "[info] The current branch is working in progress."
-    exit 0
-}
-
-[[ -z $(git status --porcelain) ]] || {
-    echo '[error] The repository is dirty.'
-    exit 1
-}
-
-set -x
-exec "$(git rev-parse --show-toplevel)/.ci/scripts/run-test.sh"
+if cargo clippy --version >/dev/null; then
+   (set -x; cargo clippy --workspace --all-targets)
+fi

@@ -1,0 +1,14 @@
+#!/bin/bash
+
+DIR="$(cd $(dirname $BASH_SOURCE)/..; pwd)"
+echo "DIR=${DIR}"
+
+set -ex
+
+cargo fetch
+rm -rfv $DIR/target/doc
+
+timeout -sKILL 900 cargo doc --no-deps --all
+
+rm -rfv $DIR/target/doc/.lock
+echo '<meta http-equiv="refresh" content="0;url=izanami">' > $DIR/target/doc/index.html
