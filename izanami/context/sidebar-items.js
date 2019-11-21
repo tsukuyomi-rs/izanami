@@ -1,0 +1,1 @@
+initSidebarItems({"fn":[["get_tls","Retrieve a reference to the request context from task local storage."],["set_tls","Set a reference to the request context to task local storage."]],"struct":[["Context","A set of context values associated with an incoming request."],["CookieParseError",""],["WsHandshakeError",""]]});
