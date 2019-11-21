@@ -1,6 +1,4 @@
 var N = null;var sourcesIndex = {};
-sourcesIndex["failure"] = {"name":"","dirs":[{"name":"backtrace","files":["internal.rs","mod.rs"]},{"name":"error","files":["error_impl.rs","mod.rs"]}],"files":["as_fail.rs","box_std.rs","compat.rs","context.rs","error_message.rs","lib.rs","macros.rs","result_ext.rs","sync_failure.rs"]};
 sourcesIndex["izanami"] = {"name":"","dirs":[{"name":"server","dirs":[{"name":"net","dirs":[{"name":"ext","files":["remote.rs","sni.rs"]}],"files":["ext.rs","sleep_on_errors.rs","tcp.rs","unix.rs"]},{"name":"protocol","files":["h1.rs","h2.rs"]},{"name":"service","dirs":[{"name":"ext","files":["and_then.rs","err_into.rs","join.rs","map.rs","map_err.rs"]}],"files":["ext.rs","into_service.rs","make_service.rs","service_fn.rs","service_mut.rs","service_ref.rs","unit.rs"]},{"name":"util","files":["rewind_io.rs","service.rs"]}],"files":["net.rs","protocol.rs","service.rs","upgrade.rs","util.rs","watch.rs"]}],"files":["app.rs","body.rs","context.rs","error.rs","handler.rs","launcher.rs","lib.rs","localmap.rs","middleware.rs","rt.rs","server.rs","util.rs","ws.rs"]};
 sourcesIndex["izanami_xtask"] = {"name":"","files":["main.rs"]};
-sourcesIndex["tower_service"] = {"name":"","files":["lib.rs"]};
 createSourceSidebar();

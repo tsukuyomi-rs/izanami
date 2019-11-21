@@ -6,5 +6,4 @@ implementors["izanami"] = [{text:"impl&lt;F, T&gt; <a class=\"trait\" href=\"htt
             } else {
                 window.pending_implementors = implementors;
             }
-        
-})()
+        })()

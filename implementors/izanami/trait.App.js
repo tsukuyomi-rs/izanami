@@ -6,5 +6,4 @@ implementors["izanami"] = [];
             } else {
                 window.pending_implementors = implementors;
             }
-        
-})()
+        })()
