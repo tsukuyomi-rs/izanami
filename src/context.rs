@@ -4,7 +4,6 @@ use {
     crate::{
         body::Body,
         error::HttpError,
-        localmap::LocalMap,
         ws::{WebSocket, WebSocketDriver},
     },
     cookie::{Cookie, CookieJar},
@@ -60,7 +59,6 @@ pub(crate) struct ContextData {
     pub(crate) body: Option<Body>,
     pub(crate) cookies: Option<CookieJar>,
     pub(crate) response_headers: Option<HeaderMap>,
-    pub(crate) locals: LocalMap,
     pub(crate) ws_driver: Option<WebSocketDriver>,
     _p: (),
 }
@@ -73,7 +71,6 @@ impl ContextData {
             body: Some(body),
             cookies: None,
             response_headers: None,
-            locals: LocalMap::default(),
             ws_driver: None,
             _p: (),
         }
@@ -151,14 +148,6 @@ impl<'a> Context<'a> {
         self.data
             .response_headers
             .get_or_insert_with(Default::default)
-    }
-
-    pub fn locals(&self) -> &LocalMap {
-        &self.data.locals
-    }
-
-    pub fn locals_mut(&mut self) -> &mut LocalMap {
-        &mut self.data.locals
     }
 
     pub fn start_websocket(

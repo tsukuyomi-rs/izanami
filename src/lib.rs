@@ -15,9 +15,6 @@ pub mod body;
 pub mod context;
 pub mod error;
 pub mod handler;
-pub mod localmap;
-pub mod middleware;
-pub mod rt;
 pub mod ws;
 
 mod app;
@@ -32,7 +29,6 @@ pub use crate::{
     context::Context,
     handler::Handler,
     launcher::Launcher,
-    middleware::Middleware,
 };
 
 const VERSION_STR: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CARGO_PKG_VERSION"));
