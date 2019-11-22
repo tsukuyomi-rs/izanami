@@ -1,0 +1,12 @@
+[package]
+name = "izanami-examples"
+version = "0.0.0" # never publish
+publish = false
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+async-trait = "0.1"
+http = "0.1"
+izanami = { path = "../izanami" }
+tokio = "0.2.0-alpha.6"

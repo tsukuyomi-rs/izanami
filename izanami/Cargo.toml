@@ -1,0 +1,21 @@
+[package]
+name = "izanami"
+description = "An HTTP server built on hyper."
+version = "0.2.0-dev"
+publish = false
+edition = "2018"
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/ubnt-intrepid/izanami.git"
+readme = "README.md"
+
+[dependencies]
+async-trait = "0.1"
+bytes = "0.4"
+futures = "0.3"
+h2 = "0.2.0-alpha.3"
+http = "0.1"
+tokio = "0.2.0-alpha.6"
+
+[dev-dependencies]
+version-sync = "0.7"
