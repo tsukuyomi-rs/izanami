@@ -1,9 +1,0 @@
-(function() {var implementors = {};
-implementors["izanami"] = [{text:"impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/std/error/trait.Error.html\" title=\"trait std::error::Error\">Error</a> for <a class=\"struct\" href=\"izanami/body/struct.Error.html\" title=\"struct izanami::body::Error\">Error</a>",synthetic:false,types:["izanami::body::Error"]},{text:"impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/std/error/trait.Error.html\" title=\"trait std::error::Error\">Error</a> for <a class=\"struct\" href=\"izanami/context/struct.CookieParseError.html\" title=\"struct izanami::context::CookieParseError\">CookieParseError</a>",synthetic:false,types:["izanami::context::CookieParseError"]},{text:"impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/std/error/trait.Error.html\" title=\"trait std::error::Error\">Error</a> for <a class=\"struct\" href=\"izanami/context/struct.WsHandshakeError.html\" title=\"struct izanami::context::WsHandshakeError\">WsHandshakeError</a>",synthetic:false,types:["izanami::context::WsHandshakeError"]},{text:"impl <a class=\"trait\" href=\"https://doc.rust-lang.org/nightly/std/error/trait.Error.html\" title=\"trait std::error::Error\">Error</a> for <a class=\"struct\" href=\"izanami/ws/struct.Error.html\" title=\"struct izanami::ws::Error\">Error</a>",synthetic:false,types:["izanami::ws::Error"]},];
-
-            if (window.register_implementors) {
-                window.register_implementors(implementors);
-            } else {
-                window.pending_implementors = implementors;
-            }
-        })()

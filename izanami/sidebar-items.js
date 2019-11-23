@@ -1,1 +1,1 @@
-initSidebarItems({"mod":[["body",""],["context","HTTP-specific context values."],["error","Error representation during handling the request."],["handler","Definition of `Handler`."],["ws","WebSocket specific context values."]],"struct":[["Context","A set of context values associated with an incoming request."],["Launcher","Web application launcher."]],"trait":[["App","The main trait that abstracts Web applications."],["Handler","Asynchronous HTTP handler dispatched per incoming requests."]]});
+initSidebarItems({"mod":[["h2",""]],"trait":[["App",""],["Eventer",""]]});
