@@ -13,7 +13,7 @@ impl izanami::App for App {
     {
         ev.send_response(
             Response::builder() //
-                .body("Hello, world!\n")
+                .body(io::Cursor::new("Hello, world!\n"))
                 .unwrap(),
         )
         .await

@@ -1,10 +1,10 @@
-use crate::app::{App, Eventer};
+use crate::{app::App, eventer::Eventer};
 use async_trait::async_trait;
-use bytes::Bytes;
-use h2::{server::SendResponse, RecvStream};
-use http::{Request, Response};
-use std::io;
-use std::net::ToSocketAddrs;
+use bytes::{Buf, Bytes};
+use futures::future::poll_fn;
+use h2::{server::SendResponse, RecvStream, SendStream};
+use http::{HeaderMap, Request, Response};
+use std::{io, net::ToSocketAddrs};
 use tokio::net::TcpListener;
 
 #[derive(Debug)]
@@ -59,7 +59,11 @@ where
 {
     let (parts, receiver) = request.into_parts();
     let request = Request::from_parts(parts, ());
-    let mut eventer = H2Eventer { receiver, sender };
+    let mut eventer = H2Eventer {
+        receiver,
+        sender,
+        stream: None,
+    };
 
     if let Err(..) = app.call(&request, &mut eventer).await {
         eprintln!("App error");
@@ -70,34 +74,48 @@ where
 pub struct H2Eventer {
     receiver: RecvStream,
     sender: SendResponse<Bytes>,
+    stream: Option<SendStream<Bytes>>,
 }
 
 #[async_trait]
 impl Eventer for H2Eventer {
+    type Data = io::Cursor<Bytes>;
     type Error = h2::Error;
 
-    async fn send_response<T: AsRef<[u8]>>(
-        &mut self,
-        response: Response<T>,
-    ) -> Result<(), Self::Error>
-    where
-        T: Send,
-    {
-        let (parts, body) = response.into_parts();
-        let body = body.as_ref();
-        let end_of_stream = body.is_empty();
-
-        let mut stream = self
-            .sender
-            .send_response(Response::from_parts(parts, ()), end_of_stream)?;
-        if !end_of_stream {
-            stream.reserve_capacity(body.len());
-            futures::future::poll_fn(|cx| stream.poll_capacity(cx))
-                .await
-                .transpose()?;
-            stream.send_data(body.into(), true)?;
+    async fn data(&mut self) -> Result<Option<Self::Data>, Self::Error> {
+        let data = self.receiver.data().await.transpose()?;
+        if let Some(ref data) = data {
+            let release_capacity = self.receiver.release_capacity();
+            release_capacity.release_capacity(data.len())?;
         }
+        Ok(data.map(io::Cursor::new))
+    }
+
+    async fn trailers(&mut self) -> Result<Option<HeaderMap>, Self::Error> {
+        self.receiver.trailers().await
+    }
+
+    async fn start_send_response(&mut self, response: Response<()>) -> Result<(), Self::Error> {
+        let stream = self.sender.send_response(response, false)?;
+        self.stream.replace(stream);
+        Ok(())
+    }
+
+    async fn send_data<T>(&mut self, data: T, end_of_stream: bool) -> Result<(), Self::Error>
+    where
+        T: Buf + Send,
+    {
+        let stream = self.stream.as_mut().unwrap();
+
+        stream.reserve_capacity(data.remaining());
+        poll_fn(|cx| stream.poll_capacity(cx)).await.transpose()?;
+        stream.send_data(data.collect(), end_of_stream)?;
 
         Ok(())
+    }
+
+    async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error> {
+        let stream = self.stream.as_mut().unwrap();
+        stream.send_trailers(trailers)
     }
 }
