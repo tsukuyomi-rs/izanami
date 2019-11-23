@@ -2,10 +2,12 @@
 
 CA_SUBJECT="/C=JP/ST=Tokyo/O=Izanami CA/CN=localhost"
 
-DIR="$(cd $(dirname $BASH_SOURCE); pwd)"
-cd $DIR
+DIR="$(cd $(dirname $BASH_SOURCE)/..; pwd)"
 
 set -ex
+
+mkdir -p $DIR/target/keys
+cd $DIR/target/keys
 
 # generate RSA private key
 openssl genrsa -out server-key.pem 4096
