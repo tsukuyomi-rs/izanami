@@ -1,1 +1,1 @@
-initSidebarItems({"mod":[["h2",""]],"trait":[["App",""],["Eventer",""]]});
+initSidebarItems({"mod":[["h2",""]],"trait":[["App",""],["Events",""]]});
