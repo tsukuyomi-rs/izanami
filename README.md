@@ -1,23 +1,19 @@
-# `izanami`
+<h1 align="center">
+  <code>izanami</code>
+</h1>
+<div align="center">
+  <strong>
+    Alternative Web application interface inspired from [ASGI].
+  </strong>
+</div>
+
+<br />
 
 > This library is in the experimental stage, and it cannot be used for production use.
 
-An HTTP server implementation powered by `hyper` and `tower-service`.
+## Status
 
-## Features
-
-* Supports Both of HTTP/1.x and HTTP/2.0 protocols with the power of `hyper`
-* [Unix domain socket](./examples/uds-server) support (only on Unix platform)
-
-Note that this project does **not** aim to grow itself to a Web framework.
-The *goal* of Izanami is to provide a foundation for Web frameworks that can
-be used in common (it just corresponds to the position of Werkzeug against Flask).
-
-## Resources
-
-* [API documentation (master)](https://ubnt-intrepid.github.io/izanami)
-* [API documentation (released)](https://docs.rs/izanami)
-* [Examples](./examples)
+WIP
 
 ## License
 
@@ -30,5 +26,4 @@ at your option.
 
 <!-- links -->
 
-[`hyper`]: https://github.com/hyperium/hyper
-[`tokio`]: https://github.com/tokio-rs/tokio
+[ASGI]: https://asgi.readthedocs.io/en/latest/index.html
