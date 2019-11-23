@@ -1,4 +1,4 @@
-use crate::{app::App, eventer::Eventer};
+use crate::{app::App, events::Events};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::future::poll_fn;
@@ -59,26 +59,25 @@ where
 {
     let (parts, receiver) = request.into_parts();
     let request = Request::from_parts(parts, ());
-    let mut eventer = H2Eventer {
+    let mut events = H2Events {
         receiver,
         sender,
         stream: None,
     };
 
-    if let Err(..) = app.call(&request, &mut eventer).await {
+    if let Err(..) = app.call(&request, &mut events).await {
         eprintln!("App error");
     }
 }
 
-#[derive(Debug)]
-pub struct H2Eventer {
+struct H2Events {
     receiver: RecvStream,
     sender: SendResponse<Bytes>,
     stream: Option<SendStream<Bytes>>,
 }
 
 #[async_trait]
-impl Eventer for H2Eventer {
+impl Events for H2Events {
     type Data = io::Cursor<Bytes>;
     type Error = h2::Error;
 

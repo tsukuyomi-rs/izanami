@@ -1,23 +1,24 @@
 use async_trait::async_trait;
 use http::{Request, Response};
-use izanami::Eventer;
+use izanami::Events;
 use std::io;
 
 struct App;
 
 #[async_trait]
 impl izanami::App for App {
-    async fn call<E>(&self, _: &Request<()>, mut ev: E) -> io::Result<()>
+    async fn call<E>(&self, _: &Request<()>, mut events: E) -> io::Result<()>
     where
-        E: Eventer,
+        E: Events,
     {
-        ev.send_response(
-            Response::builder() //
-                .body(io::Cursor::new("Hello, world!\n"))
-                .unwrap(),
-        )
-        .await
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+        events
+            .send_response(
+                Response::builder() //
+                    .body(io::Cursor::new("Hello, world!\n"))
+                    .unwrap(),
+            )
+            .await
+            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
 
         Ok(())
     }

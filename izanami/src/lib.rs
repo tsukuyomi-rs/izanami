@@ -12,13 +12,13 @@
 #![cfg_attr(test, deny(warnings))]
 
 mod app;
-mod eventer;
+mod events;
 
 pub mod h2;
 
 pub use crate::{
     app::App, //
-    eventer::Eventer,
+    events::Events,
 };
 
 type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;

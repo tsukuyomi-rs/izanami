@@ -4,7 +4,7 @@ use http::{HeaderMap, Response};
 use std::{error::Error, future::Future, pin::Pin};
 
 #[async_trait]
-pub trait Eventer: Send {
+pub trait Events: Send {
     type Data: Buf + Send;
     type Error: Into<Box<dyn Error + Send + Sync>>;
 
@@ -29,9 +29,9 @@ pub trait Eventer: Send {
     async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error>;
 }
 
-impl<E: ?Sized> Eventer for &mut E
+impl<E: ?Sized> Events for &mut E
 where
-    E: Eventer,
+    E: Events,
 {
     type Data = E::Data;
     type Error = E::Error;
@@ -108,9 +108,9 @@ where
     }
 }
 
-impl<E: ?Sized> Eventer for Box<E>
+impl<E: ?Sized> Events for Box<E>
 where
-    E: Eventer,
+    E: Events,
 {
     type Data = E::Data;
     type Error = E::Error;
