@@ -1,9 +1,13 @@
-use crate::{app::App, events::Events};
+use crate::{
+    app::App,
+    events::{Events, PushEvents, WebSocketEvents},
+    websocket::Message,
+};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::future::poll_fn;
 use h2::{
-    server::{Connection, SendResponse},
+    server::{Connection, SendPushedResponse, SendResponse},
     RecvStream, SendStream,
 };
 use http::{HeaderMap, Request, Response};
@@ -98,6 +102,8 @@ struct H2Events {
 impl Events for H2Events {
     type Data = io::Cursor<Bytes>;
     type Error = h2::Error;
+    type PushEvents = H2PushEvents;
+    type WebSocketEvents = H2WebSocketEvents;
 
     async fn data(&mut self) -> Result<Option<Self::Data>, Self::Error> {
         let data = self.receiver.data().await.transpose()?;
@@ -134,5 +140,71 @@ impl Events for H2Events {
     async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error> {
         let stream = self.stream.as_mut().unwrap();
         stream.send_trailers(trailers)
+    }
+
+    async fn push_request(
+        &mut self,
+        request: Request<()>,
+    ) -> Result<Self::PushEvents, Self::Error> {
+        Ok(H2PushEvents {
+            sender: self.sender.push_request(request)?,
+            stream: None,
+        })
+    }
+
+    async fn start_websocket(
+        &mut self,
+        _: Response<()>,
+    ) -> Result<Self::WebSocketEvents, Self::Error> {
+        unimplemented!("Websocket over HTTP/2 is not supported")
+    }
+}
+
+struct H2PushEvents {
+    sender: SendPushedResponse<Bytes>,
+    stream: Option<SendStream<Bytes>>,
+}
+
+#[async_trait]
+impl PushEvents for H2PushEvents {
+    type Error = h2::Error;
+
+    async fn start_send_response(&mut self, response: Response<()>) -> Result<(), Self::Error> {
+        let stream = self.sender.send_response(response, false)?;
+        self.stream.replace(stream);
+        Ok(())
+    }
+
+    async fn send_data<T>(&mut self, data: T, end_of_stream: bool) -> Result<(), Self::Error>
+    where
+        T: Buf + Send,
+    {
+        let stream = self.stream.as_mut().unwrap();
+
+        stream.reserve_capacity(data.remaining());
+        poll_fn(|cx| stream.poll_capacity(cx)).await.transpose()?;
+        stream.send_data(data.collect(), end_of_stream)?;
+
+        Ok(())
+    }
+
+    async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error> {
+        let stream = self.stream.as_mut().unwrap();
+        stream.send_trailers(trailers)
+    }
+}
+
+struct H2WebSocketEvents(std::convert::Infallible);
+
+#[async_trait]
+impl WebSocketEvents for H2WebSocketEvents {
+    type Error = h2::Error;
+
+    async fn message(&mut self) -> Result<Option<Message>, Self::Error> {
+        unimplemented!("WebSocket over HTTP/2 is not supported")
+    }
+
+    async fn send_message(&mut self, _: Message) -> Result<(), Self::Error> {
+        unimplemented!("WebSocket over HTTP/2 is not supported")
     }
 }

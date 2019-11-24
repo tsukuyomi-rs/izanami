@@ -13,12 +13,14 @@
 
 mod app;
 mod events;
+mod websocket;
 
 pub mod h2;
 
 pub use crate::{
     app::App, //
-    events::Events,
+    events::{Events, PushEvents, WebSocketEvents},
+    websocket::Message,
 };
 
 type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
