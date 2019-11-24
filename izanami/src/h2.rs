@@ -2,10 +2,13 @@ use crate::{app::App, events::Events};
 use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::future::poll_fn;
-use h2::{server::SendResponse, RecvStream, SendStream};
+use h2::{
+    server::{Connection, SendResponse},
+    RecvStream, SendStream,
+};
 use http::{HeaderMap, Request, Response};
 use std::{io, net::ToSocketAddrs};
-use tokio::net::TcpListener;
+use tokio::net::{TcpListener, TcpStream};
 
 #[derive(Debug)]
 pub struct Server {
@@ -29,21 +32,16 @@ impl Server {
         T: App + Clone + Send + Sync + 'static,
     {
         let mut listener = self.listener;
-        let h2 = self.h2;
         loop {
             if let Ok((socket, _)) = listener.accept().await {
+                let handshake = self.h2.handshake(socket);
                 let app = app.clone();
-                let handshake = h2.handshake::<_, Bytes>(socket);
                 tokio::spawn(async move {
                     match handshake.await {
-                        Ok(mut conn) => {
-                            while let Some(request) = conn.accept().await {
-                                let (request, respond) = request.unwrap();
-                                tokio::spawn(handle_request(app.clone(), request, respond));
-                            }
-                        }
+                        Ok(conn) => handle_connection(conn, app).await,
                         Err(err) => {
-                            eprintln!("handshake error: {}", err);
+                            tracing::error!("handshake error: {}", err);
+                            return;
                         }
                     }
                 });
@@ -52,7 +50,27 @@ impl Server {
     }
 }
 
-#[allow(unused_variables)]
+async fn handle_connection<T>(mut conn: Connection<TcpStream, Bytes>, app: T)
+where
+    T: App + Clone + Send + Sync + 'static,
+{
+    loop {
+        match conn.accept().await {
+            Some(Ok((request, sender))) => {
+                tokio::spawn(handle_request(app.clone(), request, sender));
+            }
+            Some(Err(err)) => {
+                tracing::error!("accept error: {}", err);
+                break;
+            }
+            None => {
+                tracing::debug!("connection closed");
+                break;
+            }
+        }
+    }
+}
+
 async fn handle_request<T>(app: T, request: Request<RecvStream>, sender: SendResponse<Bytes>)
 where
     T: App,
@@ -65,8 +83,8 @@ where
         stream: None,
     };
 
-    if let Err(..) = app.call(&request, &mut events).await {
-        eprintln!("App error");
+    if let Err(err) = app.call(&request, &mut events).await {
+        tracing::error!("app error: {}", err);
     }
 }
 

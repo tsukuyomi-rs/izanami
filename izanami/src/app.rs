@@ -1,11 +1,11 @@
 use crate::events::Events;
 use async_trait::async_trait;
 use http::Request;
-use std::{future::Future, io, pin::Pin};
+use std::{future::Future, pin::Pin};
 
 #[async_trait]
 pub trait App {
-    async fn call<E>(&self, req: &Request<()>, events: E) -> io::Result<()>
+    async fn call<E>(&self, req: &Request<()>, events: E) -> anyhow::Result<()>
     where
         E: Events;
 }
@@ -19,7 +19,7 @@ where
         &'l1 self,
         req: &'l2 Request<()>,
         events: E,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'async_trait>>
     where
         'l1: 'async_trait,
         'l2: 'async_trait,
@@ -38,7 +38,7 @@ where
         &'l1 self,
         req: &'l2 Request<()>,
         events: E,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'async_trait>>
     where
         'l1: 'async_trait,
         'l2: 'async_trait,
@@ -57,7 +57,7 @@ where
         &'l1 self,
         req: &'l2 Request<()>,
         events: E,
-    ) -> Pin<Box<dyn Future<Output = io::Result<()>> + Send + 'async_trait>>
+    ) -> Pin<Box<dyn Future<Output = anyhow::Result<()>> + Send + 'async_trait>>
     where
         'l1: 'async_trait,
         'l2: 'async_trait,

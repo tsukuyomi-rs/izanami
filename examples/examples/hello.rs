@@ -7,7 +7,7 @@ struct App;
 
 #[async_trait]
 impl izanami::App for App {
-    async fn call<E>(&self, _: &Request<()>, mut events: E) -> io::Result<()>
+    async fn call<E>(&self, _: &Request<()>, mut events: E) -> anyhow::Result<()>
     where
         E: Events,
     {
@@ -17,8 +17,7 @@ impl izanami::App for App {
                     .body(io::Cursor::new("Hello, world!\n"))
                     .unwrap(),
             )
-            .await
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .await?;
 
         Ok(())
     }

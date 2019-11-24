@@ -6,7 +6,7 @@ use std::{error::Error, future::Future, pin::Pin};
 #[async_trait]
 pub trait Events: Send {
     type Data: Buf + Send;
-    type Error: Into<Box<dyn Error + Send + Sync>>;
+    type Error: Error + Send + Sync + 'static;
 
     async fn data(&mut self) -> Result<Option<Self::Data>, Self::Error>;
     async fn trailers(&mut self) -> Result<Option<HeaderMap>, Self::Error>;
