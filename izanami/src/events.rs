@@ -1,8 +1,8 @@
-use crate::websocket::Message;
+use crate::{websocket::Message, BoxFuture};
 use async_trait::async_trait;
 use bytes::Buf;
 use http::{HeaderMap, Request, Response};
-use std::{error::Error, future::Future, pin::Pin};
+use std::error::Error;
 
 #[async_trait]
 pub trait Events: Send {
@@ -18,8 +18,8 @@ pub trait Events: Send {
         T: Buf + Send,
     {
         let (parts, body) = response.into_parts();
-        self.start_send_response(Response::from_parts(parts, ()))
-            .await?;
+        let response = Response::from_parts(parts, ());
+        self.start_send_response(response).await?;
         self.send_data(body, true).await?;
         Ok(())
     }
@@ -46,9 +46,10 @@ where
     type Error = E::Error;
     type PushEvents = E::PushEvents;
 
+    #[inline]
     fn data<'l1, 'async_trait>(
         &'l1 mut self,
-    ) -> crate::BoxFuture<'async_trait, Result<Option<Self::Data>, Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<Option<Self::Data>, Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -58,9 +59,10 @@ where
         (**self).data()
     }
 
+    #[inline]
     fn trailers<'l1, 'async_trait>(
         &'l1 mut self,
-    ) -> crate::BoxFuture<'async_trait, Result<Option<HeaderMap>, Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<Option<HeaderMap>, Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -70,10 +72,11 @@ where
         (**self).trailers()
     }
 
+    #[inline]
     fn send_response<'l1, 'async_trait, T>(
         &'l1 mut self,
         response: Response<T>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'async_trait>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         T: Buf + Send + 'async_trait,
         'l1: 'async_trait,
@@ -82,10 +85,11 @@ where
         (**self).send_response(response)
     }
 
+    #[inline]
     fn start_send_response<'l1, 'async_trait>(
         &'l1 mut self,
         response: Response<()>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'async_trait>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -93,11 +97,12 @@ where
         (**self).start_send_response(response)
     }
 
+    #[inline]
     fn send_data<'l1, 'async_trait, T>(
         &'l1 mut self,
         data: T,
         end_of_stream: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'async_trait>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         T: Buf + Send + 'async_trait,
         'l1: 'async_trait,
@@ -106,10 +111,11 @@ where
         (**self).send_data(data, end_of_stream)
     }
 
+    #[inline]
     fn send_trailers<'l1, 'async_trait>(
         &'l1 mut self,
         trailers: HeaderMap,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'async_trait>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -117,10 +123,11 @@ where
         (**self).send_trailers(trailers)
     }
 
+    #[inline]
     fn push_request<'l1, 'async_trait>(
         &'l1 mut self,
         request: Request<()>,
-    ) -> crate::BoxFuture<'async_trait, Result<Self::PushEvents, Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<Self::PushEvents, Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -128,10 +135,11 @@ where
         (**self).push_request(request)
     }
 
+    #[inline]
     fn start_websocket<'l1, 'async_trait>(
         &'l1 mut self,
         response: Response<()>,
-    ) -> crate::BoxFuture<'async_trait, Result<(), Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -139,9 +147,10 @@ where
         (**self).start_websocket(response)
     }
 
+    #[inline]
     fn websocket_message<'l1, 'async_trait>(
         &'l1 mut self,
-    ) -> crate::BoxFuture<'async_trait, Result<Option<Message>, Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<Option<Message>, Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -149,10 +158,11 @@ where
         (**self).websocket_message()
     }
 
+    #[inline]
     fn send_websocket_message<'l1, 'async_trait>(
         &'l1 mut self,
         message: Message,
-    ) -> crate::BoxFuture<'async_trait, Result<(), Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -169,9 +179,10 @@ where
     type Error = E::Error;
     type PushEvents = E::PushEvents;
 
+    #[inline]
     fn data<'l1, 'async_trait>(
         &'l1 mut self,
-    ) -> crate::BoxFuture<'async_trait, Result<Option<Self::Data>, Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<Option<Self::Data>, Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -181,9 +192,10 @@ where
         (**self).data()
     }
 
+    #[inline]
     fn trailers<'l1, 'async_trait>(
         &'l1 mut self,
-    ) -> crate::BoxFuture<'async_trait, Result<Option<HeaderMap>, Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<Option<HeaderMap>, Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -193,10 +205,11 @@ where
         (**self).trailers()
     }
 
+    #[inline]
     fn send_response<'l1, 'async_trait, T>(
         &'l1 mut self,
         response: Response<T>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'async_trait>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         T: Buf + Send + 'async_trait,
         'l1: 'async_trait,
@@ -205,10 +218,11 @@ where
         (**self).send_response(response)
     }
 
+    #[inline]
     fn start_send_response<'l1, 'async_trait>(
         &'l1 mut self,
         response: Response<()>,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'async_trait>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -216,11 +230,12 @@ where
         (**self).start_send_response(response)
     }
 
+    #[inline]
     fn send_data<'l1, 'async_trait, T>(
         &'l1 mut self,
         data: T,
         end_of_stream: bool,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'async_trait>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         T: Buf + Send + 'async_trait,
         'l1: 'async_trait,
@@ -229,10 +244,11 @@ where
         (**self).send_data(data, end_of_stream)
     }
 
+    #[inline]
     fn send_trailers<'l1, 'async_trait>(
         &'l1 mut self,
         trailers: HeaderMap,
-    ) -> Pin<Box<dyn Future<Output = Result<(), Self::Error>> + Send + 'async_trait>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -240,10 +256,11 @@ where
         (**self).send_trailers(trailers)
     }
 
+    #[inline]
     fn push_request<'l1, 'async_trait>(
         &'l1 mut self,
         request: Request<()>,
-    ) -> crate::BoxFuture<'async_trait, Result<Self::PushEvents, Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<Self::PushEvents, Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -251,10 +268,11 @@ where
         (**self).push_request(request)
     }
 
+    #[inline]
     fn start_websocket<'l1, 'async_trait>(
         &'l1 mut self,
         response: Response<()>,
-    ) -> crate::BoxFuture<'async_trait, Result<(), Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -262,9 +280,10 @@ where
         (**self).start_websocket(response)
     }
 
+    #[inline]
     fn websocket_message<'l1, 'async_trait>(
         &'l1 mut self,
-    ) -> crate::BoxFuture<'async_trait, Result<Option<Message>, Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<Option<Message>, Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
@@ -272,10 +291,11 @@ where
         (**self).websocket_message()
     }
 
+    #[inline]
     fn send_websocket_message<'l1, 'async_trait>(
         &'l1 mut self,
         message: Message,
-    ) -> crate::BoxFuture<'async_trait, Result<(), Self::Error>>
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         Self: 'async_trait,
