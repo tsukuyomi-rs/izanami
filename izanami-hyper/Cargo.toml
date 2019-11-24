@@ -1,0 +1,16 @@
+[package]
+name = "izanami-hyper"
+version = "0.1.0"
+publish = false
+authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+izanami = { version = "0.2.0-dev", path = "../izanami" }
+bytes = "0.4"
+futures = "0.3"
+http = "0.1"
+http-body = "0.2.0-alpha.3"
+hyper = "0.13.0-alpha.4"
+tokio = "0.2.0-alpha.6"
+tower-service = "0.3.0-alpha.2"

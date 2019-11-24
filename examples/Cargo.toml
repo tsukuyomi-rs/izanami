@@ -8,10 +8,12 @@ edition = "2018"
 [dependencies]
 izanami = { path = "../izanami" }
 izanami-h2 = { path = "../izanami-h2" }
+izanami-hyper = { path = "../izanami-hyper" }
 
 anyhow = "1"
 async-trait = "0.1"
 futures = "0.3"
 h2 = "0.2.0-alpha.3"
 http = "0.1"
+hyper = "0.13.0-alpha.4"
 tokio = "0.2.0-alpha.6"

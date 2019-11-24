@@ -2,6 +2,7 @@
 members = [
   "izanami",
   "izanami-h2",
+  "izanami-hyper",
 
   "examples",
   "xtask",
