@@ -17,7 +17,7 @@ mod websocket;
 
 pub use crate::{
     app::App, //
-    events::{Events, PushEvents},
+    events::Events,
     websocket::Message,
 };
 

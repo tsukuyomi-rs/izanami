@@ -1,14 +1,13 @@
 use crate::{websocket::Message, BoxFuture};
 use async_trait::async_trait;
 use bytes::Buf;
-use http::{HeaderMap, Request, Response};
+use http::{HeaderMap, Response};
 use std::error::Error;
 
 #[async_trait]
 pub trait Events: Send {
     type Data: Buf + Send;
     type Error: Error + Send + Sync + 'static;
-    type PushEvents: PushEvents<Error = Self::Error>;
 
     async fn data(&mut self) -> Result<Option<Self::Data>, Self::Error>;
     async fn trailers(&mut self) -> Result<Option<HeaderMap>, Self::Error>;
@@ -30,9 +29,6 @@ pub trait Events: Send {
         T: Buf + Send;
     async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error>;
 
-    async fn push_request(&mut self, request: Request<()>)
-        -> Result<Self::PushEvents, Self::Error>;
-
     async fn start_websocket(&mut self, response: Response<()>) -> Result<(), Self::Error>;
     async fn websocket_message(&mut self) -> Result<Option<Message>, Self::Error>;
     async fn send_websocket_message(&mut self, message: Message) -> Result<(), Self::Error>;
@@ -44,7 +40,6 @@ where
 {
     type Data = E::Data;
     type Error = E::Error;
-    type PushEvents = E::PushEvents;
 
     #[inline]
     fn data<'l1, 'async_trait>(
@@ -121,18 +116,6 @@ where
         Self: 'async_trait,
     {
         (**self).send_trailers(trailers)
-    }
-
-    #[inline]
-    fn push_request<'l1, 'async_trait>(
-        &'l1 mut self,
-        request: Request<()>,
-    ) -> BoxFuture<'async_trait, Result<Self::PushEvents, Self::Error>>
-    where
-        'l1: 'async_trait,
-        Self: 'async_trait,
-    {
-        (**self).push_request(request)
     }
 
     #[inline]
@@ -177,7 +160,6 @@ where
 {
     type Data = E::Data;
     type Error = E::Error;
-    type PushEvents = E::PushEvents;
 
     #[inline]
     fn data<'l1, 'async_trait>(
@@ -257,18 +239,6 @@ where
     }
 
     #[inline]
-    fn push_request<'l1, 'async_trait>(
-        &'l1 mut self,
-        request: Request<()>,
-    ) -> BoxFuture<'async_trait, Result<Self::PushEvents, Self::Error>>
-    where
-        'l1: 'async_trait,
-        Self: 'async_trait,
-    {
-        (**self).push_request(request)
-    }
-
-    #[inline]
     fn start_websocket<'l1, 'async_trait>(
         &'l1 mut self,
         response: Response<()>,
@@ -302,26 +272,4 @@ where
     {
         (**self).send_websocket_message(message)
     }
-}
-
-#[async_trait]
-pub trait PushEvents: Send {
-    type Error: Error + Send + Sync + 'static;
-
-    async fn send_response<T>(&mut self, response: Response<T>) -> Result<(), Self::Error>
-    where
-        T: Buf + Send,
-    {
-        let (parts, body) = response.into_parts();
-        self.start_send_response(Response::from_parts(parts, ()))
-            .await?;
-        self.send_data(body, true).await?;
-        Ok(())
-    }
-
-    async fn start_send_response(&mut self, response: Response<()>) -> Result<(), Self::Error>;
-    async fn send_data<T>(&mut self, data: T, end_of_stream: bool) -> Result<(), Self::Error>
-    where
-        T: Buf + Send;
-    async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error>;
 }
