@@ -1,5 +1,4 @@
 var N = null;var sourcesIndex = {};
-sourcesIndex["izanami"] = {"name":"","files":["app.rs","events.rs","h2.rs","lib.rs"]};
-sourcesIndex["izanami_examples"] = {"name":"","files":["main.rs"]};
-sourcesIndex["izanami_xtask"] = {"name":"","files":["main.rs"]};
+sourcesIndex["izanami"] = {"name":"","files":["app.rs","events.rs","lib.rs","websocket.rs"]};
+sourcesIndex["izanami_h2"] = {"name":"","files":["lib.rs"]};
 createSourceSidebar();
