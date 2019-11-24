@@ -1,6 +1,7 @@
 [workspace]
 members = [
   "izanami",
+  "izanami-h2",
 
   "examples",
   "xtask",

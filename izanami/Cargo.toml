@@ -13,11 +13,8 @@ readme = "README.md"
 anyhow = "1"
 async-trait = "0.1"
 bytes = "0.4"
-futures = "0.3"
-h2 = "0.2.0-alpha.3"
 http = "0.1"
-tokio = "0.2.0-alpha.6"
 tracing = "0.1"
 
 [dev-dependencies]
-version-sync = "0.7"
+version-sync = "0.8"

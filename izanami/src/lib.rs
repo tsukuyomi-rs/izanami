@@ -15,8 +15,6 @@ mod app;
 mod events;
 mod websocket;
 
-pub mod h2;
-
 pub use crate::{
     app::App, //
     events::{Events, PushEvents, WebSocketEvents},

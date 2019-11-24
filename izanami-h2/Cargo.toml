@@ -1,15 +1,16 @@
 [package]
-name = "izanami-examples"
-version = "0.0.0" # never publish
+name = "izanami-h2"
+version = "0.1.0"
 publish = false
 authors = ["Yusuke Sasaki <yusuke.sasaki.nuem@gmail.com>"]
 edition = "2018"
 
 [dependencies]
-izanami = { path = "../izanami" }
-izanami-h2 = { path = "../izanami-h2" }
-
-anyhow = "1"
+izanami = { version = "0.2.0-dev", path = "../izanami" }
 async-trait = "0.1"
+bytes = "0.4"
+futures = "0.3"
+h2 = "0.2.0-alpha.3"
 http = "0.1"
 tokio = "0.2.0-alpha.6"
+tracing = "0.1"

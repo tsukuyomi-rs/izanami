@@ -25,7 +25,7 @@ impl izanami::App for App {
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let server = izanami::h2::Server::bind("127.0.0.1:4000").await?;
+    let server = izanami_h2::Server::bind("127.0.0.1:4000").await?;
     server.serve(&App).await?;
 
     Ok(())
