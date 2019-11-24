@@ -29,7 +29,7 @@ impl Server {
 
     pub async fn serve<T>(self, app: T) -> io::Result<()>
     where
-        T: App + Clone + Send + Sync + 'static,
+        T: for<'a> App<&'a mut H2Events> + Clone + Send + Sync + 'static,
     {
         let mut listener = self.listener;
         loop {
@@ -52,7 +52,7 @@ impl Server {
 
 async fn handle_connection<T>(mut conn: Connection<TcpStream, Bytes>, app: T)
 where
-    T: App + Clone + Send + Sync + 'static,
+    T: for<'a> App<&'a mut H2Events> + Clone + Send + Sync + 'static,
 {
     loop {
         match conn.accept().await {
@@ -73,7 +73,7 @@ where
 
 async fn handle_request<T>(app: T, request: Request<RecvStream>, sender: SendResponse<Bytes>)
 where
-    T: App,
+    T: for<'a> App<&'a mut H2Events>,
 {
     let (parts, receiver) = request.into_parts();
     let request = Request::from_parts(parts, ());
@@ -88,7 +88,8 @@ where
     }
 }
 
-struct H2Events {
+#[derive(Debug)]
+pub struct H2Events {
     receiver: RecvStream,
     sender: SendResponse<Bytes>,
     stream: Option<SendStream<Bytes>>,

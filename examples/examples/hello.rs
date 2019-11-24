@@ -6,10 +6,13 @@ use std::io;
 struct App;
 
 #[async_trait]
-impl izanami::App for App {
-    async fn call<E>(&self, _: &Request<()>, mut events: E) -> anyhow::Result<()>
+impl<E> izanami::App<E> for App
+where
+    E: Events,
+{
+    async fn call(&self, _: &Request<()>, mut events: E) -> anyhow::Result<()>
     where
-        E: Events,
+        E: 'async_trait,
     {
         events
             .send_response(

@@ -3,18 +3,22 @@ use async_trait::async_trait;
 use http::Request;
 
 #[async_trait]
-pub trait App {
-    async fn call<E>(&self, req: &Request<()>, events: E) -> anyhow::Result<()>
+pub trait App<E>
+where
+    E: Events,
+{
+    async fn call(&self, req: &Request<()>, events: E) -> anyhow::Result<()>
     where
-        E: Events;
+        E: 'async_trait;
 }
 
-impl<'a, T: ?Sized> App for &'a T
+impl<'a, T: ?Sized, E> App<E> for &'a T
 where
-    T: App,
+    T: App<E>,
+    E: Events,
 {
     #[inline]
-    fn call<'l1, 'l2, 'async_trait, E>(
+    fn call<'l1, 'l2, 'async_trait>(
         &'l1 self,
         req: &'l2 Request<()>,
         events: E,
@@ -22,18 +26,19 @@ where
     where
         'l1: 'async_trait,
         'l2: 'async_trait,
-        E: Events + 'async_trait,
+        E: 'async_trait,
     {
         (**self).call(req, events)
     }
 }
 
-impl<T: ?Sized> App for Box<T>
+impl<T: ?Sized, E> App<E> for Box<T>
 where
-    T: App,
+    T: App<E>,
+    E: Events,
 {
     #[inline]
-    fn call<'l1, 'l2, 'async_trait, E>(
+    fn call<'l1, 'l2, 'async_trait>(
         &'l1 self,
         req: &'l2 Request<()>,
         events: E,
@@ -41,18 +46,19 @@ where
     where
         'l1: 'async_trait,
         'l2: 'async_trait,
-        E: Events + 'async_trait,
+        E: 'async_trait,
     {
         (**self).call(req, events)
     }
 }
 
-impl<T: ?Sized> App for std::sync::Arc<T>
+impl<T: ?Sized, E> App<E> for std::sync::Arc<T>
 where
-    T: App,
+    T: App<E>,
+    E: Events,
 {
     #[inline]
-    fn call<'l1, 'l2, 'async_trait, E>(
+    fn call<'l1, 'l2, 'async_trait>(
         &'l1 self,
         req: &'l2 Request<()>,
         events: E,
@@ -60,7 +66,7 @@ where
     where
         'l1: 'async_trait,
         'l2: 'async_trait,
-        E: Events + 'async_trait,
+        E: 'async_trait,
     {
         (**self).call(req, events)
     }
