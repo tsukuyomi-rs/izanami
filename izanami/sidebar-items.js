@@ -1,1 +1,1 @@
-initSidebarItems({"enum":[["Message",""]],"trait":[["App",""],["Events",""],["PushEvents",""],["WebSocketEvents",""]]});
+initSidebarItems({"enum":[["Message",""]],"trait":[["App",""],["Events",""]]});
