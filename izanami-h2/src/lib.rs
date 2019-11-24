@@ -6,7 +6,7 @@ use h2::{
     RecvStream, SendStream,
 };
 use http::{HeaderMap, Request, Response};
-use izanami::{App, Events, Message, PushEvents, WebSocketEvents};
+use izanami::{App, Events, Message, PushEvents};
 use std::{io, net::ToSocketAddrs};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -99,7 +99,6 @@ impl Events for H2Events {
     type Data = io::Cursor<Bytes>;
     type Error = h2::Error;
     type PushEvents = H2PushEvents;
-    type WebSocketEvents = H2WebSocketEvents;
 
     async fn data(&mut self) -> Result<Option<Self::Data>, Self::Error> {
         let data = self.receiver.data().await.transpose()?;
@@ -148,11 +147,16 @@ impl Events for H2Events {
         })
     }
 
-    async fn start_websocket(
-        &mut self,
-        _: Response<()>,
-    ) -> Result<Self::WebSocketEvents, Self::Error> {
+    async fn start_websocket(&mut self, _: Response<()>) -> Result<(), Self::Error> {
         unimplemented!("Websocket over HTTP/2 is not supported")
+    }
+
+    async fn websocket_message(&mut self) -> Result<Option<Message>, Self::Error> {
+        unimplemented!("WebSocket over HTTP/2 is not supported")
+    }
+
+    async fn send_websocket_message(&mut self, _: Message) -> Result<(), Self::Error> {
+        unimplemented!("WebSocket over HTTP/2 is not supported")
     }
 }
 
@@ -187,20 +191,5 @@ impl PushEvents for H2PushEvents {
     async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error> {
         let stream = self.stream.as_mut().unwrap();
         stream.send_trailers(trailers)
-    }
-}
-
-struct H2WebSocketEvents(std::convert::Infallible);
-
-#[async_trait]
-impl WebSocketEvents for H2WebSocketEvents {
-    type Error = h2::Error;
-
-    async fn message(&mut self) -> Result<Option<Message>, Self::Error> {
-        unimplemented!("WebSocket over HTTP/2 is not supported")
-    }
-
-    async fn send_message(&mut self, _: Message) -> Result<(), Self::Error> {
-        unimplemented!("WebSocket over HTTP/2 is not supported")
     }
 }

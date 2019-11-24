@@ -2,8 +2,8 @@ use bytes::Bytes;
 
 #[derive(Debug)]
 pub enum Message {
-    Bytes(Bytes),
-    String(String),
-    Ping,
-    Pong,
+    Text(String),
+    Binary(Bytes),
+    Ping(Bytes),
+    Pong(Bytes),
 }
