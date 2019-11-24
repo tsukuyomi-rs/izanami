@@ -3,13 +3,15 @@
 </h1>
 <div align="center">
   <strong>
-    Alternative Web application interface inspired from <a href="https://asgi.readthedocs.io/en/latest/index.html">ASGI</a>.
+    A simple Web application interface inspired from <a href="https://asgi.readthedocs.io/en/latest/index.html">ASGI</a>.
   </strong>
 </div>
 
 <br />
 
 > This library is in the experimental stage, and it cannot be used for production use.
+
+The goal of this project is to establish a Web application interface that focuses on simplicity and ease of extension, and to provide a reference implementation of HTTP server based on its interface.
 
 ## Status
 
