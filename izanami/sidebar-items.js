@@ -1,1 +1,1 @@
-initSidebarItems({"enum":[["Message",""]],"trait":[["App",""],["Events",""]]});
+initSidebarItems({"trait":[["App",""]]});

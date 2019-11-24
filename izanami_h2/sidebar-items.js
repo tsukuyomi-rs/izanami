@@ -1,1 +1,1 @@
-initSidebarItems({"struct":[["H2Events",""],["Server",""]]});
+initSidebarItems({"struct":[["H2Events",""],["H2Server",""]]});
