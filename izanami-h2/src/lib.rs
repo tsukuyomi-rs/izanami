@@ -1,4 +1,3 @@
-use async_trait::async_trait;
 use bytes::{Buf, Bytes};
 use futures::future::poll_fn;
 use h2::{
@@ -6,17 +5,17 @@ use h2::{
     RecvStream, SendStream,
 };
 use http::{HeaderMap, Request, Response};
-use izanami::{App, Events, Message};
+use izanami::App;
 use std::{io, net::ToSocketAddrs};
 use tokio::net::{TcpListener, TcpStream};
 
 #[derive(Debug)]
-pub struct Server {
+pub struct H2Server {
     listener: TcpListener,
     h2: h2::server::Builder,
 }
 
-impl Server {
+impl H2Server {
     pub async fn bind<A>(addr: A) -> io::Result<Self>
     where
         A: ToSocketAddrs,
@@ -29,7 +28,7 @@ impl Server {
 
     pub async fn serve<T>(self, app: T) -> io::Result<()>
     where
-        T: for<'a> App<&'a mut H2Events> + Clone + Send + Sync + 'static,
+        T: for<'a> App<H2Events<'a>> + Clone + Send + Sync + 'static,
     {
         let mut listener = self.listener;
         loop {
@@ -52,7 +51,7 @@ impl Server {
 
 async fn handle_connection<T>(mut conn: Connection<TcpStream, Bytes>, app: T)
 where
-    T: for<'a> App<&'a mut H2Events> + Clone + Send + Sync + 'static,
+    T: for<'a> App<H2Events<'a>> + Clone + Send + Sync + 'static,
 {
     loop {
         match conn.accept().await {
@@ -71,36 +70,38 @@ where
     }
 }
 
-async fn handle_request<T>(app: T, request: Request<RecvStream>, sender: SendResponse<Bytes>)
+async fn handle_request<T>(app: T, request: Request<RecvStream>, mut sender: SendResponse<Bytes>)
 where
-    T: for<'a> App<&'a mut H2Events>,
+    T: for<'a> App<H2Events<'a>>,
 {
-    let (parts, receiver) = request.into_parts();
+    let (parts, mut receiver) = request.into_parts();
     let request = Request::from_parts(parts, ());
-    let mut events = H2Events {
-        receiver,
-        sender,
-        stream: None,
-    };
+    let mut stream = None;
 
-    if let Err(err) = app.call(&request, &mut events).await {
+    if let Err(err) = app
+        .call(
+            &request,
+            H2Events {
+                receiver: &mut receiver,
+                sender: &mut sender,
+                stream: &mut stream,
+            },
+        )
+        .await
+    {
         tracing::error!("app error: {}", err);
     }
 }
 
 #[derive(Debug)]
-pub struct H2Events {
-    receiver: RecvStream,
-    sender: SendResponse<Bytes>,
-    stream: Option<SendStream<Bytes>>,
+pub struct H2Events<'a> {
+    receiver: &'a mut RecvStream,
+    sender: &'a mut SendResponse<Bytes>,
+    stream: &'a mut Option<SendStream<Bytes>>,
 }
 
-#[async_trait]
-impl Events for H2Events {
-    type Data = io::Cursor<Bytes>;
-    type Error = h2::Error;
-
-    async fn data(&mut self) -> Result<Option<Self::Data>, Self::Error> {
+impl H2Events<'_> {
+    pub async fn data(&mut self) -> Result<Option<io::Cursor<Bytes>>, h2::Error> {
         let data = self.receiver.data().await.transpose()?;
         if let Some(ref data) = data {
             let release_capacity = self.receiver.release_capacity();
@@ -109,17 +110,28 @@ impl Events for H2Events {
         Ok(data.map(io::Cursor::new))
     }
 
-    async fn trailers(&mut self) -> Result<Option<HeaderMap>, Self::Error> {
+    pub async fn trailers(&mut self) -> Result<Option<HeaderMap>, h2::Error> {
         self.receiver.trailers().await
     }
 
-    async fn start_send_response(&mut self, response: Response<()>) -> Result<(), Self::Error> {
+    pub async fn send_response<T>(&mut self, response: Response<T>) -> Result<(), h2::Error>
+    where
+        T: Buf + Send,
+    {
+        let (parts, body) = response.into_parts();
+        let response = Response::from_parts(parts, ());
+        self.start_send_response(response).await?;
+        self.send_data(body, true).await?;
+        Ok(())
+    }
+
+    pub async fn start_send_response(&mut self, response: Response<()>) -> Result<(), h2::Error> {
         let stream = self.sender.send_response(response, false)?;
         self.stream.replace(stream);
         Ok(())
     }
 
-    async fn send_data<T>(&mut self, data: T, end_of_stream: bool) -> Result<(), Self::Error>
+    pub async fn send_data<T>(&mut self, data: T, end_of_stream: bool) -> Result<(), h2::Error>
     where
         T: Buf + Send,
     {
@@ -132,20 +144,8 @@ impl Events for H2Events {
         Ok(())
     }
 
-    async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error> {
+    pub async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), h2::Error> {
         let stream = self.stream.as_mut().unwrap();
         stream.send_trailers(trailers)
-    }
-
-    async fn start_websocket(&mut self, _: Response<()>) -> Result<(), Self::Error> {
-        unimplemented!("Websocket over HTTP/2 is not supported")
-    }
-
-    async fn websocket_message(&mut self) -> Result<Option<Message>, Self::Error> {
-        unimplemented!("WebSocket over HTTP/2 is not supported")
-    }
-
-    async fn send_websocket_message(&mut self, _: Message) -> Result<(), Self::Error> {
-        unimplemented!("WebSocket over HTTP/2 is not supported")
     }
 }
