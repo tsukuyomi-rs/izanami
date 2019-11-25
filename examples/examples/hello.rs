@@ -1,5 +1,5 @@
 use async_trait::async_trait;
-use http::{Request, Response};
+use http::{HeaderValue, Request, Response};
 use izanami_h2::{H2Events, H2Server};
 use std::io;
 
@@ -7,14 +7,14 @@ struct App;
 
 #[async_trait]
 impl<'a> izanami::App<H2Events<'a>> for App {
-    async fn call(&self, _: &Request<()>, mut events: H2Events<'a>) -> anyhow::Result<()>
-    where
-        H2Events<'a>: 'async_trait,
-    {
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+
+    async fn call(&self, _: Request<()>, mut events: H2Events<'a>) -> Result<(), Self::Error> {
         events
             .send_response(
                 Response::builder() //
-                    .body(io::Cursor::new("Hello, world!\n"))
+                    .header("content-length", HeaderValue::from_static("14"))
+                    .body("Hello, world!\n")
                     .unwrap(),
             )
             .await?;

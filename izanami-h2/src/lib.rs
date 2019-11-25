@@ -1,4 +1,4 @@
-use bytes::{Buf, Bytes};
+use bytes::Bytes;
 use futures::future::poll_fn;
 use h2::{
     server::{Connection, SendResponse},
@@ -80,7 +80,7 @@ where
 
     if let Err(err) = app
         .call(
-            &request,
+            request,
             H2Events {
                 receiver: &mut receiver,
                 sender: &mut sender,
@@ -89,8 +89,11 @@ where
         )
         .await
     {
+        let err = err.into();
         tracing::error!("app error: {}", err);
     }
+
+    drop(receiver);
 }
 
 #[derive(Debug)]
@@ -101,13 +104,13 @@ pub struct H2Events<'a> {
 }
 
 impl H2Events<'_> {
-    pub async fn data(&mut self) -> Result<Option<io::Cursor<Bytes>>, h2::Error> {
+    pub async fn data(&mut self) -> Result<Option<Bytes>, h2::Error> {
         let data = self.receiver.data().await.transpose()?;
         if let Some(ref data) = data {
             let release_capacity = self.receiver.release_capacity();
             release_capacity.release_capacity(data.len())?;
         }
-        Ok(data.map(io::Cursor::new))
+        Ok(data)
     }
 
     pub async fn trailers(&mut self) -> Result<Option<HeaderMap>, h2::Error> {
@@ -116,12 +119,12 @@ impl H2Events<'_> {
 
     pub async fn send_response<T>(&mut self, response: Response<T>) -> Result<(), h2::Error>
     where
-        T: Buf + Send,
+        T: Into<Bytes>,
     {
         let (parts, body) = response.into_parts();
         let response = Response::from_parts(parts, ());
         self.start_send_response(response).await?;
-        self.send_data(body, true).await?;
+        self.send_data(body.into(), true).await?;
         Ok(())
     }
 
@@ -133,13 +136,14 @@ impl H2Events<'_> {
 
     pub async fn send_data<T>(&mut self, data: T, end_of_stream: bool) -> Result<(), h2::Error>
     where
-        T: Buf + Send,
+        T: Into<Bytes>,
     {
         let stream = self.stream.as_mut().unwrap();
+        let data = data.into();
 
-        stream.reserve_capacity(data.remaining());
+        stream.reserve_capacity(data.len());
         poll_fn(|cx| stream.poll_capacity(cx)).await.transpose()?;
-        stream.send_data(data.collect(), end_of_stream)?;
+        stream.send_data(data, end_of_stream)?;
 
         Ok(())
     }
