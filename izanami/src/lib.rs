@@ -12,24 +12,32 @@
 #![cfg_attr(test, deny(warnings))]
 
 use async_trait::async_trait;
+use futures::future::{Future, TryFuture, TryFutureExt};
 use http::Request;
+use std::{error, pin::Pin};
 
-type BoxFuture<'a, T> = std::pin::Pin<Box<dyn std::future::Future<Output = T> + Send + 'a>>;
+type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
 #[async_trait]
-pub trait App<E> {
-    type Error: Into<Box<dyn std::error::Error + Send + Sync + 'static>>;
+pub trait App<E: Events> {
+    type Error: Into<Box<dyn error::Error + Send + Sync + 'static>>;
 
     async fn call(&self, req: Request<()>, events: E) -> Result<(), Self::Error>
     where
         E: 'async_trait;
 }
 
-impl<'a, T: ?Sized, E> App<E> for &'a T
+impl<F, Fut, E> App<E> for F
 where
-    T: App<E>,
+    F: Fn(Request<()>, E) -> Fut,
+    Fut: TryFuture<Ok = ()>,
+    Fut::Error: Into<Box<dyn error::Error + Send + Sync + 'static>>,
+    E: Events,
+    F: Send + Sync,
+    Fut: Send,
+    E: Send,
 {
-    type Error = T::Error;
+    type Error = Fut::Error;
 
     #[inline]
     fn call<'l1, 'async_trait>(
@@ -41,33 +49,14 @@ where
         'l1: 'async_trait,
         E: 'async_trait,
     {
-        (**self).call(req, events)
-    }
-}
-
-impl<T: ?Sized, E> App<E> for Box<T>
-where
-    T: App<E>,
-{
-    type Error = T::Error;
-
-    #[inline]
-    fn call<'l1, 'async_trait>(
-        &'l1 self,
-        req: Request<()>,
-        events: E,
-    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
-    where
-        'l1: 'async_trait,
-        E: 'async_trait,
-    {
-        (**self).call(req, events)
+        Box::pin(async move { (*self)(req, events).into_future().await })
     }
 }
 
 impl<T: ?Sized, E> App<E> for std::sync::Arc<T>
 where
     T: App<E>,
+    E: Events,
 {
     type Error = T::Error;
 
@@ -84,3 +73,6 @@ where
         (**self).call(req, events)
     }
 }
+
+// for reservation.
+pub trait Events {}

@@ -5,7 +5,7 @@ use h2::{
     RecvStream, SendStream,
 };
 use http::{HeaderMap, Request, Response};
-use izanami::App;
+use izanami::{App, Events};
 use std::{io, net::ToSocketAddrs};
 use tokio::net::{TcpListener, TcpStream};
 
@@ -153,3 +153,5 @@ impl H2Events<'_> {
         stream.send_trailers(trailers)
     }
 }
+
+impl Events for H2Events<'_> {}
