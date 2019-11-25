@@ -1,1 +1,1 @@
-initSidebarItems({"trait":[["App",""]]});
+initSidebarItems({"trait":[["App",""],["Events",""]]});

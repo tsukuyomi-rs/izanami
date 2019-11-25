@@ -153,6 +153,8 @@
 <span id="153">153</span>
 <span id="154">154</span>
 <span id="155">155</span>
+<span id="156">156</span>
+<span id="157">157</span>
 </pre><div class="example-wrap"><pre class="rust ">
 <span class="kw">use</span> <span class="ident">bytes</span>::<span class="ident">Bytes</span>;
 <span class="kw">use</span> <span class="ident">futures</span>::<span class="ident">future</span>::<span class="ident">poll_fn</span>;
@@ -161,7 +163,7 @@
     <span class="ident">RecvStream</span>, <span class="ident">SendStream</span>,
 };
 <span class="kw">use</span> <span class="ident">http</span>::{<span class="ident">HeaderMap</span>, <span class="ident">Request</span>, <span class="ident">Response</span>};
-<span class="kw">use</span> <span class="ident">izanami</span>::<span class="ident">App</span>;
+<span class="kw">use</span> <span class="ident">izanami</span>::{<span class="ident">App</span>, <span class="ident">Events</span>};
 <span class="kw">use</span> <span class="ident">std</span>::{<span class="ident">io</span>, <span class="ident">net</span>::<span class="ident">ToSocketAddrs</span>};
 <span class="kw">use</span> <span class="ident">tokio</span>::<span class="ident">net</span>::{<span class="ident">TcpListener</span>, <span class="ident">TcpStream</span>};
 
@@ -309,5 +311,7 @@
         <span class="ident">stream</span>.<span class="ident">send_trailers</span>(<span class="ident">trailers</span>)
     }
 }
+
+<span class="kw">impl</span> <span class="ident">Events</span> <span class="kw">for</span> <span class="ident">H2Events</span><span class="op">&lt;</span><span class="lifetime">&#39;_</span><span class="op">&gt;</span> {}
 </pre></div>
 </section><section id="search" class="content hidden"></section><section class="footer"></section><script>window.rootPath = "../../";window.currentCrate = "izanami_h2";</script><script src="../../aliases.js"></script><script src="../../main.js"></script><script src="../../source-script.js"></script><script src="../../source-files.js"></script><script defer src="../../search-index.js"></script></body></html>
