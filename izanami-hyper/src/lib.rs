@@ -7,6 +7,7 @@ use http_body::Body as _Body;
 use hyper::{
     body::{Body, Chunk, Sender as BodySender},
     server::{conn::AddrIncoming, Builder as ServerBuilder, Server},
+    upgrade::Upgraded,
 };
 use izanami::{App, Events};
 use std::{marker::PhantomData, net::ToSocketAddrs, pin::Pin};
@@ -44,9 +45,10 @@ impl HyperServer {
 }
 
 pub struct HyperEvents<'a> {
-    req_body: Body,
+    req_body: Option<Body>,
     response_sender: Option<oneshot::Sender<Response<Body>>>,
     body_sender: Option<BodySender>,
+    upgraded: Option<Upgraded>,
     _marker: PhantomData<&'a mut ()>,
 }
 
@@ -54,13 +56,15 @@ impl Events for HyperEvents<'_> {}
 
 impl HyperEvents<'_> {
     pub async fn data(&mut self) -> hyper::Result<Option<Chunk>> {
-        poll_fn(|cx| Pin::new(&mut self.req_body).poll_data(cx))
+        let req_body = self.req_body.as_mut().unwrap();
+        poll_fn(|cx| Pin::new(&mut *req_body).poll_data(cx))
             .await
             .transpose()
     }
 
     pub async fn trailers(&mut self) -> hyper::Result<Option<HeaderMap>> {
-        poll_fn(|cx| Pin::new(&mut self.req_body).poll_trailers(cx)).await
+        let req_body = self.req_body.as_mut().unwrap();
+        poll_fn(|cx| Pin::new(&mut *req_body).poll_trailers(cx)).await
     }
 
     pub async fn send_response<T>(&mut self, response: Response<T>) -> hyper::Result<()>
@@ -95,6 +99,24 @@ impl HyperEvents<'_> {
 
         Ok(())
     }
+
+    pub async fn start_websocket(&mut self, response: Response<()>) -> hyper::Result<()> {
+        let mut response = response;
+        *response.status_mut() = http::StatusCode::SWITCHING_PROTOCOLS;
+
+        let sender = self.response_sender.take().unwrap();
+        let _ = sender.send(response.map(|_| Body::empty()));
+
+        let req_body = self.req_body.take().unwrap();
+        let upgraded = req_body.on_upgrade().await?;
+        self.upgraded.replace(upgraded);
+
+        Ok(())
+    }
+
+    pub fn as_upgraded(&mut self) -> Option<&mut Upgraded> {
+        self.upgraded.as_mut()
+    }
 }
 
 struct AppService<T>(T);
@@ -113,9 +135,10 @@ where
                 .call(
                     request,
                     HyperEvents {
-                        req_body,
+                        req_body: Some(req_body),
                         response_sender: Some(tx),
                         body_sender: None,
+                        upgraded: None,
                         _marker: PhantomData,
                     },
                 )
