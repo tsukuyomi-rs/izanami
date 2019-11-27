@@ -13,9 +13,8 @@
 
 use async_trait::async_trait;
 use bytes::Buf;
-use futures::future::{Future, TryFuture, TryFutureExt};
 use http::{HeaderMap, Request, Response};
-use std::{error, pin::Pin};
+use std::{error, future::Future, pin::Pin};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
@@ -28,17 +27,12 @@ pub trait App<E: Events> {
         E: 'async_trait;
 }
 
-impl<F, Fut, E> App<E> for F
+impl<'a, T: ?Sized, E> App<E> for &'a T
 where
-    F: Fn(Request<()>, E) -> Fut,
-    Fut: TryFuture<Ok = ()>,
-    Fut::Error: Into<Box<dyn error::Error + Send + Sync + 'static>>,
+    T: App<E>,
     E: Events,
-    F: Send + Sync,
-    Fut: Send,
-    E: Send,
 {
-    type Error = Fut::Error;
+    type Error = T::Error;
 
     #[inline]
     fn call<'l1, 'async_trait>(
@@ -50,7 +44,28 @@ where
         'l1: 'async_trait,
         E: 'async_trait,
     {
-        Box::pin(async move { (*self)(req, events).into_future().await })
+        (**self).call(req, events)
+    }
+}
+
+impl<T: ?Sized, E> App<E> for Box<T>
+where
+    T: App<E>,
+    E: Events,
+{
+    type Error = T::Error;
+
+    #[inline]
+    fn call<'l1, 'async_trait>(
+        &'l1 self,
+        req: Request<()>,
+        events: E,
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
+    where
+        'l1: 'async_trait,
+        E: 'async_trait,
+    {
+        (**self).call(req, events)
     }
 }
 
@@ -94,4 +109,130 @@ pub trait Events {
         -> Result<(), Self::Error>;
 
     async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error>;
+}
+
+impl<'a, E: ?Sized> Events for &'a mut E
+where
+    E: Events,
+{
+    type Data = E::Data;
+    type Error = E::Error;
+
+    #[inline]
+    fn data<'l1, 'async_trait>(
+        &'l1 mut self,
+    ) -> BoxFuture<'async_trait, Option<Result<Self::Data, Self::Error>>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).data()
+    }
+
+    #[inline]
+    fn trailers<'l1, 'async_trait>(
+        &'l1 mut self,
+    ) -> BoxFuture<'async_trait, Result<Option<HeaderMap>, Self::Error>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).trailers()
+    }
+
+    #[inline]
+    fn start_send_response<'l1, 'async_trait>(
+        &'l1 mut self,
+        response: Response<()>,
+        end_of_stream: bool,
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).start_send_response(response, end_of_stream)
+    }
+
+    #[inline]
+    fn send_data<'l1, 'async_trait>(
+        &'l1 mut self,
+        data: Self::Data,
+        end_of_stream: bool,
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).send_data(data, end_of_stream)
+    }
+
+    #[inline]
+    fn send_trailers<'l1, 'async_trait>(
+        &'l1 mut self,
+        trailers: HeaderMap,
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).send_trailers(trailers)
+    }
+}
+
+impl<E: ?Sized> Events for Box<E>
+where
+    E: Events,
+{
+    type Data = E::Data;
+    type Error = E::Error;
+
+    #[inline]
+    fn data<'l1, 'async_trait>(
+        &'l1 mut self,
+    ) -> BoxFuture<'async_trait, Option<Result<Self::Data, Self::Error>>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).data()
+    }
+
+    #[inline]
+    fn trailers<'l1, 'async_trait>(
+        &'l1 mut self,
+    ) -> BoxFuture<'async_trait, Result<Option<HeaderMap>, Self::Error>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).trailers()
+    }
+
+    #[inline]
+    fn start_send_response<'l1, 'async_trait>(
+        &'l1 mut self,
+        response: Response<()>,
+        end_of_stream: bool,
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).start_send_response(response, end_of_stream)
+    }
+
+    #[inline]
+    fn send_data<'l1, 'async_trait>(
+        &'l1 mut self,
+        data: Self::Data,
+        end_of_stream: bool,
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).send_data(data, end_of_stream)
+    }
+
+    #[inline]
+    fn send_trailers<'l1, 'async_trait>(
+        &'l1 mut self,
+        trailers: HeaderMap,
+    ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
+    where
+        'l1: 'async_trait,
+    {
+        (**self).send_trailers(trailers)
+    }
 }
