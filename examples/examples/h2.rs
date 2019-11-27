@@ -1,8 +1,7 @@
 use http::{HeaderValue, Request, Response};
-use izanami_h2::{H2Events, H2Server};
-use std::io;
+use izanami_h2::{Events, Server};
 
-async fn app(_: Request<()>, mut events: H2Events<'_>) -> anyhow::Result<()> {
+async fn app(_: Request<()>, mut events: Events<'_>) -> anyhow::Result<()> {
     events
         .send_response(
             Response::builder() //
@@ -16,8 +15,8 @@ async fn app(_: Request<()>, mut events: H2Events<'_>) -> anyhow::Result<()> {
 }
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
-    let server = H2Server::bind("127.0.0.1:4000").await?;
+async fn main() -> anyhow::Result<()> {
+    let server = Server::bind("127.0.0.1:4000").await?;
     server.serve(app).await?;
 
     Ok(())

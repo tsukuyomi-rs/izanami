@@ -5,17 +5,17 @@ use h2::{
     RecvStream, SendStream,
 };
 use http::{HeaderMap, Request, Response};
-use izanami::{App, Events};
+use izanami::App;
 use std::{io, net::ToSocketAddrs};
 use tokio::net::{TcpListener, TcpStream};
 
 #[derive(Debug)]
-pub struct H2Server {
+pub struct Server {
     listener: TcpListener,
     h2: h2::server::Builder,
 }
 
-impl H2Server {
+impl Server {
     pub async fn bind<A>(addr: A) -> io::Result<Self>
     where
         A: ToSocketAddrs,
@@ -28,7 +28,7 @@ impl H2Server {
 
     pub async fn serve<T>(self, app: T) -> io::Result<()>
     where
-        T: for<'a> App<H2Events<'a>> + Clone + Send + Sync + 'static,
+        T: for<'a> App<Events<'a>> + Clone + Send + Sync + 'static,
     {
         let mut listener = self.listener;
         loop {
@@ -51,7 +51,7 @@ impl H2Server {
 
 async fn handle_connection<T>(mut conn: Connection<TcpStream, Bytes>, app: T)
 where
-    T: for<'a> App<H2Events<'a>> + Clone + Send + Sync + 'static,
+    T: for<'a> App<Events<'a>> + Clone + Send + Sync + 'static,
 {
     loop {
         match conn.accept().await {
@@ -72,7 +72,7 @@ where
 
 async fn handle_request<T>(app: T, request: Request<RecvStream>, mut sender: SendResponse<Bytes>)
 where
-    T: for<'a> App<H2Events<'a>>,
+    T: for<'a> App<Events<'a>>,
 {
     let (parts, mut receiver) = request.into_parts();
     let request = Request::from_parts(parts, ());
@@ -81,7 +81,7 @@ where
     if let Err(err) = app
         .call(
             request,
-            H2Events {
+            Events {
                 receiver: &mut receiver,
                 sender: &mut sender,
                 stream: &mut stream,
@@ -97,13 +97,13 @@ where
 }
 
 #[derive(Debug)]
-pub struct H2Events<'a> {
+pub struct Events<'a> {
     receiver: &'a mut RecvStream,
     sender: &'a mut SendResponse<Bytes>,
     stream: &'a mut Option<SendStream<Bytes>>,
 }
 
-impl H2Events<'_> {
+impl Events<'_> {
     pub async fn data(&mut self) -> Result<Option<Bytes>, h2::Error> {
         let data = self.receiver.data().await.transpose()?;
         if let Some(ref data) = data {
@@ -154,4 +154,4 @@ impl H2Events<'_> {
     }
 }
 
-impl Events for H2Events<'_> {}
+impl izanami::Events for Events<'_> {}

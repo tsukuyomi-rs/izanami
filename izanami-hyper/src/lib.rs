@@ -6,33 +6,33 @@ use http::{HeaderMap, Request, Response};
 use http_body::Body as _Body;
 use hyper::{
     body::{Body, Chunk, Sender as BodySender},
-    server::{conn::AddrIncoming, Builder as ServerBuilder, Server},
+    server::{conn::AddrIncoming, Builder as ServerBuilder, Server as HyperServer},
     upgrade::Upgraded,
 };
-use izanami::{App, Events};
+use izanami::App;
 use std::{marker::PhantomData, net::ToSocketAddrs, pin::Pin};
 use tokio::sync::oneshot;
 use tower_service::Service;
 
 #[derive(Debug)]
-pub struct HyperServer {
+pub struct Server {
     builder: ServerBuilder<AddrIncoming>,
 }
 
-impl HyperServer {
+impl Server {
     pub async fn bind<A>(addr: A) -> hyper::Result<Self>
     where
         A: ToSocketAddrs,
     {
         let addr = addr.to_socket_addrs().unwrap().next().unwrap();
         Ok(Self {
-            builder: Server::try_bind(&addr)?,
+            builder: HyperServer::try_bind(&addr)?,
         })
     }
 
     pub async fn serve<T>(self, app: T) -> hyper::Result<()>
     where
-        T: for<'a> App<HyperEvents<'a>> + Clone + Send + Sync + 'static,
+        T: for<'a> App<Events<'a>> + Clone + Send + Sync + 'static,
     {
         let server = self
             .builder
@@ -44,7 +44,7 @@ impl HyperServer {
     }
 }
 
-pub struct HyperEvents<'a> {
+pub struct Events<'a> {
     req_body: Option<Body>,
     response_sender: Option<oneshot::Sender<Response<Body>>>,
     body_sender: Option<BodySender>,
@@ -52,9 +52,9 @@ pub struct HyperEvents<'a> {
     _marker: PhantomData<&'a mut ()>,
 }
 
-impl Events for HyperEvents<'_> {}
+impl izanami::Events for Events<'_> {}
 
-impl HyperEvents<'_> {
+impl Events<'_> {
     pub async fn data(&mut self) -> hyper::Result<Option<Chunk>> {
         let req_body = self.req_body.as_mut().unwrap();
         poll_fn(|cx| Pin::new(&mut *req_body).poll_data(cx))
@@ -123,7 +123,7 @@ struct AppService<T>(T);
 
 impl<T> AppService<T>
 where
-    T: for<'a> App<HyperEvents<'a>> + Clone + Send + Sync + 'static,
+    T: for<'a> App<Events<'a>> + Clone + Send + Sync + 'static,
 {
     fn spawn_background(&self, request: Request<Body>) -> oneshot::Receiver<Response<Body>> {
         let (parts, req_body) = request.into_parts();
@@ -134,7 +134,7 @@ where
             if let Err(err) = app
                 .call(
                     request,
-                    HyperEvents {
+                    Events {
                         req_body: Some(req_body),
                         response_sender: Some(tx),
                         body_sender: None,
@@ -153,7 +153,7 @@ where
 
 impl<T> Service<Request<Body>> for AppService<T>
 where
-    T: for<'a> App<HyperEvents<'a>> + Clone + Send + Sync + 'static,
+    T: for<'a> App<Events<'a>> + Clone + Send + Sync + 'static,
 {
     type Response = Response<Body>;
     type Error = hyper::Error;

@@ -1,7 +1,7 @@
 use http::{Request, Response};
-use izanami_hyper::{HyperEvents, HyperServer};
+use izanami_hyper::{Events, Server};
 
-async fn app(_: Request<()>, mut events: HyperEvents<'_>) -> anyhow::Result<()> {
+async fn app(_: Request<()>, mut events: Events<'_>) -> anyhow::Result<()> {
     events
         .send_response(
             Response::builder() //
@@ -15,8 +15,8 @@ async fn app(_: Request<()>, mut events: HyperEvents<'_>) -> anyhow::Result<()> 
 }
 
 #[tokio::main]
-async fn main() -> hyper::Result<()> {
-    let server = HyperServer::bind("127.0.0.1:4000").await?;
+async fn main() -> anyhow::Result<()> {
+    let server = Server::bind("127.0.0.1:4000").await?;
     server.serve(app).await?;
 
     Ok(())
