@@ -1,3 +1,4 @@
+use async_trait::async_trait;
 use futures::{
     future::{poll_fn, Future},
     task::{self, Poll},
@@ -60,14 +61,10 @@ enum State {
     Done,
 }
 
-impl izanami::Events for Events<'_> {}
-
 impl Events<'_> {
-    pub async fn data(&mut self) -> hyper::Result<Option<Chunk>> {
+    pub async fn data(&mut self) -> Option<hyper::Result<Chunk>> {
         let req_body = self.req_body.as_mut().unwrap();
-        poll_fn(|cx| Pin::new(&mut *req_body).poll_data(cx))
-            .await
-            .transpose()
+        poll_fn(|cx| Pin::new(&mut *req_body).poll_data(cx)).await
     }
 
     pub async fn trailers(&mut self) -> hyper::Result<Option<HeaderMap>> {
@@ -81,24 +78,36 @@ impl Events<'_> {
     {
         let sender = self.response_sender.take().unwrap();
         let _ = sender.send(response.map(Into::into));
+        self.state = State::Done;
+
         Ok(())
     }
 
-    pub async fn start_send_response(&mut self, response: Response<()>) -> hyper::Result<()> {
+    pub async fn start_send_response(
+        &mut self,
+        response: Response<()>,
+        end_of_stream: bool,
+    ) -> hyper::Result<()> {
         let sender = self.response_sender.take().unwrap();
 
         if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+            debug_assert!(!end_of_stream);
+
             let _ = sender.send(response.map(|_| Body::empty()));
 
             let req_body = self.req_body.take().unwrap();
             let upgraded = req_body.on_upgrade().await?;
             self.state = State::Upgraded(upgraded);
-        } else {
+        } else if !end_of_stream {
             let (body_sender, body) = hyper::Body::channel();
             let _ = sender.send(response.map(|_| body));
 
             self.state = State::Streaming(body_sender);
+        } else {
+            let _ = sender.send(response.map(|_| Body::empty()));
+            self.state = State::Done;
         }
+
         Ok(())
     }
 
@@ -118,6 +127,46 @@ impl Events<'_> {
         }
 
         Ok(())
+    }
+}
+
+#[async_trait]
+#[allow(clippy::needless_lifetimes)]
+impl<'a> izanami::Events for Events<'a> {
+    type Data = Chunk;
+    type Error = hyper::Error;
+
+    #[inline]
+    async fn data(&mut self) -> Option<Result<Self::Data, Self::Error>> {
+        self.data().await
+    }
+
+    #[inline]
+    async fn trailers(&mut self) -> Result<Option<HeaderMap>, Self::Error> {
+        self.trailers().await
+    }
+
+    #[inline]
+    async fn start_send_response(
+        &mut self,
+        response: Response<()>,
+        end_of_stream: bool,
+    ) -> Result<(), Self::Error> {
+        self.start_send_response(response, end_of_stream).await
+    }
+
+    #[inline]
+    async fn send_data(
+        &mut self,
+        data: Self::Data,
+        end_of_stream: bool,
+    ) -> Result<(), Self::Error> {
+        self.send_data(data, end_of_stream).await
+    }
+
+    #[inline]
+    async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error> {
+        self.send_trailers(trailers).await
     }
 }
 

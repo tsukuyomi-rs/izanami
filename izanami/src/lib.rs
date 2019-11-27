@@ -12,8 +12,9 @@
 #![cfg_attr(test, deny(warnings))]
 
 use async_trait::async_trait;
+use bytes::Buf;
 use futures::future::{Future, TryFuture, TryFutureExt};
-use http::Request;
+use http::{HeaderMap, Request, Response};
 use std::{error, pin::Pin};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
@@ -74,5 +75,23 @@ where
     }
 }
 
-// for reservation.
-pub trait Events {}
+#[async_trait]
+pub trait Events {
+    type Data: Buf;
+    type Error: Into<Box<dyn error::Error + Send + Sync + 'static>>;
+
+    async fn data(&mut self) -> Option<Result<Self::Data, Self::Error>>;
+
+    async fn trailers(&mut self) -> Result<Option<HeaderMap>, Self::Error>;
+
+    async fn start_send_response(
+        &mut self,
+        response: Response<()>,
+        end_of_stream: bool,
+    ) -> Result<(), Self::Error>;
+
+    async fn send_data(&mut self, data: Self::Data, end_of_stream: bool)
+        -> Result<(), Self::Error>;
+
+    async fn send_trailers(&mut self, trailers: HeaderMap) -> Result<(), Self::Error>;
+}

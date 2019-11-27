@@ -2,9 +2,9 @@ use http::{Request, Response};
 use izanami_h2::{Events, Server};
 
 async fn app(_: Request<()>, mut events: Events<'_>) -> anyhow::Result<()> {
-    events.start_send_response(Response::new(())).await?;
+    events.start_send_response(Response::new(()), false).await?;
 
-    while let Some(data) = events.data().await? {
+    while let Some(data) = events.data().await.transpose()? {
         eprintln!("recv: {:?}", data);
         events.send_data(data, false).await?
     }
