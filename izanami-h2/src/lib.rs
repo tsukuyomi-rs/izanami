@@ -76,18 +76,17 @@ where
     T: for<'a> App<Events<'a>>,
 {
     let (parts, mut receiver) = request.into_parts();
-    let request = Request::from_parts(parts, ());
     let mut stream = None;
 
     if let Err(err) = app
-        .call(
-            request,
+        .call(Request::from_parts(
+            parts,
             Events {
                 receiver: &mut receiver,
                 sender: &mut sender,
                 stream: &mut stream,
             },
-        )
+        ))
         .await
     {
         let err = err.into();

@@ -178,20 +178,19 @@ where
 {
     fn spawn_background(&self, request: Request<Body>) -> oneshot::Receiver<Response<Body>> {
         let (parts, req_body) = request.into_parts();
-        let request = Request::from_parts(parts, ());
         let app = self.0.clone();
         let (tx, rx) = oneshot::channel();
         tokio::spawn(async move {
             if let Err(err) = app
-                .call(
-                    request,
+                .call(Request::from_parts(
+                    parts,
                     Events {
                         req_body: Some(req_body),
                         response_sender: Some(tx),
                         state: State::Init,
                         _marker: PhantomData,
                     },
-                )
+                ))
                 .await
             {
                 eprintln!("app error: {}", err.into());

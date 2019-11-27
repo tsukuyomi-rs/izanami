@@ -9,7 +9,8 @@ struct Streaming;
 impl<'a> izanami::App<Events<'a>> for Streaming {
     type Error = anyhow::Error;
 
-    async fn call(&self, _: Request<()>, mut events: Events<'a>) -> Result<(), Self::Error> {
+    async fn call(&self, req: Request<Events<'a>>) -> Result<(), Self::Error> {
+        let mut events = req.into_body();
         events.start_send_response(Response::new(()), false).await?;
 
         while let Some(data) = events.data().await.transpose()? {

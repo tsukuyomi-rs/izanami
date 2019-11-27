@@ -13,10 +13,12 @@ where
 {
     type Error = E::Error;
 
-    async fn call(&self, _: Request<()>, mut events: E) -> Result<(), Self::Error>
+    async fn call(&self, request: Request<E>) -> Result<(), Self::Error>
     where
         E: 'async_trait,
     {
+        let mut events = request.into_body();
+
         events
             .start_send_response(
                 Response::builder() //

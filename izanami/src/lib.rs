@@ -22,7 +22,7 @@ type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 pub trait App<E: Events> {
     type Error: Into<Box<dyn error::Error + Send + Sync + 'static>>;
 
-    async fn call(&self, req: Request<()>, events: E) -> Result<(), Self::Error>
+    async fn call(&self, req: Request<E>) -> Result<(), Self::Error>
     where
         E: 'async_trait;
 }
@@ -37,14 +37,13 @@ where
     #[inline]
     fn call<'l1, 'async_trait>(
         &'l1 self,
-        req: Request<()>,
-        events: E,
+        request: Request<E>,
     ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         E: 'async_trait,
     {
-        (**self).call(req, events)
+        (**self).call(request)
     }
 }
 
@@ -58,14 +57,13 @@ where
     #[inline]
     fn call<'l1, 'async_trait>(
         &'l1 self,
-        req: Request<()>,
-        events: E,
+        request: Request<E>,
     ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         E: 'async_trait,
     {
-        (**self).call(req, events)
+        (**self).call(request)
     }
 }
 
@@ -79,14 +77,13 @@ where
     #[inline]
     fn call<'l1, 'async_trait>(
         &'l1 self,
-        req: Request<()>,
-        events: E,
+        request: Request<E>,
     ) -> BoxFuture<'async_trait, Result<(), Self::Error>>
     where
         'l1: 'async_trait,
         E: 'async_trait,
     {
-        (**self).call(req, events)
+        (**self).call(request)
     }
 }
 
