@@ -1,1 +1,1 @@
-initSidebarItems({"struct":[["HyperEvents",""],["HyperServer",""]]});
+initSidebarItems({"struct":[["Events",""],["Server",""]]});
