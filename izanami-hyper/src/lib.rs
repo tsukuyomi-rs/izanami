@@ -2,7 +2,7 @@ use futures::{
     future::{poll_fn, Future},
     task::{self, Poll},
 };
-use http::{HeaderMap, Request, Response};
+use http::{HeaderMap, Request, Response, StatusCode};
 use http_body::Body as _Body;
 use hyper::{
     body::{Body, Chunk, Sender as BodySender},
@@ -44,12 +44,20 @@ impl Server {
     }
 }
 
+#[derive(Debug)]
 pub struct Events<'a> {
     req_body: Option<Body>,
     response_sender: Option<oneshot::Sender<Response<Body>>>,
-    body_sender: Option<BodySender>,
-    upgraded: Option<Upgraded>,
+    state: State,
     _marker: PhantomData<&'a mut ()>,
+}
+
+#[derive(Debug)]
+enum State {
+    Init,
+    Streaming(BodySender),
+    Upgraded(Upgraded),
+    Done,
 }
 
 impl izanami::Events for Events<'_> {}
@@ -78,9 +86,19 @@ impl Events<'_> {
 
     pub async fn start_send_response(&mut self, response: Response<()>) -> hyper::Result<()> {
         let sender = self.response_sender.take().unwrap();
-        let (body_sender, body) = hyper::Body::channel();
-        let _ = sender.send(response.map(|_| body));
-        self.body_sender.replace(body_sender);
+
+        if response.status() == StatusCode::SWITCHING_PROTOCOLS {
+            let _ = sender.send(response.map(|_| Body::empty()));
+
+            let req_body = self.req_body.take().unwrap();
+            let upgraded = req_body.on_upgrade().await?;
+            self.state = State::Upgraded(upgraded);
+        } else {
+            let (body_sender, body) = hyper::Body::channel();
+            let _ = sender.send(response.map(|_| body));
+
+            self.state = State::Streaming(body_sender);
+        }
         Ok(())
     }
 
@@ -88,34 +106,18 @@ impl Events<'_> {
     where
         T: Into<Chunk>,
     {
-        {
-            let body_sender = self.body_sender.as_mut().unwrap();
-            body_sender.send_data(data.into()).await?;
+        match &mut self.state {
+            State::Streaming(sender) => {
+                sender.send_data(data.into()).await?;
+            }
+            _ => panic!("unexpected call"),
         }
 
         if is_end_stream {
-            drop(self.body_sender.take());
+            self.state = State::Done;
         }
 
         Ok(())
-    }
-
-    pub async fn start_websocket(&mut self, response: Response<()>) -> hyper::Result<()> {
-        let mut response = response;
-        *response.status_mut() = http::StatusCode::SWITCHING_PROTOCOLS;
-
-        let sender = self.response_sender.take().unwrap();
-        let _ = sender.send(response.map(|_| Body::empty()));
-
-        let req_body = self.req_body.take().unwrap();
-        let upgraded = req_body.on_upgrade().await?;
-        self.upgraded.replace(upgraded);
-
-        Ok(())
-    }
-
-    pub fn as_upgraded(&mut self) -> Option<&mut Upgraded> {
-        self.upgraded.as_mut()
     }
 }
 
@@ -137,8 +139,7 @@ where
                     Events {
                         req_body: Some(req_body),
                         response_sender: Some(tx),
-                        body_sender: None,
-                        upgraded: None,
+                        state: State::Init,
                         _marker: PhantomData,
                     },
                 )
