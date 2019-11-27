@@ -219,7 +219,6 @@
 <span id="219">219</span>
 <span id="220">220</span>
 <span id="221">221</span>
-<span id="222">222</span>
 </pre><div class="example-wrap"><pre class="rust ">
 <span class="kw">use</span> <span class="ident">async_trait</span>::<span class="ident">async_trait</span>;
 <span class="kw">use</span> <span class="ident">futures</span>::{
@@ -401,20 +400,19 @@
 {
     <span class="kw">fn</span> <span class="ident">spawn_background</span>(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="ident">request</span>: <span class="ident">Request</span><span class="op">&lt;</span><span class="ident">Body</span><span class="op">&gt;</span>) <span class="op">-</span><span class="op">&gt;</span> <span class="ident">oneshot</span>::<span class="ident">Receiver</span><span class="op">&lt;</span><span class="ident">Response</span><span class="op">&lt;</span><span class="ident">Body</span><span class="op">&gt;</span><span class="op">&gt;</span> {
         <span class="kw">let</span> (<span class="ident">parts</span>, <span class="ident">req_body</span>) <span class="op">=</span> <span class="ident">request</span>.<span class="ident">into_parts</span>();
-        <span class="kw">let</span> <span class="ident">request</span> <span class="op">=</span> <span class="ident">Request</span>::<span class="ident">from_parts</span>(<span class="ident">parts</span>, ());
         <span class="kw">let</span> <span class="ident">app</span> <span class="op">=</span> <span class="self">self</span>.<span class="number">0</span>.<span class="ident">clone</span>();
         <span class="kw">let</span> (<span class="ident">tx</span>, <span class="ident">rx</span>) <span class="op">=</span> <span class="ident">oneshot</span>::<span class="ident">channel</span>();
         <span class="ident">tokio</span>::<span class="ident">spawn</span>(<span class="kw">async</span> <span class="kw">move</span> {
             <span class="kw">if</span> <span class="kw">let</span> <span class="prelude-val">Err</span>(<span class="ident">err</span>) <span class="op">=</span> <span class="ident">app</span>
-                .<span class="ident">call</span>(
-                    <span class="ident">request</span>,
+                .<span class="ident">call</span>(<span class="ident">Request</span>::<span class="ident">from_parts</span>(
+                    <span class="ident">parts</span>,
                     <span class="ident">Events</span> {
                         <span class="ident">req_body</span>: <span class="prelude-val">Some</span>(<span class="ident">req_body</span>),
                         <span class="ident">response_sender</span>: <span class="prelude-val">Some</span>(<span class="ident">tx</span>),
                         <span class="ident">state</span>: <span class="ident">State</span>::<span class="ident">Init</span>,
                         <span class="ident">_marker</span>: <span class="ident">PhantomData</span>,
                     },
-                )
+                ))
                 .<span class="kw">await</span>
             {
                 <span class="macro">eprintln</span><span class="macro">!</span>(<span class="string">&quot;app error: {}&quot;</span>, <span class="ident">err</span>.<span class="ident">into</span>());
