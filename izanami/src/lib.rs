@@ -18,10 +18,40 @@ use std::{error, future::Future, pin::Pin};
 
 type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
 
+/// A trait that models Web applications.
+///
+/// Compared to the traditional request-response model, it has
+/// the following characteristics:
+///
+/// * Receiving data from the client and sending the response
+///   header/body is performed via a single instance that implements
+///   `Events` provided by the server.
+///
+/// * The response is sent via the callback function provided to `events`
+///   not via the return value of function. The application is able
+///   to continue any processing after sending the response to the client.
+///
+/// * There is no need to expose the concrete (or abstract) type of response
+///   body as an associated type in the trait.
+///
+/// * (Bidirectional) streaming is performed by calling the callback function
+///   provided to `events`.
 #[async_trait]
 pub trait App<E: Events> {
+    /// The error type returned from `call`.
+    ///
+    /// The error value is typically used to notify the server that a fatal
+    /// error has occurred and any kind of messages cannot be sent to the
+    /// client. If the server receives this error, it should interrupt the
+    /// processing of the application for that request and send an appropriate
+    /// signal to the client or close the connection.
+    ///
+    /// This error cannot be used for the purpose to send an error to the
+    /// client. The application should send a response with the appropriate
+    /// error code on error.
     type Error: Into<Box<dyn error::Error + Send + Sync + 'static>>;
 
+    /// Handle an incoming HTTP request.
     async fn call(&self, req: Request<E>) -> Result<(), Self::Error>
     where
         E: 'async_trait;
@@ -87,6 +117,7 @@ where
     }
 }
 
+/// Asynchronous object that exchanges the events with the client.
 #[async_trait]
 pub trait Events {
     type Data: Buf;
