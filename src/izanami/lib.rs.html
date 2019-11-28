@@ -233,6 +233,37 @@
 <span id="233">233</span>
 <span id="234">234</span>
 <span id="235">235</span>
+<span id="236">236</span>
+<span id="237">237</span>
+<span id="238">238</span>
+<span id="239">239</span>
+<span id="240">240</span>
+<span id="241">241</span>
+<span id="242">242</span>
+<span id="243">243</span>
+<span id="244">244</span>
+<span id="245">245</span>
+<span id="246">246</span>
+<span id="247">247</span>
+<span id="248">248</span>
+<span id="249">249</span>
+<span id="250">250</span>
+<span id="251">251</span>
+<span id="252">252</span>
+<span id="253">253</span>
+<span id="254">254</span>
+<span id="255">255</span>
+<span id="256">256</span>
+<span id="257">257</span>
+<span id="258">258</span>
+<span id="259">259</span>
+<span id="260">260</span>
+<span id="261">261</span>
+<span id="262">262</span>
+<span id="263">263</span>
+<span id="264">264</span>
+<span id="265">265</span>
+<span id="266">266</span>
 </pre><div class="example-wrap"><pre class="rust ">
 <span class="doccomment">//! Web application interface inspired from ASGI.</span>
 
@@ -254,10 +285,40 @@
 
 <span class="kw">type</span> <span class="ident">BoxFuture</span><span class="op">&lt;</span><span class="lifetime">&#39;a</span>, <span class="ident">T</span><span class="op">&gt;</span> <span class="op">=</span> <span class="ident">Pin</span><span class="op">&lt;</span><span class="ident">Box</span><span class="op">&lt;</span><span class="kw">dyn</span> <span class="ident">Future</span><span class="op">&lt;</span><span class="ident">Output</span> <span class="op">=</span> <span class="ident">T</span><span class="op">&gt;</span> <span class="op">+</span> <span class="ident">Send</span> <span class="op">+</span> <span class="lifetime">&#39;a</span><span class="op">&gt;</span><span class="op">&gt;</span>;
 
+<span class="doccomment">/// A trait that models Web applications.</span>
+<span class="doccomment">/// </span>
+<span class="doccomment">/// Compared to the traditional request-response model, it has</span>
+<span class="doccomment">/// the following characteristics:</span>
+<span class="doccomment">/// </span>
+<span class="doccomment">/// * Receiving data from the client and sending the response</span>
+<span class="doccomment">///   header/body is performed via a single instance that implements</span>
+<span class="doccomment">///   `Events` provided by the server.</span>
+<span class="doccomment">/// </span>
+<span class="doccomment">/// * The response is sent via the callback function provided to `events`</span>
+<span class="doccomment">///   not via the return value of function. The application is able</span>
+<span class="doccomment">///   to continue any processing after sending the response to the client.</span>
+<span class="doccomment">/// </span>
+<span class="doccomment">/// * There is no need to expose the concrete (or abstract) type of response</span>
+<span class="doccomment">///   body as an associated type in the trait.</span>
+<span class="doccomment">/// </span>
+<span class="doccomment">/// * (Bidirectional) streaming is performed by calling the callback function</span>
+<span class="doccomment">///   provided to `events`.</span>
 <span class="attribute">#[<span class="ident">async_trait</span>]</span>
 <span class="kw">pub</span> <span class="kw">trait</span> <span class="ident">App</span><span class="op">&lt;</span><span class="ident">E</span>: <span class="ident">Events</span><span class="op">&gt;</span> {
+    <span class="doccomment">/// The error type returned from `call`.</span>
+    <span class="doccomment">/// </span>
+    <span class="doccomment">/// The error value is typically used to notify the server that a fatal</span>
+    <span class="doccomment">/// error has occurred and any kind of messages cannot be sent to the</span>
+    <span class="doccomment">/// client. If the server receives this error, it should interrupt the</span>
+    <span class="doccomment">/// processing of the application for that request and send an appropriate</span>
+    <span class="doccomment">/// signal to the client or close the connection.</span>
+    <span class="doccomment">/// </span>
+    <span class="doccomment">/// This error cannot be used for the purpose to send an error to the</span>
+    <span class="doccomment">/// client. The application should send a response with the appropriate</span>
+    <span class="doccomment">/// error code on error.</span>
     <span class="kw">type</span> <span class="ident">Error</span>: <span class="ident">Into</span><span class="op">&lt;</span><span class="ident">Box</span><span class="op">&lt;</span><span class="kw">dyn</span> <span class="ident">error</span>::<span class="ident">Error</span> <span class="op">+</span> <span class="ident">Send</span> <span class="op">+</span> <span class="ident">Sync</span> <span class="op">+</span> <span class="lifetime">&#39;static</span><span class="op">&gt;</span><span class="op">&gt;</span>;
 
+    <span class="doccomment">/// Handle an incoming HTTP request.</span>
     <span class="kw">async</span> <span class="kw">fn</span> <span class="ident">call</span>(<span class="kw-2">&amp;</span><span class="self">self</span>, <span class="ident">req</span>: <span class="ident">Request</span><span class="op">&lt;</span><span class="ident">E</span><span class="op">&gt;</span>) <span class="op">-</span><span class="op">&gt;</span> <span class="prelude-ty">Result</span><span class="op">&lt;</span>(), <span class="self">Self</span>::<span class="ident">Error</span><span class="op">&gt;</span>
     <span class="kw">where</span>
         <span class="ident">E</span>: <span class="lifetime">&#39;async_trait</span>;
@@ -323,6 +384,7 @@
     }
 }
 
+<span class="doccomment">/// Asynchronous object that exchanges the events with the client.</span>
 <span class="attribute">#[<span class="ident">async_trait</span>]</span>
 <span class="kw">pub</span> <span class="kw">trait</span> <span class="ident">Events</span> {
     <span class="kw">type</span> <span class="ident">Data</span>: <span class="ident">Buf</span>;
